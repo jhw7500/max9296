@@ -54,6 +54,35 @@
 
 #define MAX9296_REG_CHIP_ID		0x000d
 
+/* AP1302 ISP I2C slave address and register map */
+#define AP1302_I2C_ADDR			0x3c
+#define AP1302_CH0_I2C_ADDR		0x11
+#define AP1302_CH1_I2C_ADDR		0x12
+#define AP1302_REG_ROTATION		0x100c
+#define AP1302_REG_AE_CTRL		0x5002
+#define AP1302_REG_AE_GAIN		0x5006
+#define AP1302_REG_EXP_TIME		0x500c
+#define AP1302_REG_AWB_CTRL		0x5100
+#define AP1302_REG_LSC_CTRL		0x54a0
+
+#define AP1302_AE_CTRL_AUTO		0x0299
+#define AP1302_AE_CTRL_MANUAL		0x0290
+#define AP1302_AWB_CTRL_AUTO		0x115f
+
+/* Custom V4L2 controls for per-channel settings in dual-channel mode */
+#define V4L2_CID_EXPOSURE_AUTO_CH0      (V4L2_CID_USER_BASE + 0x1000)
+#define V4L2_CID_EXPOSURE_AUTO_CH1      (V4L2_CID_USER_BASE + 0x1001)
+#define V4L2_CID_AUTO_WHITE_BALANCE_CH0 (V4L2_CID_USER_BASE + 0x1002)
+#define V4L2_CID_AUTO_WHITE_BALANCE_CH1 (V4L2_CID_USER_BASE + 0x1003)
+#define V4L2_CID_AUTOGAIN_CH0           (V4L2_CID_USER_BASE + 0x1004)
+#define V4L2_CID_AUTOGAIN_CH1           (V4L2_CID_USER_BASE + 0x1005)
+#define V4L2_CID_GAIN_CH0               (V4L2_CID_USER_BASE + 0x1006)
+#define V4L2_CID_GAIN_CH1               (V4L2_CID_USER_BASE + 0x1007)
+#define V4L2_CID_HFLIP_CH0              (V4L2_CID_USER_BASE + 0x1008)
+#define V4L2_CID_HFLIP_CH1              (V4L2_CID_USER_BASE + 0x1009)
+#define V4L2_CID_VFLIP_CH0              (V4L2_CID_USER_BASE + 0x100A)
+#define V4L2_CID_VFLIP_CH1              (V4L2_CID_USER_BASE + 0x100B)
+
 //#include <arch/arm/mach
 //#define USB1_PWR_EN IMX_GPIO_NR(1, 14)
 
@@ -132,6 +161,42 @@ struct max9296_ctrls {
 	struct v4l2_ctrl *hue;
 	struct v4l2_ctrl *hflip;
 	struct v4l2_ctrl *vflip;
+
+	/* Per-channel controls for dual-channel mode */
+	struct v4l2_ctrl *auto_exp_ch0;
+	struct v4l2_ctrl *auto_exp_ch1;
+	struct v4l2_ctrl *auto_wb_ch0;
+	struct v4l2_ctrl *auto_wb_ch1;
+	struct v4l2_ctrl *auto_gain_ch0;
+	struct v4l2_ctrl *auto_gain_ch1;
+	struct v4l2_ctrl *gain_ch0;
+	struct v4l2_ctrl *gain_ch1;
+	struct v4l2_ctrl *hflip_ch0;
+	struct v4l2_ctrl *hflip_ch1;
+	struct v4l2_ctrl *vflip_ch0;
+	struct v4l2_ctrl *vflip_ch1;
+};
+
+/* Per-channel control settings */
+struct max9296_channel_ctrl {
+	int ae_mode;       /* V4L2_CID_EXPOSURE_AUTO_CHx */
+	int awb;           /* V4L2_CID_AUTO_WHITE_BALANCE_CHx */
+	int gain_auto;     /* V4L2_CID_AUTOGAIN_CHx */
+	int gain;          /* V4L2_CID_GAIN_CHx */
+	int hflip;         /* V4L2_CID_HFLIP_CHx */
+	int vflip;         /* V4L2_CID_VFLIP_CHx */
+};
+
+struct max9296_ctrl_cache {
+	bool firmware_ready;
+	bool pending;
+
+	/* Channel-specific settings */
+	struct max9296_channel_ctrl ch0;
+	struct max9296_channel_ctrl ch1;
+
+	/* Shared settings (global across both channels) */
+	int exposure;      /* V4L2_CID_EXPOSURE - exp_time is shared */
 };
 
 struct max9296_dev {
@@ -175,6 +240,7 @@ struct max9296_dev {
 	struct v4l2_fract frame_interval;
 
 	struct max9296_ctrls ctrls;
+	struct max9296_ctrl_cache ctrl_cache;
 
 	bool pending_mode_change;
 	bool streaming;
@@ -852,8 +918,10 @@ static int max9296_s_power(struct v4l2_subdev *sd, int on)
 	{
 		// off
 		ret = max9296_set_power(sensor, 0);
-		sensor->state.power = sensor->shared.sensor->state.power = MAX9296_STATE_IDLE;
-		usleep_range(5000000, 5000000);	
+		sensor->state.power = MAX9296_STATE_IDLE;
+		if(sensor->shared.sensor != NULL)
+			sensor->shared.sensor->state.power = MAX9296_STATE_IDLE;
+		usleep_range(5000000, 5000000);
 	}
 	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s end(%d)", "RST", sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, on);
 	return ret;
@@ -985,6 +1053,23 @@ out:
  * Sensor Controls.
  */
 
+/* Write a register to per-channel addresses in dual mode, or global in single mode */
+static int max9296_write_per_channel(struct max9296_dev *sensor,
+	unsigned int reg, unsigned int val, unsigned int reg_byte, unsigned int val_byte)
+{
+	bool dual = (sensor->current_mode->id == MAX9296_MODE_2560x720 ||
+		     sensor->current_mode->id == MAX9296_MODE_3840x1080);
+	int ret;
+
+	if (dual) {
+		ret = maxim_ops_i2c_write(sensor, AP1302_CH0_I2C_ADDR, reg, val, reg_byte, val_byte, 0);
+		ret |= maxim_ops_i2c_write(sensor, AP1302_CH1_I2C_ADDR, reg, val, reg_byte, val_byte, 0);
+	} else {
+		ret = maxim_ops_i2c_write(sensor, AP1302_I2C_ADDR, reg, val, reg_byte, val_byte, 0);
+	}
+	return ret;
+}
+
 static int max9296_set_ctrl_hue(struct max9296_dev *sensor, int value)
 {
 	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, value);
@@ -1005,21 +1090,60 @@ static int max9296_set_ctrl_saturation(struct max9296_dev *sensor, int value)
 
 static int max9296_set_ctrl_white_balance(struct max9296_dev *sensor, int awb)
 {
-	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, awb);
-	return 0;
+	int ret;
+
+	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s awb:%d",
+			KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, awb);
+
+	if (awb)
+		ret = max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL, AP1302_AWB_CTRL_AUTO, 2, 2);
+	else
+		ret = max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL, 0x0000, 2, 2);
+
+	return ret;
 }
 
 static int max9296_set_ctrl_exposure(struct max9296_dev *sensor,
 				    enum v4l2_exposure_auto_type auto_exposure)
 {
-	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, auto_exposure);
-	return 0;
+	int ret;
+	u16 ae_val = (auto_exposure == V4L2_EXPOSURE_AUTO) ?
+			AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
+
+	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s auto_exposure:%d ae_val:0x%04x",
+			KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, auto_exposure, ae_val);
+
+	/* AE mode: per-channel (0x11/0x12 in dual) */
+	ret = max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL, ae_val, 2, 2);
+	if (ret < 0)
+		return ret;
+
+	/* When switching to manual, apply the current exposure value */
+	if (auto_exposure != V4L2_EXPOSURE_AUTO) {
+		int exp_val = sensor->ctrl_cache.firmware_ready ?
+			sensor->ctrls.exposure->val : sensor->ctrl_cache.exposure;
+		/* exp_time: per-channel in dual mode (0x11/0x12), global in single (0x3c) */
+		ret = max9296_write_per_channel(sensor, AP1302_REG_EXP_TIME, exp_val, 2, 4);
+	}
+
+	return ret;
 }
 
 static int max9296_set_ctrl_gain(struct max9296_dev *sensor, bool auto_gain)
 {
-	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, auto_gain);
-	return 0;
+	int ret = 0;
+
+	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s auto_gain:%d",
+			KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, auto_gain);
+
+	/* When manual gain, write gain value to AP1302 ISP (per-channel in dual) */
+	if (!auto_gain) {
+		int gain_val = sensor->ctrl_cache.firmware_ready ?
+			sensor->ctrls.gain->val : sensor->ctrl_cache.ch0.gain;
+		ret = max9296_write_per_channel(sensor, AP1302_REG_AE_GAIN, gain_val, 2, 2);
+	}
+
+	return ret;
 }
 
 static int max9296_set_ctrl_test_pattern(struct max9296_dev *sensor, int value)
@@ -1036,14 +1160,30 @@ static int max9296_set_ctrl_light_freq(struct max9296_dev *sensor, int value)
 
 static int max9296_set_ctrl_hflip(struct max9296_dev *sensor, int value)
 {
+	unsigned int rot;
+
 	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, value);
-	return 0;
+
+	/* AP1302 rotation register: bit0=hflip, bit1=vflip */
+	rot = sensor->rotate;
+	rot = (rot & ~0x01) | (value ? 0x01 : 0x00);
+	sensor->rotate = rot;
+
+	return max9296_write_per_channel(sensor, AP1302_REG_ROTATION, rot, 2, 2);
 }
 
 static int max9296_set_ctrl_vflip(struct max9296_dev *sensor, int value)
 {
+	unsigned int rot;
+
 	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, value);
-	return 0;
+
+	/* AP1302 rotation register: bit0=hflip, bit1=vflip */
+	rot = sensor->rotate;
+	rot = (rot & ~0x02) | (value ? 0x02 : 0x00);
+	sensor->rotate = rot;
+
+	return max9296_write_per_channel(sensor, AP1302_REG_ROTATION, rot, 2, 2);
 }
 
 static int max9286_set_ctrl_pixelrate(struct max9296_dev *sensor, int value)
@@ -1112,15 +1252,180 @@ static int max9296_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
+static void max9296_cache_ctrl(struct max9296_dev *sensor, struct v4l2_ctrl *ctrl)
+{
+	sensor->ctrl_cache.pending = true;
+	switch (ctrl->id) {
+	/* Legacy controls - apply to both channels in dual mode */
+	case V4L2_CID_EXPOSURE_AUTO:
+		sensor->ctrl_cache.ch0.ae_mode = ctrl->val;
+		sensor->ctrl_cache.ch1.ae_mode = ctrl->val;
+		break;
+	case V4L2_CID_EXPOSURE:
+		sensor->ctrl_cache.exposure = ctrl->val;  /* shared */
+		break;
+	case V4L2_CID_AUTO_WHITE_BALANCE:
+		sensor->ctrl_cache.ch0.awb = ctrl->val;
+		sensor->ctrl_cache.ch1.awb = ctrl->val;
+		break;
+	case V4L2_CID_AUTOGAIN:
+		sensor->ctrl_cache.ch0.gain_auto = ctrl->val;
+		sensor->ctrl_cache.ch1.gain_auto = ctrl->val;
+		break;
+	case V4L2_CID_GAIN:
+		sensor->ctrl_cache.ch0.gain = ctrl->val;
+		sensor->ctrl_cache.ch1.gain = ctrl->val;
+		break;
+	case V4L2_CID_HFLIP:
+		sensor->ctrl_cache.ch0.hflip = ctrl->val;
+		sensor->ctrl_cache.ch1.hflip = ctrl->val;
+		break;
+	case V4L2_CID_VFLIP:
+		sensor->ctrl_cache.ch0.vflip = ctrl->val;
+		sensor->ctrl_cache.ch1.vflip = ctrl->val;
+		break;
+
+	/* Per-channel controls - channel 0 */
+	case V4L2_CID_EXPOSURE_AUTO_CH0:
+		sensor->ctrl_cache.ch0.ae_mode = ctrl->val;
+		break;
+	case V4L2_CID_AUTO_WHITE_BALANCE_CH0:
+		sensor->ctrl_cache.ch0.awb = ctrl->val;
+		break;
+	case V4L2_CID_AUTOGAIN_CH0:
+		sensor->ctrl_cache.ch0.gain_auto = ctrl->val;
+		break;
+	case V4L2_CID_GAIN_CH0:
+		sensor->ctrl_cache.ch0.gain = ctrl->val;
+		break;
+	case V4L2_CID_HFLIP_CH0:
+		sensor->ctrl_cache.ch0.hflip = ctrl->val;
+		break;
+	case V4L2_CID_VFLIP_CH0:
+		sensor->ctrl_cache.ch0.vflip = ctrl->val;
+		break;
+
+	/* Per-channel controls - channel 1 */
+	case V4L2_CID_EXPOSURE_AUTO_CH1:
+		sensor->ctrl_cache.ch1.ae_mode = ctrl->val;
+		break;
+	case V4L2_CID_AUTO_WHITE_BALANCE_CH1:
+		sensor->ctrl_cache.ch1.awb = ctrl->val;
+		break;
+	case V4L2_CID_AUTOGAIN_CH1:
+		sensor->ctrl_cache.ch1.gain_auto = ctrl->val;
+		break;
+	case V4L2_CID_GAIN_CH1:
+		sensor->ctrl_cache.ch1.gain = ctrl->val;
+		break;
+	case V4L2_CID_HFLIP_CH1:
+		sensor->ctrl_cache.ch1.hflip = ctrl->val;
+		break;
+	case V4L2_CID_VFLIP_CH1:
+		sensor->ctrl_cache.ch1.vflip = ctrl->val;
+		break;
+
+	default:
+		break;
+	}
+	printk(KERN_NOTICE "[%s:%d][%s:%d] %s cached ctrl 0x%x = %d",
+		KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+		__FUNCTION__, ctrl->id, ctrl->val);
+}
+
+/* Helper function to apply settings for one channel */
+static void max9296_apply_channel_controls(struct max9296_dev *sensor,
+					   u32 i2c_addr,
+					   struct max9296_channel_ctrl *ch_ctrl,
+					   const char *ch_name)
+{
+	u16 ae_val, awb_val, rot;
+	int ret = 0;
+
+	/* STEP 1: Initialize AE to manual mode first */
+	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, AP1302_AE_CTRL_MANUAL, 2, 2, 0);
+
+	/* STEP 2: Apply configured AE mode (auto/manual) */
+	ae_val = (ch_ctrl->ae_mode == V4L2_EXPOSURE_AUTO) ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
+	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2, 0);
+
+	/* AWB (auto/manual) */
+	awb_val = ch_ctrl->awb ? AP1302_AWB_CTRL_AUTO : 0x0000;
+	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2, 2, 0);
+
+	/* Gain value (always set, used when switching to manual) */
+	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_GAIN, ch_ctrl->gain, 2, 2, 0);
+
+	/* Rotation (hflip + vflip combined) */
+	rot = (ch_ctrl->hflip ? 0x01 : 0x00) | (ch_ctrl->vflip ? 0x02 : 0x00);
+	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_ROTATION, rot, 2, 2, 0);
+
+	printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied (i2c:0x%02x ae:%s awb:%d gain:%d rot:0x%02x) ret:%d",
+		KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
+		ch_name, i2c_addr,
+		(ch_ctrl->ae_mode == V4L2_EXPOSURE_AUTO) ? "auto" : "manual",
+		ch_ctrl->awb, ch_ctrl->gain, rot, ret);
+}
+
+static void max9296_apply_cached_controls(struct max9296_dev *sensor)
+{
+	bool dual = (sensor->current_mode->id == MAX9296_MODE_2560x720 ||
+		     sensor->current_mode->id == MAX9296_MODE_3840x1080);
+	int i2c_nr = sensor->i2c_client->adapter->nr;
+	const char *ch0_name, *ch1_name;
+
+	if (!sensor->ctrl_cache.pending)
+		return;
+
+	/* Determine channel names based on I2C adapter number */
+	if (i2c_nr == 1) {
+		ch0_name = "ch2";
+		ch1_name = "ch3";
+	} else {
+		ch0_name = "ch0";
+		ch1_name = "ch1";
+	}
+
+	printk(KERN_NOTICE "[%s:%d][%s:%d] %s applying cached controls (dual:%d)",
+		KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, dual);
+
+	/* Apply exposure time (per-channel in dual mode, global in single mode) */
+	max9296_write_per_channel(sensor, AP1302_REG_EXP_TIME,
+				  sensor->ctrl_cache.exposure, 2, 4);
+
+	if (dual) {
+		/* Dual-channel mode: apply each channel's settings separately */
+		max9296_apply_channel_controls(sensor, AP1302_CH0_I2C_ADDR,
+					       &sensor->ctrl_cache.ch0, ch0_name);
+		max9296_apply_channel_controls(sensor, AP1302_CH1_I2C_ADDR,
+					       &sensor->ctrl_cache.ch1, ch1_name);
+	} else {
+		/* Single-channel mode: apply ch0 settings to global address */
+		max9296_apply_channel_controls(sensor, AP1302_I2C_ADDR,
+					       &sensor->ctrl_cache.ch0, "single");
+	}
+
+	sensor->ctrl_cache.pending = false;
+	sensor->ctrl_cache.firmware_ready = true;
+
+	printk(KERN_NOTICE "[%s:%d][%s:%d] %s cached controls applied (exp:%d)",
+		KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
+		sensor->ctrl_cache.exposure);
+}
+
 static int max9296_s_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct v4l2_subdev *sd = ctrl_to_sd(ctrl);
 	struct max9296_dev *sensor = to_max9296_dev(sd);
 	int ret;
 
-	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s ctrl->id:0x%x ctrl->val:%d", \
-					KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, ctrl->id, ctrl->val);
+	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s ctrl->id:0x%x ctrl->val:%d fw_ready:%d", \
+					KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, \
+					ctrl->id, ctrl->val, sensor->ctrl_cache.firmware_ready);
 	/* v4l2_ctrl_lock() locks our own mutex */
+
+	/* Always update cache (even if powered off) */
+	max9296_cache_ctrl(sensor, ctrl);
 
 	/*
 	 * If the device is not powered up by the host driver do
@@ -1130,12 +1435,26 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl)
 	if (sensor->power_count == 0)
 		return 0;
 
+	/* If firmware not ready, just cache (apply later) */
+	if (!sensor->ctrl_cache.firmware_ready) {
+		return 0;
+	}
+
+	/* Firmware ready: apply immediately to hardware */
 	switch (ctrl->id) {
 	case V4L2_CID_AUTOGAIN:
 		ret = max9296_set_ctrl_gain(sensor, ctrl->val);
 		break;
+	case V4L2_CID_GAIN:
+		/* Manual gain value: per-channel in dual mode */
+		ret = max9296_write_per_channel(sensor, AP1302_REG_AE_GAIN, ctrl->val, 2, 2);
+		break;
 	case V4L2_CID_EXPOSURE_AUTO:
 		ret = max9296_set_ctrl_exposure(sensor, ctrl->val);
+		break;
+	case V4L2_CID_EXPOSURE:
+		/* Exposure time: always write to global address (0x3c) */
+		ret = maxim_ops_i2c_write(sensor, AP1302_I2C_ADDR, AP1302_REG_EXP_TIME, ctrl->val, 2, 4, 0);
 		break;
 	case V4L2_CID_AUTO_WHITE_BALANCE:
 		ret = max9296_set_ctrl_white_balance(sensor, ctrl->val);
@@ -1164,6 +1483,59 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_PIXEL_RATE:
 		ret = max9286_set_ctrl_pixelrate(sensor, ctrl->val);
 		break;
+
+	/* Per-channel controls - Channel 0 */
+	case V4L2_CID_EXPOSURE_AUTO_CH0: {
+		u16 ae_val = (ctrl->val == V4L2_EXPOSURE_AUTO) ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
+		ret = maxim_ops_i2c_write(sensor, AP1302_CH0_I2C_ADDR, AP1302_REG_AE_CTRL, ae_val, 2, 2, 0);
+		break;
+	}
+	case V4L2_CID_AUTO_WHITE_BALANCE_CH0: {
+		u16 awb_val = ctrl->val ? AP1302_AWB_CTRL_AUTO : 0x0000;
+		ret = maxim_ops_i2c_write(sensor, AP1302_CH0_I2C_ADDR, AP1302_REG_AWB_CTRL, awb_val, 2, 2, 0);
+		break;
+	}
+	case V4L2_CID_AUTOGAIN_CH0:
+		/* Gain auto mode handled implicitly via AE mode */
+		ret = 0;
+		break;
+	case V4L2_CID_GAIN_CH0:
+		ret = maxim_ops_i2c_write(sensor, AP1302_CH0_I2C_ADDR, AP1302_REG_AE_GAIN, ctrl->val, 2, 2, 0);
+		break;
+	case V4L2_CID_HFLIP_CH0:
+	case V4L2_CID_VFLIP_CH0: {
+		unsigned int rot = (sensor->ctrl_cache.ch0.hflip ? 0x01 : 0x00) |
+				   (sensor->ctrl_cache.ch0.vflip ? 0x02 : 0x00);
+		ret = maxim_ops_i2c_write(sensor, AP1302_CH0_I2C_ADDR, AP1302_REG_ROTATION, rot, 2, 2, 0);
+		break;
+	}
+
+	/* Per-channel controls - Channel 1 */
+	case V4L2_CID_EXPOSURE_AUTO_CH1: {
+		u16 ae_val = (ctrl->val == V4L2_EXPOSURE_AUTO) ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
+		ret = maxim_ops_i2c_write(sensor, AP1302_CH1_I2C_ADDR, AP1302_REG_AE_CTRL, ae_val, 2, 2, 0);
+		break;
+	}
+	case V4L2_CID_AUTO_WHITE_BALANCE_CH1: {
+		u16 awb_val = ctrl->val ? AP1302_AWB_CTRL_AUTO : 0x0000;
+		ret = maxim_ops_i2c_write(sensor, AP1302_CH1_I2C_ADDR, AP1302_REG_AWB_CTRL, awb_val, 2, 2, 0);
+		break;
+	}
+	case V4L2_CID_AUTOGAIN_CH1:
+		/* Gain auto mode handled implicitly via AE mode */
+		ret = 0;
+		break;
+	case V4L2_CID_GAIN_CH1:
+		ret = maxim_ops_i2c_write(sensor, AP1302_CH1_I2C_ADDR, AP1302_REG_AE_GAIN, ctrl->val, 2, 2, 0);
+		break;
+	case V4L2_CID_HFLIP_CH1:
+	case V4L2_CID_VFLIP_CH1: {
+		unsigned int rot = (sensor->ctrl_cache.ch1.hflip ? 0x01 : 0x00) |
+				   (sensor->ctrl_cache.ch1.vflip ? 0x02 : 0x00);
+		ret = maxim_ops_i2c_write(sensor, AP1302_CH1_I2C_ADDR, AP1302_REG_ROTATION, rot, 2, 2, 0);
+		break;
+	}
+
 	default:
 		if(CTS_DEBUG) printk(KERN_CRIT "[%s:%d][%s:%d] %s return", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 		ret = -EINVAL;
@@ -1231,6 +1603,83 @@ static int max9296_init_controls(struct max9296_dev *sensor)
 				       V4L2_CID_POWER_LINE_FREQUENCY,
 				       V4L2_CID_POWER_LINE_FREQUENCY_AUTO, 0,
 				       V4L2_CID_POWER_LINE_FREQUENCY_50HZ);
+
+	/* Per-channel controls for dual-channel mode - use v4l2_ctrl_new_custom for custom IDs */
+	/* Exposure Auto: 0=auto, 1=manual (INTEGER type, not MENU) */
+	static const struct v4l2_ctrl_config cfg_exp_auto_ch0 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_EXPOSURE_AUTO_CH0,
+		.type = V4L2_CTRL_TYPE_INTEGER, .name = "Exposure Auto CH0",
+		.min = 0, .max = 1, .def = 0, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_exp_auto_ch1 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_EXPOSURE_AUTO_CH1,
+		.type = V4L2_CTRL_TYPE_INTEGER, .name = "Exposure Auto CH1",
+		.min = 0, .max = 1, .def = 0, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_awb_ch0 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_AUTO_WHITE_BALANCE_CH0,
+		.type = V4L2_CTRL_TYPE_BOOLEAN, .name = "Auto White Balance CH0",
+		.min = 0, .max = 1, .def = 1, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_awb_ch1 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_AUTO_WHITE_BALANCE_CH1,
+		.type = V4L2_CTRL_TYPE_BOOLEAN, .name = "Auto White Balance CH1",
+		.min = 0, .max = 1, .def = 1, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_autogain_ch0 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_AUTOGAIN_CH0,
+		.type = V4L2_CTRL_TYPE_BOOLEAN, .name = "Auto Gain CH0",
+		.min = 0, .max = 1, .def = 1, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_autogain_ch1 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_AUTOGAIN_CH1,
+		.type = V4L2_CTRL_TYPE_BOOLEAN, .name = "Auto Gain CH1",
+		.min = 0, .max = 1, .def = 1, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_gain_ch0 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_GAIN_CH0,
+		.type = V4L2_CTRL_TYPE_INTEGER, .name = "Gain CH0",
+		.min = 0, .max = 1023, .def = 0, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_gain_ch1 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_GAIN_CH1,
+		.type = V4L2_CTRL_TYPE_INTEGER, .name = "Gain CH1",
+		.min = 0, .max = 1023, .def = 0, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_hflip_ch0 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_HFLIP_CH0,
+		.type = V4L2_CTRL_TYPE_BOOLEAN, .name = "Horizontal Flip CH0",
+		.min = 0, .max = 1, .def = 0, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_hflip_ch1 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_HFLIP_CH1,
+		.type = V4L2_CTRL_TYPE_BOOLEAN, .name = "Horizontal Flip CH1",
+		.min = 0, .max = 1, .def = 0, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_vflip_ch0 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_VFLIP_CH0,
+		.type = V4L2_CTRL_TYPE_BOOLEAN, .name = "Vertical Flip CH0",
+		.min = 0, .max = 1, .def = 0, .step = 1,
+	};
+	static const struct v4l2_ctrl_config cfg_vflip_ch1 = {
+		.ops = &max9296_ctrl_ops, .id = V4L2_CID_VFLIP_CH1,
+		.type = V4L2_CTRL_TYPE_BOOLEAN, .name = "Vertical Flip CH1",
+		.min = 0, .max = 1, .def = 0, .step = 1,
+	};
+
+	ctrls->auto_exp_ch0 = v4l2_ctrl_new_custom(hdl, &cfg_exp_auto_ch0, NULL);
+	ctrls->auto_exp_ch1 = v4l2_ctrl_new_custom(hdl, &cfg_exp_auto_ch1, NULL);
+	ctrls->auto_wb_ch0 = v4l2_ctrl_new_custom(hdl, &cfg_awb_ch0, NULL);
+	ctrls->auto_wb_ch1 = v4l2_ctrl_new_custom(hdl, &cfg_awb_ch1, NULL);
+	ctrls->auto_gain_ch0 = v4l2_ctrl_new_custom(hdl, &cfg_autogain_ch0, NULL);
+	ctrls->auto_gain_ch1 = v4l2_ctrl_new_custom(hdl, &cfg_autogain_ch1, NULL);
+	ctrls->gain_ch0 = v4l2_ctrl_new_custom(hdl, &cfg_gain_ch0, NULL);
+	ctrls->gain_ch1 = v4l2_ctrl_new_custom(hdl, &cfg_gain_ch1, NULL);
+	ctrls->hflip_ch0 = v4l2_ctrl_new_custom(hdl, &cfg_hflip_ch0, NULL);
+	ctrls->hflip_ch1 = v4l2_ctrl_new_custom(hdl, &cfg_hflip_ch1, NULL);
+	ctrls->vflip_ch0 = v4l2_ctrl_new_custom(hdl, &cfg_vflip_ch0, NULL);
+	ctrls->vflip_ch1 = v4l2_ctrl_new_custom(hdl, &cfg_vflip_ch1, NULL);
+
 	if(CTS_DEBUG) printk(KERN_INFO "[%s:%d][%s:%d] %s (pixel_rate:%d auto_wb:%d blue_balance:%d red_balance:%d auto_exp:%d exposure:%d)", \
 			KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, ctrls->pixel_rate->val, ctrls->auto_wb->val, \
 			ctrls->blue_balance->val, ctrls->red_balance->val, ctrls->auto_exp->val, ctrls->exposure->val);
@@ -1245,12 +1694,14 @@ static int max9296_init_controls(struct max9296_dev *sensor)
 	}
 
 	ctrls->pixel_rate->flags |= V4L2_CTRL_FLAG_READ_ONLY;
-	ctrls->gain->flags |= V4L2_CTRL_FLAG_VOLATILE;
-	ctrls->exposure->flags |= V4L2_CTRL_FLAG_VOLATILE;
+	/* Remove VOLATILE flags to allow userspace writes */
+	/* ctrls->gain->flags |= V4L2_CTRL_FLAG_VOLATILE; */
+	/* ctrls->exposure->flags |= V4L2_CTRL_FLAG_VOLATILE; */
 
 	v4l2_ctrl_auto_cluster(3, &ctrls->auto_wb, 0, false);
-	v4l2_ctrl_auto_cluster(2, &ctrls->auto_gain, 0, true);
-	v4l2_ctrl_auto_cluster(2, &ctrls->auto_exp, 1, true);
+	/* Don't use auto_cluster for exposure/gain - allow independent control */
+	/* v4l2_ctrl_auto_cluster(2, &ctrls->auto_gain, 0, false); */
+	/* v4l2_ctrl_auto_cluster(2, &ctrls->auto_exp, 1, false); */
 	if(CTS_DEBUG) printk(KERN_INFO "[%s:%d][%s:%d] %s (auto_wb:%d auto_gain:%d auto_exp:%d)", KEYWORD, sensor->i2c_client->adapter->nr, \
 					_FILE_, __LINE__, __FUNCTION__, ctrls->auto_wb->val, ctrls->auto_gain->val, ctrls->auto_exp->val);
 	sensor->sd.ctrl_handler = hdl;
@@ -1864,6 +2315,12 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable)
 		}
 		else
 		{
+			/* Stream restart: reapply V4L2 controls */
+			if (sensor->ctrl_cache.firmware_ready) {
+				sensor->ctrl_cache.pending = true;  /* Force re-apply */
+				max9296_apply_cached_controls(sensor);
+			}
+
 			sensor->stream_on = 1;
 			sensor->restart = 0;
 		}
@@ -2138,21 +2595,19 @@ static int max9296_enable(void *data)
 							usleep_range(10000, 10000);
 						}
 
-						// ae
-						//usleep_range(100000, 100000);
-						maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2, 100);
-						maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5002, 0x0290, 2, 2, 100); 
+						// ae - per-channel (init to manual first)
+						max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL, AP1302_AE_CTRL_MANUAL, 2, 2);
+						max9296_write_per_channel(sensor->shared.sensor, AP1302_REG_AE_CTRL, AP1302_AE_CTRL_MANUAL, 2, 2);
 						usleep_range(100000, 100000);
-						maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2, 100);
-						maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5002, 0x0299, 2, 2, 100);
-                        // awb
-                        usleep_range(100000, 100000);
-                        maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2, 100);
-                        maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5100, 0x115f, 2, 2, 100);
-						//lsc
-                        usleep_range(100000, 100000);
-                        maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2, 100);
-                        maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x54a0, 0x3fff, 2, 2, 100);
+
+						// awb - per-channel
+						max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL, AP1302_AWB_CTRL_AUTO, 2, 2);
+						max9296_write_per_channel(sensor->shared.sensor, AP1302_REG_AWB_CTRL, AP1302_AWB_CTRL_AUTO, 2, 2);
+						usleep_range(100000, 100000);
+
+						// lsc - per-channel
+						max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
+						max9296_write_per_channel(sensor->shared.sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
 					}
 				}
 				else
@@ -2168,19 +2623,18 @@ static int max9296_enable(void *data)
 						usleep_range(10000, 10000);
 					}
 
-					// ae
-					//usleep_range(100000, 100000);
-					maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2, 100); 
+					// ae - per-channel (init to manual first, then auto)
+					max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL, AP1302_AE_CTRL_MANUAL, 2, 2);
 					usleep_range(100000, 100000);
-					maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2, 100); 
-                    // awb
-                    usleep_range(100000, 100000);
-                    maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2, 100);
-                    //maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5100, 0x115f, 2, 2, 100); 
-					//lsc
-                    usleep_range(100000, 100000);
-                    maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2, 100); 
-                    //maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x54a0, 0x3fff, 2, 2, 100);
+					max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL, AP1302_AE_CTRL_AUTO, 2, 2);
+					usleep_range(100000, 100000);
+
+					// awb - per-channel
+					max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL, AP1302_AWB_CTRL_AUTO, 2, 2);
+					usleep_range(100000, 100000);
+
+					// lsc - per-channel
+					max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
 				}
 			}
 			else
@@ -2196,21 +2650,24 @@ static int max9296_enable(void *data)
 					usleep_range(10000, 10000);
 				}
 
-				// ae
-				//usleep_range(100000, 100000);
-				maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2, 100); 
+				// ae - per-channel (init to manual first, then auto)
+				max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL, AP1302_AE_CTRL_MANUAL, 2, 2);
 				usleep_range(100000, 100000);
-				maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2, 100); 
-                //awb
-                usleep_range(100000, 100000);
-                maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2, 100);
-                //maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5100, 0x1154, 2, 2, 100);
-				//lsc
-                usleep_range(100000, 100000);
-                maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2, 100); 
-                //maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x54a0, 0x3fff, 2, 2, 100);
+				max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL, AP1302_AE_CTRL_AUTO, 2, 2);
+				usleep_range(100000, 100000);
+
+				// awb - per-channel
+				max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL, AP1302_AWB_CTRL_AUTO, 2, 2);
+				usleep_range(100000, 100000);
+
+				// lsc - per-channel
+				max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
 			}
 			sensor->stream_on = 0;
+
+			/* Override hardcoded AE/AWB init with V4L2 cached controls */
+			max9296_apply_cached_controls(sensor);
+
 			usleep_range(10000, 10000);
 			//pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n", __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
 		}
@@ -2357,6 +2814,26 @@ static int max9296_probe(struct i2c_client *client)
 	sensor->state.setup = MAX9296_STATE_IDLE;
 	sensor->state.power = MAX9296_STATE_IDLE;
 	sensor->stream_on = 0;
+	sensor->ctrl_cache.firmware_ready = false;
+	sensor->ctrl_cache.pending = false;
+
+	/* Initialize per-channel cache with default values */
+	sensor->ctrl_cache.ch0.ae_mode = V4L2_EXPOSURE_AUTO;
+	sensor->ctrl_cache.ch0.awb = 1;  /* auto */
+	sensor->ctrl_cache.ch0.gain_auto = 1;  /* auto */
+	sensor->ctrl_cache.ch0.gain = 0;
+	sensor->ctrl_cache.ch0.hflip = 0;
+	sensor->ctrl_cache.ch0.vflip = 0;
+
+	sensor->ctrl_cache.ch1.ae_mode = V4L2_EXPOSURE_AUTO;
+	sensor->ctrl_cache.ch1.awb = 1;  /* auto */
+	sensor->ctrl_cache.ch1.gain_auto = 1;  /* auto */
+	sensor->ctrl_cache.ch1.gain = 0;
+	sensor->ctrl_cache.ch1.hflip = 0;
+	sensor->ctrl_cache.ch1.vflip = 0;
+
+	sensor->ctrl_cache.exposure = 0;  /* shared exp_time */
+
 	sensor->fps = DEFAULT_FRAMRATE_FPS;
 
 	/*
@@ -2451,7 +2928,7 @@ static int max9296_probe(struct i2c_client *client)
 
 	v4l2_i2c_subdev_init(&sensor->sd, client, &max9296_subdev_ops);
 
-	sensor->sd.flags |= V4L2_SUBDEV_FL_HAS_EVENTS;
+	sensor->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS;
 	sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
 	sensor->sd.entity.ops = &max9296_sd_media_ops;
 	sensor->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
@@ -2470,6 +2947,35 @@ static int max9296_probe(struct i2c_client *client)
 	}
 	else
 		ret = v4l2_ctrl_handler_setup(&sensor->ctrls.handler);
+
+	/* Initialize cache with V4L2 control default values for both channels */
+	/* Legacy controls initialize both ch0 and ch1 with same values */
+	sensor->ctrl_cache.ch0.ae_mode = sensor->ctrls.auto_exp->val;
+	sensor->ctrl_cache.ch0.awb = sensor->ctrls.auto_wb->val;
+	sensor->ctrl_cache.ch0.gain_auto = sensor->ctrls.auto_gain->val;
+	sensor->ctrl_cache.ch0.gain = sensor->ctrls.gain->val;
+	sensor->ctrl_cache.ch0.hflip = sensor->ctrls.hflip->val;
+	sensor->ctrl_cache.ch0.vflip = sensor->ctrls.vflip->val;
+
+	sensor->ctrl_cache.ch1.ae_mode = sensor->ctrls.auto_exp->val;
+	sensor->ctrl_cache.ch1.awb = sensor->ctrls.auto_wb->val;
+	sensor->ctrl_cache.ch1.gain_auto = sensor->ctrls.auto_gain->val;
+	sensor->ctrl_cache.ch1.gain = sensor->ctrls.gain->val;
+	sensor->ctrl_cache.ch1.hflip = sensor->ctrls.hflip->val;
+	sensor->ctrl_cache.ch1.vflip = sensor->ctrls.vflip->val;
+
+	sensor->ctrl_cache.exposure = sensor->ctrls.exposure->val;
+	sensor->ctrl_cache.pending = true;  /* Mark as having cached values */
+
+	if(CTS_DEBUG) printk(KERN_INFO "[%s:%d][%s:%d] %s cache initialized: ch0(ae:%d awb:%d gain_auto:%d gain:%d hflip:%d vflip:%d) ch1(ae:%d awb:%d gain_auto:%d gain:%d hflip:%d vflip:%d) exp:%d",
+		KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
+		sensor->ctrl_cache.ch0.ae_mode, sensor->ctrl_cache.ch0.awb,
+		sensor->ctrl_cache.ch0.gain_auto, sensor->ctrl_cache.ch0.gain,
+		sensor->ctrl_cache.ch0.hflip, sensor->ctrl_cache.ch0.vflip,
+		sensor->ctrl_cache.ch1.ae_mode, sensor->ctrl_cache.ch1.awb,
+		sensor->ctrl_cache.ch1.gain_auto, sensor->ctrl_cache.ch1.gain,
+		sensor->ctrl_cache.ch1.hflip, sensor->ctrl_cache.ch1.vflip,
+		sensor->ctrl_cache.exposure);
 
 	ret = v4l2_async_register_subdev_sensor_common(&sensor->sd);
 	if (ret) {
