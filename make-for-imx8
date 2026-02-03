@@ -1,0 +1,17 @@
+#!/bin/bash
+[ "$SDK_LOC" ] || SDK_LOC=/shared/fsl-imx-xwayland/5.10-hardknott
+[ "$SDK_NAME" ] || SDK_NAME=cortexa53-crypto-poky-linux
+
+[ ! -e ${SDK_LOC}/environment-setup-${SDK_NAME} ] && {
+    echo "Sorry, please verify: ${SDK_LOC}/environment-setup-${SDK_NAME}"
+    exit 1
+}
+
+. ${SDK_LOC}/environment-setup-${SDK_NAME}
+
+KERNEL_SRC=/opt/desktop/build-desktop/tmp/work/imx8mpevk-fsl-linux/linux-imx/5.10.35+git999-r0/linux-imx-5.10.35+git999
+
+# unset LDFLAGS to avoid userspace flags leaking into kernel build
+unset LDFLAGS
+
+make ARCH=arm64 CROSS_COMPILE=aarch64-poky-linux- KERNEL_SRC=${KERNEL_SRC} $@
