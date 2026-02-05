@@ -1260,29 +1260,11 @@ static int max9296_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct v4l2_subdev *sd = ctrl_to_sd(ctrl);
 	struct max9296_dev *sensor = to_max9296_dev(sd);
-	int val;
 	if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-	/* v4l2_ctrl_lock() locks our own mutex */
-
-	switch (ctrl->id) {
-	case V4L2_CID_AUTOGAIN:
-		val = max9296_get_gain(sensor);
-		if (val < 0) {
-			if(CTS_DEBUG) printk(KERN_CRIT "[%s:%d][%s:%d] %s return", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-			return val;
-		}
-		sensor->ctrls.gain->val = val;
-		break;
-	case V4L2_CID_EXPOSURE_AUTO:
-		val = max9296_get_exposure(sensor);
-		if (val < 0) {
-			if(CTS_DEBUG) printk(KERN_CRIT "[%s:%d][%s:%d] %s return", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-			return val;
-		}
-		sensor->ctrls.exposure->val = val;
-		break;
-	}
-
+	/*
+	 * Do not override cached V4L2 control values from volatile reads.
+	 * The legacy get_* helpers return 0 and would clobber defaults (gain/exposure).
+	 */
 	return 0;
 }
 
@@ -1386,31 +1368,49 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
 					   const char *ch_name)
 {
 	u16 ae_val, awb_val, rot;
+	u32 exp_seed;
+	u16 gain_seed;
 	int ret = 0;
 
 	/* STEP 1: Initialize AE to manual mode first */
-	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, AP1302_AE_CTRL_MANUAL, 2, 2, 0);
+	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL,
+				   AP1302_AE_CTRL_MANUAL, 2, 2, 0);
+	usleep_range(100000, 100000);
+
+	/*
+	 * Seed exposure time while in manual mode.
+	 * Some FW revisions need a non-zero seed before switching to AE auto.
+	 */
+	exp_seed = sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure : 10000;
+	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_EXP_TIME,
+				   exp_seed, 2, 4, 0);
+	usleep_range(100000, 100000);
 
 	/* STEP 2: Apply configured AE mode (auto/manual) */
-	ae_val = (ch_ctrl->ae_mode == V4L2_EXPOSURE_AUTO) ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
-	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2, 0);
+	ae_val = (ch_ctrl->ae_mode == V4L2_EXPOSURE_AUTO) ?
+		AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
+	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL,
+				   ae_val, 2, 2, 0);
+	if (ch_ctrl->ae_mode == V4L2_EXPOSURE_AUTO)
+		usleep_range(100000, 100000);
 
 	/* AWB (auto/manual) */
 	awb_val = ch_ctrl->awb ? AP1302_AWB_CTRL_AUTO : 0x0000;
 	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2, 2, 0);
 
 	/* Gain value (always set, used when switching to manual) */
-	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_GAIN, ch_ctrl->gain, 2, 2, 0);
+	gain_seed = ch_ctrl->gain ? ch_ctrl->gain : 256;
+	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_GAIN, gain_seed, 2, 2, 0);
 
 	/* Rotation (hflip + vflip combined) */
 	rot = (ch_ctrl->hflip ? 0x01 : 0x00) | (ch_ctrl->vflip ? 0x02 : 0x00);
 	ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_ROTATION, rot, 2, 2, 0);
 
-	printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied (i2c:0x%02x ae:%s awb:%d gain:%d rot:0x%02x) ret:%d",
+	printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied (i2c:0x%02x ae:%s awb:%d gain:%d exp_seed:%u rot:0x%02x) ret:%d",
 		KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
 		ch_name, i2c_addr,
 		(ch_ctrl->ae_mode == V4L2_EXPOSURE_AUTO) ? "auto" : "manual",
-		ch_ctrl->awb, ch_ctrl->gain, rot, ret);
+		ch_ctrl->awb, gain_seed, exp_seed, rot, ret);
 }
 
 static void max9296_apply_cached_controls(struct max9296_dev *sensor)
@@ -1435,9 +1435,7 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor)
 	printk(KERN_NOTICE "[%s:%d][%s:%d] %s applying cached controls (dual:%d)",
 		KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, dual);
 
-	/* Apply exposure time (per-channel in dual mode, global in single mode) */
-	max9296_write_per_channel(sensor, AP1302_REG_EXP_TIME,
-				  sensor->ctrl_cache.exposure, 2, 4);
+	/* Exposure seeding is handled in max9296_apply_channel_controls(). */
 
 	/* Shared tuning values */
 	max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, sensor->ctrl_cache.lsc, 2, 2);
@@ -1648,7 +1646,7 @@ static int max9296_init_controls(struct max9296_dev *sensor)
 						 V4L2_EXPOSURE_AUTO);
 	/* exposure: u32 in HW, but V4L2 INTEGER is s32; keep non-negative range */
 	ctrls->exposure = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_EXPOSURE,
-				    0, INT_MAX, 1, 0);
+				    0, INT_MAX, 1, 10000);
 	/* Auto/manual gain */
 	ctrls->auto_gain = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_AUTOGAIN,
 					     0, 1, 1, 1);
@@ -1665,9 +1663,9 @@ static int max9296_init_controls(struct max9296_dev *sensor)
 				      0, 65535, 1, 4096);
 	ctrls->hue = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_HUE,
 				       0, 359, 1, 0);
-	/* contrast: fixed12 (u16). 4096 = 1.0 */
+	/* contrast: fixed12 (u16). Align default to AP1302 reset value (0x0000). */
 	ctrls->contrast = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_CONTRAST,
-				    0, 65535, 1, 4096);
+				    0, 65535, 1, 0);
 	ctrls->hflip = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_HFLIP,
 					 0, 1, 1, 0);
 	ctrls->vflip = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_VFLIP,
@@ -2980,10 +2978,15 @@ static int max9296_probe(struct i2c_client *client)
 	sensor->ctrl_cache.ch1.hflip = 0;
 	sensor->ctrl_cache.ch1.vflip = 0;
 
-	sensor->ctrl_cache.exposure = 0;  /* shared exp_time */
+	/*
+	 * Align default exposure to legacy app config (exp_time=10000).
+	 * This is used as a manual exposure value and also as an initial seed
+	 * during the manual->auto AE transition on stream start.
+	 */
+	sensor->ctrl_cache.exposure = 10000;  /* shared exp_time */
 	sensor->ctrl_cache.lsc = 0x3fff;
 	sensor->ctrl_cache.brightness = 0;
-	sensor->ctrl_cache.contrast = 4096;
+	sensor->ctrl_cache.contrast = 0;
 	sensor->ctrl_cache.saturation = 4096;
 
 	sensor->fps = DEFAULT_FRAMRATE_FPS;
