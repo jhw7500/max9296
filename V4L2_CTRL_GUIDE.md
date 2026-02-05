@@ -37,10 +37,14 @@ V4L2 컨트롤은 기본적으로 정수값으로 노출된다. 드라이버는 
 
 보드 기본값(참고: `--list-ctrls` 기준)
 - `brightness`: default=0
-- `contrast`: default=4096
+- `contrast`: default=0
 - `saturation`: default=4096
 - `gain`: default=256
 - `lsc`: default=16383(0x3fff)
+
+참고
+- 표준 V4L2 컨트롤(`contrast`, `saturation` 등)은 `v4l2-ctl --list-ctrls` 출력에 레지스터 주소를 직접 표시할 수 없다.
+- 레지스터 주소는 아래 "컨트롤 ↔ 레지스터 매핑" 섹션을 기준으로 본다.
 
 ## 3) 컨트롤 ↔ 레지스터 매핑 (요약)
 
@@ -88,7 +92,7 @@ v4l2-ctl -d /dev/v4l-subdev3 --list-ctrls --list-ctrls-menus > /tmp/subdev3.ctrl
 
 ```bash
 # 공통(표준) 기본값
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=brightness=0,contrast=4096,saturation=4096,gain=256
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=brightness=0,contrast=0,saturation=4096,gain=256
 sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=horizontal_flip=0,vertical_flip=0
 
 # 채널별(커스텀) 기본값
