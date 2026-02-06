@@ -40,7 +40,6 @@
 #include <media/v4l2-subdev.h>
 
 #define SW_VERSION "1.6"
-#define CTS_DEBUG 1
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
@@ -565,7 +564,7 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
   do {
     ret = i2c_transfer(client->adapter, &msg, 1);
     if (ret < 0) {
-      if (CTS_DEBUG)
+      if (debug)
         printk(KERN_ERR "[%s:%d][%s:%d] retry:%d Error i2c write reg : [0x%x] "
                         "reg=0x%x(%d byte), val=0x%x(%d byte)",
                KEYWORD, client->adapter->nr, _FILE_, __LINE__, retry,
@@ -591,7 +590,7 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
     return -EIO;
   }
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] Success!! i2c write reg : [0x%x] "
                        "reg=0x%x(%d byte), val=0x%x(%d byte)(ret:%d)\n",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__, slave_addr, reg,
@@ -643,7 +642,7 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
   do {
     ret = i2c_transfer(client->adapter, msg, 2);
     if (ret < 0) {
-      if (CTS_DEBUG)
+      if (debug)
         printk(KERN_ERR "[%s:%d][%s:%d] Error i2c read reg : [0x%x] "
                         "reg=0x%x(%d byte),(read %d byte)",
                KEYWORD, client->adapter->nr, _FILE_, __LINE__,
@@ -661,7 +660,7 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
 
   if ((retry == 0) && (ret < 0)) {
 
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_ERR "[%s:%d][%s:%d] Error i2c read - slave: 0x%x, reg: "
                       "0x%x(%d byte, %d data byte",
              KEYWORD, client->adapter->nr, _FILE_, __LINE__,
@@ -679,7 +678,7 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
   if (val) {
     for (i = 0; i < val_byte; ++i)
       *val |= ((r_buf[i] & 0xff) << ((val_byte - i - 1) << 3));
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_NOTICE "[%s:%d][%s:%d] i2c read reg : [0x%x] reg=0x%x(%d "
                          "byte), val=0x%x(%d byte)",
              KEYWORD, client->adapter->nr, _FILE_, __LINE__,
@@ -701,7 +700,7 @@ static int max9296_check_valid_mode(struct max9296_dev *sensor,
                                     enum max9296_frame_rate rate) {
   struct i2c_client *client = sensor->i2c_client;
   int ret = 0;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s (mode->id:%u)", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            mode->id);
@@ -714,7 +713,7 @@ static int max9296_check_valid_mode(struct max9296_dev *sensor,
       ret = -EINVAL;
     break;
   default:
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_ERR "[%s:%d][%s:%d] Invalid mode (%u)", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__, mode->id);
     else
@@ -731,7 +730,7 @@ static int max9296_load_regs(struct max9296_dev *sensor,
   unsigned int i;
   int ret = 0;
   u32 slave_addr, reg_addr, reg_byte, val, val_byte, delay_ms;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s start", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   for (i = 0; i < mode->reg_data_size; ++i, ++regs) {
@@ -747,7 +746,7 @@ static int max9296_load_regs(struct max9296_dev *sensor,
     if (delay_ms)
       usleep_range(1000 * delay_ms, 1000 * delay_ms + 100);
   }
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return ret;
@@ -770,7 +769,7 @@ static int max9296_set_autogain(struct max9296_dev *sensor, bool on) {
 
 static int max9296_set_stream_mipi(struct max9296_dev *sensor, bool on) {
   int ret;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (%s)", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            on ? "on" : "off");
@@ -804,7 +803,7 @@ max9296_find_mode(struct max9296_dev *sensor, int width, int height,
   mode =
       v4l2_find_nearest_size(max9296_mode_data, ARRAY_SIZE(max9296_mode_data),
                              width, height, width, height);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (id:%u width:%lu heigth:%llu "
                      "reg_data_size:%lu max_fps:%lu)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
@@ -824,7 +823,7 @@ static u64 max9296_calc_pixel_rate(struct max9296_dev *sensor) {
 
   rate = sensor->current_mode->width * sensor->current_mode->height;
   rate *= sensor->fps;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (rate:%llu)", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            rate);
@@ -832,14 +831,14 @@ static u64 max9296_calc_pixel_rate(struct max9296_dev *sensor) {
 }
 
 static void max9296_power(struct max9296_dev *sensor, bool enable) {
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s (pwdn %s)", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            enable ? "high" : "low");
   gpiod_set_value_cansleep(sensor->pwdn_gpio, enable ? 0 : 1);
 
   if (sensor->shared.sensor != NULL) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_NOTICE "[%s:%d][%s:%d] %s (shared pwdn %s)", "RST",
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
              enable ? "high" : "low");
@@ -861,7 +860,7 @@ static void max9296_reset(struct max9296_dev *sensor) {
   ssleep(1);
 
   if (reset_gpio) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_NOTICE "[%s:%d][%s:%d] %s (reset low)", "RST",
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     gpiod_set_value_cansleep(reset_gpio, 1);
@@ -869,7 +868,7 @@ static void max9296_reset(struct max9296_dev *sensor) {
   }
 
   if (reset_gpio) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_NOTICE "[%s:%d][%s:%d] %s (reset high)", "RST",
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     gpiod_set_value_cansleep(reset_gpio, 0);
@@ -881,19 +880,19 @@ static void max9296_reset(struct max9296_dev *sensor) {
   ssleep(1);
 
   // ssleep(2);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 }
 
 static int max9296_set_power_on(struct max9296_dev *sensor) {
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s start", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   usleep_range(10000, 11000);
   max9296_reset(sensor);
   usleep_range(10000, 11000);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
@@ -901,7 +900,7 @@ static int max9296_set_power_on(struct max9296_dev *sensor) {
 
 static void max9296_set_power_off(struct max9296_dev *sensor) {
   struct gpio_desc *reset_gpio;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s start", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   if (sensor->shared.sensor != NULL)
@@ -911,7 +910,7 @@ static void max9296_set_power_off(struct max9296_dev *sensor) {
     reset_gpio = sensor->reset_gpio;
 
   if (reset_gpio) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_NOTICE "[%s:%d][%s:%d] %s (reset low)", "RST",
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     gpiod_set_value_cansleep(reset_gpio, 1);
@@ -919,7 +918,7 @@ static void max9296_set_power_off(struct max9296_dev *sensor) {
 
   max9296_power(sensor, false);
   sensor->streaming = false;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 }
@@ -927,7 +926,7 @@ static void max9296_set_power_off(struct max9296_dev *sensor) {
 static int max9296_set_power(struct max9296_dev *sensor, bool on) {
   int ret = 0;
   int shared_power_ctl = 0;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s start", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   if (sensor->shared.sensor != NULL) {
@@ -967,7 +966,7 @@ static int max9296_set_power(struct max9296_dev *sensor, bool on) {
 
     sensor->state.power = MAX9296_STATE_DONE;
   }
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
@@ -978,7 +977,7 @@ static int max9296_set_power(struct max9296_dev *sensor, bool on) {
 static int max9296_s_power(struct v4l2_subdev *sd, int on) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
   int ret = 0;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s start(%d)", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, on);
   /* Update the power count. */
@@ -1003,7 +1002,7 @@ static int max9296_s_power(struct v4l2_subdev *sd, int on) {
       sensor->shared.sensor->state.power = MAX9296_STATE_IDLE;
     ssleep(5);
   }
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end(%d)", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, on);
   return ret;
@@ -1016,7 +1015,7 @@ static int max9296_get_fmt(struct v4l2_subdev *sd,
   struct v4l2_mbus_framefmt *fmt;
 
   if (format->pad != 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s return -EINVAL", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     return -EINVAL;
@@ -1031,7 +1030,7 @@ static int max9296_get_fmt(struct v4l2_subdev *sd,
 
   fmt->reserved[1] = sensor->fps;
   format->format = *fmt;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_DEBUG
            "[%s:%d][%s:%d] %s (width:%lu height:%lu code:%lu field:%lu "
            "colorspace:%lu ycbcr_enc:%u quantization:%u xfer_func:%u fps:%u)",
@@ -1052,7 +1051,7 @@ static int max9296_try_fmt_internal(struct v4l2_subdev *sd,
 
   mode = max9296_find_mode(sensor, fmt->width, fmt->height, true);
   if (!mode) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s return -EINVAL", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     return -EINVAL;
@@ -1077,7 +1076,7 @@ static int max9296_try_fmt_internal(struct v4l2_subdev *sd,
   fmt->ycbcr_enc = V4L2_MAP_YCBCR_ENC_DEFAULT(fmt->colorspace);
   fmt->quantization = V4L2_QUANTIZATION_FULL_RANGE;
   fmt->xfer_func = V4L2_MAP_XFER_FUNC_DEFAULT(fmt->colorspace);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO
            "[%s:%d][%s:%d] %s (width:%lu height:%lu code:%lu field:%lu "
            "colorspace:%lu ycbcr_enc:%u quantization:%u xfer_func:%u)",
@@ -1095,11 +1094,11 @@ static int max9296_set_fmt(struct v4l2_subdev *sd,
   struct v4l2_mbus_framefmt *mbus_fmt = &format->format;
   struct v4l2_mbus_framefmt *fmt;
   int ret;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   if (format->pad != 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s return -EINVAL", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     return -EINVAL;
@@ -1108,7 +1107,7 @@ static int max9296_set_fmt(struct v4l2_subdev *sd,
   mutex_lock(&sensor->lock);
 
   if (sensor->streaming) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s goto out", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     ret = -EBUSY;
@@ -1117,7 +1116,7 @@ static int max9296_set_fmt(struct v4l2_subdev *sd,
 
   ret = max9296_try_fmt_internal(sd, mbus_fmt, &new_mode);
   if (ret) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s goto out", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     goto out;
@@ -1177,7 +1176,7 @@ static int max9296_write_per_channel(struct max9296_dev *sensor,
 }
 
 static int max9296_set_ctrl_hue(struct max9296_dev *sensor, int value) {
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            value);
@@ -1185,7 +1184,7 @@ static int max9296_set_ctrl_hue(struct max9296_dev *sensor, int value) {
 }
 
 static int max9296_set_ctrl_lsc(struct max9296_dev *sensor, int value) {
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            value);
@@ -1195,7 +1194,7 @@ static int max9296_set_ctrl_lsc(struct max9296_dev *sensor, int value) {
 static int max9296_set_ctrl_white_balance(struct max9296_dev *sensor, int awb) {
   int ret;
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s awb:%d", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            awb);
@@ -1216,7 +1215,7 @@ max9296_set_ctrl_exposure(struct max9296_dev *sensor,
   u16 ae_val = (auto_exposure == V4L2_EXPOSURE_AUTO) ? AP1302_AE_CTRL_AUTO
                                                      : AP1302_AE_CTRL_MANUAL;
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s auto_exposure:%d ae_val:0x%04x",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            __FUNCTION__, auto_exposure, ae_val);
@@ -1243,7 +1242,7 @@ max9296_set_ctrl_exposure(struct max9296_dev *sensor,
 static int max9296_set_ctrl_gain(struct max9296_dev *sensor, bool auto_gain) {
   int ret = 0;
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s auto_gain:%d", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            auto_gain);
@@ -1259,7 +1258,7 @@ static int max9296_set_ctrl_gain(struct max9296_dev *sensor, bool auto_gain) {
 
 static int max9296_set_ctrl_test_pattern(struct max9296_dev *sensor,
                                          int value) {
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            value);
@@ -1267,7 +1266,7 @@ static int max9296_set_ctrl_test_pattern(struct max9296_dev *sensor,
 }
 
 static int max9296_set_ctrl_light_freq(struct max9296_dev *sensor, int value) {
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            value);
@@ -1275,7 +1274,7 @@ static int max9296_set_ctrl_light_freq(struct max9296_dev *sensor, int value) {
 }
 
 static int max9296_set_ctrl_pixelrate(struct max9296_dev *sensor, int value) {
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            value);
@@ -1285,7 +1284,7 @@ static int max9296_set_ctrl_pixelrate(struct max9296_dev *sensor, int value) {
 static int max9296_g_volatile_ctrl(struct v4l2_ctrl *ctrl) {
   struct v4l2_subdev *sd = ctrl_to_sd(ctrl);
   struct max9296_dev *sensor = to_max9296_dev(sd);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   /*
@@ -1381,7 +1380,7 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
   default:
     break;
   }
-  if (CTS_DEBUG) {
+  if (debug) {
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s cached ctrl 0x%x = %d\n", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            ctrl->id, ctrl->val);
@@ -1528,7 +1527,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   u32 ch0_addr = dual ? AP1302_CH0_I2C_ADDR : AP1302_I2C_ADDR;
   u32 ch1_addr = dual ? AP1302_CH1_I2C_ADDR : AP1302_I2C_ADDR;
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(
         KERN_NOTICE
         "[%s:%d][%s:%d] %s ctrl->id:0x%x ctrl->val:%d fw_ready:%d pw_cnt:%d\n",
@@ -1701,7 +1700,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     break;
 
   default:
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s return", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     ret = -EINVAL;
@@ -1729,7 +1728,7 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
   struct max9296_ctrls *ctrls = &sensor->ctrls;
   struct v4l2_ctrl_handler *hdl = &ctrls->handler;
   int ret;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   v4l2_ctrl_handler_init(hdl, 48);
@@ -2256,11 +2255,11 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
     }
   }
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (pixel_rate:%d exp_time:%d)", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            ctrls->pixel_rate->val, ctrls->exp_time ? ctrls->exp_time->val : 0);
-  if (CTS_DEBUG)
+  if (debug)
     printk(
         KERN_INFO "[%s:%d][%s:%d] %s (gain_ch0:%d awb_ch0:%d sat_ch0:%d hue:%d "
                   "con_ch0:%d hflip_ch0:%d vflip_ch0:%d light_freq:%d)",
@@ -2273,7 +2272,7 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
         ctrls->vflip_ch0 ? ctrls->vflip_ch0->val : 0, ctrls->light_freq->val);
 
   if (hdl->error) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s hdl->error", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     ret = hdl->error;
@@ -2297,7 +2296,7 @@ static int max9296_enum_frame_size(struct v4l2_subdev *sd,
                                    struct v4l2_subdev_pad_config *cfg,
                                    struct v4l2_subdev_frame_size_enum *fse) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_DEBUG "[%s:%d][%s:%d] %s (fse->index:%d min_width:%lu "
                       "max_width:%lu min_height:%llu max_height:%llu)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
@@ -2305,14 +2304,14 @@ static int max9296_enum_frame_size(struct v4l2_subdev *sd,
            fse->min_height, fse->max_height);
 
   if (fse->pad != 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_DEBUG "[%s:%d][%s:%d] %s fse->pad:%d return", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
              fse->pad);
     return -EINVAL;
   }
   if (fse->index >= MAX9296_NUM_MODES) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_DEBUG "[%s:%d][%s:%d] %s fse->index:%d return", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
              fse->index);
@@ -2323,7 +2322,7 @@ static int max9296_enum_frame_size(struct v4l2_subdev *sd,
   fse->max_width = fse->min_width;
   fse->min_height = max9296_mode_data[fse->index].height;
   fse->max_height = fse->min_height;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (fse->index:%d min_width:%lu "
                      "max_width:%lu min_height:%llu max_height:%llu)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
@@ -2340,14 +2339,14 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
   int i, count;
 
   if (fie->pad != 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s fie->pad:%d return err", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
              fie->pad);
     return -EINVAL;
   }
   if (fie->index >= MAX9296_NUM_FRAMERATES) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s fie->index:%d return err", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
              fie->index);
@@ -2356,7 +2355,7 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
 
   if (fie->width == 0 || fie->height == 0 || fie->code == 0) {
     // pr_warn("Please assign pixel format, width and height.\n");
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT
              "[%s:%d][%s:%d] %s Please assign pixel format, width and heigh",
              KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
@@ -2370,7 +2369,7 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
   for (i = 0; i < DEFAULT_FRAMRATE_FPS; i++) {
     if (fie->index == (count - 1)) {
       fie->interval.denominator = i + 1;
-      if (CTS_DEBUG)
+      if (debug)
         printk(KERN_NOTICE "[%s:%d][%s:%d] %s fie->index:%d fie->width:%d "
                            "fie->height:%d fie->code:%d return",
                KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
@@ -2378,7 +2377,7 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
       return 0;
     }
   }
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_DEBUG "[%s:%d][%s:%d] %s fie->index:%d fie->width:%d "
                       "fie->height:%d fie->code:%d return err",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
@@ -2393,7 +2392,7 @@ static int max9296_g_frame_interval(struct v4l2_subdev *sd,
   mutex_lock(&sensor->lock);
   fi->interval = sensor->frame_interval;
   mutex_unlock(&sensor->lock);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%lu denominator:%lu)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            __FUNCTION__, fi->interval.numerator, fi->interval.denominator);
@@ -2406,7 +2405,7 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
   int ret = 0;
 
   if (fi->pad != 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s return err", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     return -EINVAL;
@@ -2415,7 +2414,7 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
   mutex_lock(&sensor->lock);
 
   if (sensor->streaming) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s goto", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     ret = -EBUSY;
@@ -2425,7 +2424,7 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
   sensor->frame_interval = fi->interval;
   sensor->fps = fi->interval.denominator;
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%lu denominator:%lu)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            __FUNCTION__, fi->interval.numerator, fi->interval.denominator);
@@ -2443,13 +2442,13 @@ static int max9296_enum_mbus_code(struct v4l2_subdev *sd,
                                   struct v4l2_subdev_mbus_code_enum *code) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
   if (code->pad != 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s return err", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     return -EINVAL;
   }
   if (code->index >= ARRAY_SIZE(max9296_formats)) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s return err", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     return -EINVAL;
@@ -2475,7 +2474,7 @@ static int start_fw_load(struct i2c_client *client) {
   int ret = 0;
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s start", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   ret = maxim_ops_i2c_write(sensor, 0x3c, 0xf05a, 0x0014, 2, 2, 0);
@@ -2485,7 +2484,7 @@ static int start_fw_load(struct i2c_client *client) {
   // maxim_ops_i2c_write(sensor, 0x3c, 0xf052, 0xffff, 2, 2, 0);
 
   msleep(300);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
@@ -2496,13 +2495,13 @@ static int end_fw_load(struct i2c_client *client) {
   int ret = 0;
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s start", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   ret = maxim_ops_i2c_write(sensor, 0x3c, 0x6002, 0xffff, 2, 2, 0);
 
   msleep(300);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
@@ -2543,12 +2542,12 @@ int max9296_loadfw(struct i2c_client *client) {
   int size, retval;
   int max_buf_size = FWSEND, burst_size = BURST_SIZE;
   u32 header = INIT_HEADER;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s start", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   if (request_firmware(&fw, fwname, FWDEV(client)) != 0) {
     // v4l_err(client, "unable to open firmware %s\n", fwname);
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] unable to open firmware %s", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, fwname);
     return -EINVAL;
@@ -2556,7 +2555,7 @@ int max9296_loadfw(struct i2c_client *client) {
 
   retval = start_fw_load(client);
   if (retval < 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_EMERG "[%s:%d][%s:%d] start firmware load i2c failure",
              KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__);
     return retval;
@@ -2565,7 +2564,7 @@ int max9296_loadfw(struct i2c_client *client) {
   size = fw->size;
   ptr = fw->data;
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s size:%d", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            size);
@@ -2585,7 +2584,7 @@ int max9296_loadfw(struct i2c_client *client) {
 
     retval = fw_write(client, buffer, len + 2);
     if (retval < 0) {
-      if (CTS_DEBUG)
+      if (debug)
         printk(KERN_EMERG "[%s:%d][%s:%d] firmware write i2c failure", KEYWORD,
                sensor->i2c_client->adapter->nr, _FILE_, __LINE__);
       release_firmware(fw);
@@ -2617,7 +2616,7 @@ int max9296_loadfw(struct i2c_client *client) {
 
   retval = end_fw_load(client);
   if (retval < 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_EMERG "[%s:%d][%s:%d] end firmware load i2c failure", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__);
     return retval;
@@ -2632,7 +2631,7 @@ int max9296_loadfw(struct i2c_client *client) {
   // printk(KERN_NOTICE "[%s:%d][%s:%d] mipi 400M", "ISP",
   // sensor->i2c_client->adapter->nr, _FILE_, __LINE__,get_fw_name(client),
   // size);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE
            "[%s:%d][%s:%d] loaded %s firmware (%d bytes)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
@@ -2648,7 +2647,7 @@ MODULE_FIRMWARE(MAX9296_FIRMWARE);
 static void max9296_fw_work_handler(struct work_struct *work) {
   struct max9296_dev *sensor = container_of(work, struct max9296_dev, fw_work);
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
@@ -2665,7 +2664,7 @@ static int max9296_load_firmware(struct v4l2_subdev *sd) {
   char str[64] = {
       0,
   };
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
@@ -2690,14 +2689,14 @@ static int max9296_load_firmware(struct v4l2_subdev *sd) {
 static int max9296_set_mode(struct max9296_dev *sensor) {
   const struct max9296_mode_info *mode = sensor->current_mode;
   int ret = 0;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s width:%d, height:%d, enable:0x%02x",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            __FUNCTION__, mode->width, mode->height, sensor->enable);
   sensor->state.init = MAX9296_STATE_RUNNING;
 
   if (sensor->enable == 0x02) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_NOTICE "[%s:%d][%s:%d] mode change : right", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     if (mode->width == 1280 && mode->height == 720) {
@@ -2719,7 +2718,7 @@ static int max9296_set_mode(struct max9296_dev *sensor) {
 //-------------------------------------------------------------------------
 static int max9296_fw_init(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   while (1) {
@@ -2746,7 +2745,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
   int ret = 0;
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s (%d)", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            enable);
@@ -2767,7 +2766,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
       sensor->thread_fw_init =
           kthread_run(max9296_fw_init, sensor, "max9296_fw_init");
       if (IS_ERR(sensor->thread_fw_init)) {
-        if (CTS_DEBUG)
+        if (debug)
           printk(KERN_CRIT "[%s:%d][%s:%d] %s goto", KEYWORD,
                  sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
                  __FUNCTION__);
@@ -2831,7 +2830,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
   }
 
   sensor->streaming = enable;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 out:
@@ -2881,7 +2880,7 @@ static int max9296_fsync(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
   unsigned int high = 1000, low = 0;
   static unsigned int restart_cnt = 0;
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s start", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   while (1) {
@@ -2944,7 +2943,7 @@ static int max9296_fsync(void *data) {
                          "%d\n",
                          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
                          __LINE__, __FUNCTION__, sensor->fps, low, high);
-          // if(CTS_DEBUG) printk(KERN_DEBUG "[%s:%d][%s:%d] fps : %d, low : %d,
+          // if(debug) printk(KERN_DEBUG "[%s:%d][%s:%d] fps : %d, low : %d,
           // high : %d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
           // __LINE__, sensor->fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
@@ -2991,7 +2990,7 @@ static int max9296_fsync(void *data) {
                          "high : %d\n",
                          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
                          __LINE__, __FUNCTION__, fps, low, high);
-          // if(CTS_DEBUG) printk(KERN_DEBUG "[%s:%d][%s:%d] fps : %d, low : %d,
+          // if(debug) printk(KERN_DEBUG "[%s:%d][%s:%d] fps : %d, low : %d,
           // high : %d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
           // __LINE__, fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
@@ -3003,7 +3002,7 @@ static int max9296_fsync(void *data) {
       }
     }
   }
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
@@ -3015,7 +3014,7 @@ static int max9296_enable(void *data) {
 
   // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
   // __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s start", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
@@ -3121,7 +3120,9 @@ static int max9296_enable(void *data) {
       sensor->stream_on = 0;
 
       /* Override hardcoded AE/AWB init with V4L2 cached controls */
+      mutex_lock(&sensor->lock);
       max9296_apply_cached_controls(sensor);
+      mutex_unlock(&sensor->lock);
 
       usleep_range(10000, 11000);
       // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
@@ -3129,7 +3130,7 @@ static int max9296_enable(void *data) {
     } else
       usleep_range(10000, 11000);
   }
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
@@ -3139,7 +3140,7 @@ static int max9296_enable(void *data) {
 static int max9296_shared_init(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s start", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   while (1) {
@@ -3178,7 +3179,7 @@ static int max9296_shared_init(void *data) {
     } else
       break;
   }
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
@@ -3192,7 +3193,7 @@ static ssize_t sysfs_rotate_show(struct device *dev,
 
   // printk("\x1b[32m%s() %d line in %s file : \x1b[0m -- sensor rotate :
   // 0x%x\n", __FUNCTION__, __LINE__, __FILE__, sensor->rotate);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] sensor rotate : 0x%x", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, sensor->rotate);
   return sensor->rotate;
@@ -3208,7 +3209,7 @@ static ssize_t sysfs_rotate_store(struct device *dev,
 
   // printk("\x1b[32m%s() %d line in %s file : \x1b[0m -- sensor rotate :
   // 0x%x\n", __FUNCTION__, __LINE__, __FILE__, sensor->rotate);
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] sensor rotate : 0x%x", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, sensor->rotate);
 
@@ -3221,7 +3222,7 @@ static ssize_t sysfs_enable_show(struct device *dev,
   struct v4l2_subdev *sd = i2c_get_clientdata(to_i2c_client(dev));
   struct max9296_dev *sensor = to_max9296_dev(sd);
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] sensor enable : 0x%x", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, sensor->enable);
   return sensor->enable;
@@ -3235,7 +3236,7 @@ static ssize_t sysfs_enable_store(struct device *dev,
 
   sensor->enable = simple_strtoul(buf, NULL, 10);
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] sensor enable : 0x%x", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, sensor->enable);
 
@@ -3253,7 +3254,7 @@ static int max9296_probe(struct i2c_client *client) {
   };
   int ret;
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_ALERT "[%s:%d][%s:%d] max9296 version : %s",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__, SW_VERSION);
 
@@ -3297,7 +3298,7 @@ static int max9296_probe(struct i2c_client *client) {
   endpoint = fwnode_graph_get_next_endpoint(dev_fwnode(&client->dev), NULL);
   if (!endpoint) {
     // dev_err(dev, "endpoint node not found\n");
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] endpoint node not found", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
     return -EINVAL;
@@ -3307,7 +3308,7 @@ static int max9296_probe(struct i2c_client *client) {
   fwnode_handle_put(endpoint);
   if (ret) {
     // dev_err(dev, "Could not parse endpoint\n");
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] Could not parse endpoint(%d)", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__, ret);
     return ret;
@@ -3317,7 +3318,7 @@ static int max9296_probe(struct i2c_client *client) {
       sensor->ep.bus_type != V4L2_MBUS_CSI2_DPHY &&
       sensor->ep.bus_type != V4L2_MBUS_BT656) {
     // dev_err(dev, "Unsupported bus type %d\n", sensor->ep.bus_type);
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] Unsupported bus type %d", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__, sensor->ep.bus_type);
     return -EINVAL;
@@ -3326,7 +3327,7 @@ static int max9296_probe(struct i2c_client *client) {
   /* request optional power down pin */
   sensor->pwdn_gpio = devm_gpiod_get_optional(dev, "powerdown", GPIOD_OUT_HIGH);
   if (IS_ERR(sensor->pwdn_gpio)) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_ERR "[%s:%d][%s:%d] pwdn gpio error", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
     return PTR_ERR(sensor->pwdn_gpio);
@@ -3336,7 +3337,7 @@ static int max9296_probe(struct i2c_client *client) {
   sensor->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
   if (IS_ERR(sensor->reset_gpio)) {
 
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_ERR "[%s:%d][%s:%d] reset gpio error", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
     else
@@ -3345,7 +3346,7 @@ static int max9296_probe(struct i2c_client *client) {
 
   sensor->fsync_gpio = devm_gpiod_get_optional(dev, "fsync", GPIOD_OUT_LOW);
   if (IS_ERR(sensor->fsync_gpio)) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_ERR "[%s:%d][%s:%d] fsync gpio error", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
     else
@@ -3360,7 +3361,7 @@ static int max9296_probe(struct i2c_client *client) {
         of_parse_phandle(dev->of_node, "fsync-shared-handle", 0);
     if (sensor->shared.np == NULL) {
       sensor->shared.fsync = 0;
-      if (CTS_DEBUG)
+      if (debug)
         printk(KERN_ERR "[%s:%d][%s:%d] warning not found fsync shared "
                         "handle.. this device works in single mode..",
                KEYWORD, client->adapter->nr, _FILE_, __LINE__);
@@ -3368,13 +3369,13 @@ static int max9296_probe(struct i2c_client *client) {
         dev_warn(dev, "warning not found fsync shared handle.. this device "
                       "works in single mode..\n");
     } else {
-      if (CTS_DEBUG)
+      if (debug)
         printk(KERN_NOTICE "[%s:%d][%s:%d] shared Init", KEYWORD,
                client->adapter->nr, _FILE_, __LINE__);
       sensor->shared.thread_shared_init =
           kthread_run(max9296_shared_init, sensor, "max9296_shared_init");
       if (IS_ERR(sensor->shared.thread_shared_init)) {
-        if (CTS_DEBUG)
+        if (debug)
           printk(KERN_CRIT
                  "[%s:%d][%s:%d] sensor->shared.thread_shared_init error",
                  KEYWORD, client->adapter->nr, _FILE_, __LINE__);
@@ -3395,7 +3396,7 @@ static int max9296_probe(struct i2c_client *client) {
   sensor->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
   ret = media_entity_pads_init(&sensor->sd.entity, 1, &sensor->pad);
   if (ret) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] media_entity_pads_init error(%d)",
              KEYWORD, client->adapter->nr, _FILE_, __LINE__, ret);
     return ret;
@@ -3405,7 +3406,7 @@ static int max9296_probe(struct i2c_client *client) {
 
   ret = max9296_init_controls(sensor);
   if (ret) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] max9296_init_controls error(%d)",
              KEYWORD, client->adapter->nr, _FILE_, __LINE__, ret);
     goto entity_cleanup;
@@ -3468,7 +3469,7 @@ static int max9296_probe(struct i2c_client *client) {
                                     : 10000;
   sensor->ctrl_cache.pending = true; /* Mark as having cached values */
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s cache initialized: ch0(ae:%d awb:%d "
                      "gain_auto:%d gain:%d hflip:%d vflip:%d) ch1(ae:%d awb:%d "
                      "gain_auto:%d gain:%d hflip:%d vflip:%d) exp:%d",
@@ -3483,7 +3484,7 @@ static int max9296_probe(struct i2c_client *client) {
 
   ret = v4l2_async_register_subdev_sensor_common(&sensor->sd);
   if (ret) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(
           KERN_CRIT
           "[%s:%d][%s:%d] v4l2_async_register_subdev_sensor_common error(%d)",
@@ -3494,7 +3495,7 @@ static int max9296_probe(struct i2c_client *client) {
   if (sensor->fsync_gpio != NULL) {
     sensor->thread_fsync = kthread_run(max9296_fsync, sensor, "max9296_fsync");
     if (IS_ERR(sensor->thread_fsync)) {
-      if (CTS_DEBUG)
+      if (debug)
         printk(KERN_CRIT "[%s:%d][%s:%d] sensor thread fsync error", KEYWORD,
                client->adapter->nr, _FILE_, __LINE__);
       goto free_ctrls;
@@ -3505,7 +3506,7 @@ static int max9296_probe(struct i2c_client *client) {
   sensor->thread_en = kthread_run(max9296_enable, sensor, str);
   if (IS_ERR(sensor->thread_en)) {
 
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] sensor thread enable error", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
     else
@@ -3514,7 +3515,7 @@ static int max9296_probe(struct i2c_client *client) {
     goto free_ctrls;
   }
   if (device_create_file(&client->dev, &dev_attr_rotate) != 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] sysfs rotate entry failed", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
     else
@@ -3523,7 +3524,7 @@ static int max9296_probe(struct i2c_client *client) {
     goto free_ctrls;
   }
   if (device_create_file(&client->dev, &dev_attr_enable) != 0) {
-    if (CTS_DEBUG)
+    if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] sysfs enable entry failed", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
     else
@@ -3532,7 +3533,7 @@ static int max9296_probe(struct i2c_client *client) {
     goto free_ctrls;
   }
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
@@ -3549,7 +3550,7 @@ static int max9296_remove(struct i2c_client *client) {
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
 
-  if (CTS_DEBUG)
+  if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
@@ -3594,6 +3595,10 @@ static struct i2c_driver max9296_i2c_driver = {
 };
 
 module_i2c_driver(max9296_i2c_driver);
+
+static int debug = 1;
+module_param(debug, int, 0644);
+MODULE_PARM_DESC(debug, "Enable debug messages (default: 1)");
 
 MODULE_DESCRIPTION("MAX9296 MIPI Camera Subdev Driver");
 MODULE_LICENSE("GPL");
