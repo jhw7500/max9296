@@ -36,29 +36,22 @@ V4L2 컨트롤은 기본적으로 정수값으로 노출된다. 드라이버는 
   - V4L2는 s32 범위를 쓰므로 드라이버는 `0..INT_MAX` 범위를 허용한다.
 
 보드 기본값(참고: `--list-ctrls` 기준)
-- `brightness`: default=0
-- `contrast`: default=0
-- `saturation`: default=4096
-- `gain`: default=256
-- `lsc`: default=16383(0x3fff)
+- `brightness_chX`: default=0
+- `contrast_chX`: default=0
+- `saturation_chX`: default=4096
+- `gain_chX`: default=256
+- `lsc_chX`: default=16383(0x3fff)
 
 참고
-- 표준 V4L2 컨트롤(`contrast`, `saturation` 등)은 `v4l2-ctl --list-ctrls` 출력에 레지스터 주소를 직접 표시할 수 없다.
+- V4L2 컨트롤(`contrast_chX`, `saturation_chX` 등)은 `v4l2-ctl --list-ctrls` 출력에 레지스터 주소를 직접 표시할 수 없다.
 - 레지스터 주소는 아래 "컨트롤 ↔ 레지스터 매핑" 섹션을 기준으로 본다.
 
 ## 3) 컨트롤 ↔ 레지스터 매핑 (요약)
 
 드라이버 소스 기준: `projects/max9296/max9296.c`
 
-표준 컨트롤(공통/브로드캐스트)
-- `gain` -> `0x5006` (u16, ufixed8)
-- `exposure` -> `0x500c` (u32)
-- `white_balance_automatic` -> `0x5100` (auto/manual)
-- `gain_automatic` / `auto_exposure` -> `0x5002` (AE 관련)
-- `horizontal_flip` / `vertical_flip` -> `0x100c` (bit0/bit1)
-- `brightness` -> `0x7000` (u16, fixed12)
-- `contrast` -> `0x7002` (u16, fixed12)
-- `saturation` -> `0x7006` (u16, fixed12)
+공통 컨트롤
+- `ext_time` -> `0x500c` (u32, 듀얼 모드에서는 양 채널에 동일 적용)
 
 커스텀 컨트롤(채널별)
 - `/dev/v4l-subdev2`: `*_ch0`, `*_ch1`
@@ -66,19 +59,21 @@ V4L2 컨트롤은 기본적으로 정수값으로 노출된다. 드라이버는 
 
 예:
 - `gain_chX` -> `0x5006` (u16, ufixed8)
-- `exposure_auto_chX` -> `0x5002` (0=auto, 1=manual)
+- `ext_time_chX` -> `0x500c` (u32)
+- `ae_on_chX` -> `0x5002` (1=auto, 0=manual)
 - `auto_white_balance_chX` -> `0x5100` (0/1)
-- `auto_gain_chX` -> `0x5002` (0/1)
-- `horizontal_flip_chX` / `vertical_flip_chX` -> `0x100c`
-
-커스텀(공통)
-- `lsc` -> `0x54a0` (u16, fixed12)
+- `auto_gain_chX` -> `0x5002` (0/1, 현재 드라이버는 AE 모드에서 암묵 처리)
+- `hflip_chX` / `vflip_chX` -> `0x100c`
+- `brightness_chX` -> `0x7000` (u16, fixed12)
+- `contrast_chX` -> `0x7002` (u16, fixed12)
+- `saturation_chX` -> `0x7006` (u16, fixed12)
+- `lsc_chX` -> `0x54a0` (u16, fixed12)
 
 ## 4) v4l2-ctl 기본 사용
 
 ### 4.0 현재값 스냅샷/원복(권장)
 
-테스트/튜닝 중에는 flip, gain, exposure 같은 값이 누적되어 “현재 상태가 기본값이 아닌 상태”가 되기 쉽다.
+테스트/튜닝 중에는 flip, gain_chX, ext_time(_chX) 같은 값이 누적되어 “현재 상태가 기본값이 아닌 상태”가 되기 쉽다.
 아래처럼 스냅샷을 떠두면 언제든 원복할 수 있다.
 
 1) 스냅샷 저장
@@ -91,26 +86,24 @@ v4l2-ctl -d /dev/v4l-subdev3 --list-ctrls --list-ctrls-menus > /tmp/subdev3.ctrl
 2) “기본값으로 원복” 예시(필요한 항목만)
 
 ```bash
-# 공통(표준) 기본값
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=brightness=0,contrast=0,saturation=4096,gain=256
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=horizontal_flip=0,vertical_flip=0
-
 # 채널별(커스텀) 기본값
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=brightness_ch0=0,brightness_ch1=0,contrast_ch0=0,contrast_ch1=0,saturation_ch0=4096,saturation_ch1=4096
 sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=gain_ch0=256,gain_ch1=256
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=horizontal_flip_ch0=0,horizontal_flip_ch1=0,vertical_flip_ch0=0,vertical_flip_ch1=0
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=hflip_ch0=0,hflip_ch1=0,vflip_ch0=0,vflip_ch1=0
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=lsc_ch0=16383,lsc_ch1=16383
 
+sudo v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=brightness_ch2=0,brightness_ch3=0,contrast_ch2=0,contrast_ch3=0,saturation_ch2=4096,saturation_ch3=4096
 sudo v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=gain_ch2=256,gain_ch3=256
-sudo v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=horizontal_flip_ch2=0,horizontal_flip_ch3=0,vertical_flip_ch2=0,vertical_flip_ch3=0
+sudo v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=hflip_ch2=0,hflip_ch3=0,vflip_ch2=0,vflip_ch3=0
+sudo v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=lsc_ch2=16383,lsc_ch3=16383
 
-# LSC(공통)
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=lsc=16383
 ```
 
 3) 원복 후 확인
 
 ```bash
-v4l2-ctl -d /dev/v4l-subdev2 --get-ctrl=brightness,contrast,saturation,gain,horizontal_flip,vertical_flip
-v4l2-ctl -d /dev/v4l-subdev3 --get-ctrl=brightness,contrast,saturation,gain,horizontal_flip,vertical_flip
+v4l2-ctl -d /dev/v4l-subdev2 --get-ctrl=ext_time,gain_ch0,gain_ch1,brightness_ch0,brightness_ch1,contrast_ch0,contrast_ch1,saturation_ch0,saturation_ch1,hflip_ch0,hflip_ch1,vflip_ch0,vflip_ch1,lsc_ch0,lsc_ch1
+v4l2-ctl -d /dev/v4l-subdev3 --get-ctrl=ext_time,gain_ch2,gain_ch3,brightness_ch2,brightness_ch3,contrast_ch2,contrast_ch3,saturation_ch2,saturation_ch3,hflip_ch2,hflip_ch3,vflip_ch2,vflip_ch3,lsc_ch2,lsc_ch3
 ```
 
 ### 4.1 컨트롤 목록 확인
@@ -128,45 +121,36 @@ v4l2-ctl -d /dev/v4l-subdev3 --list-ctrls --list-ctrls-menus > /tmp/subdev3.ctrl
 ```
 
 확인 포인트(문서/스크립트 작성 시 기준)
-- `gain`, `exposure`, `brightness`, `contrast`, `saturation`, `lsc`의 `min/max/default` 값
+- `gain_chX`, `ext_time`, `brightness_chX`, `contrast_chX`, `saturation_chX`, `lsc_chX`의 `min/max/default` 값
 - 커스텀 채널 컨트롤이 실제로 보이는지
   - subdev2: `*_ch0`, `*_ch1`
   - subdev3: `*_ch2`, `*_ch3`
-- `auto_exposure` 메뉴 값(0/1의 의미)
+- `ae_on_chX` 값(1/0의 의미)
 
 예시(참고용)
 ```text
 User Controls
 
-                       exposure 0x00980911 (int)    : min=0 max=65535 step=1 default=0 value=20000
-                           gain 0x00980913 (int)    : min=0 max=1023 step=1 default=0 value=0
-              exposure_auto_ch0 0x00981900 (int)    : min=0 max=1 step=1 default=0 value=0
-                       gain_ch0 0x00981906 (int)    : min=0 max=1023 step=1 default=0 value=256
+ext_time (int) : min=0 max=... step=1 default=10000 value=20000
+ae_on_ch0 (bool) : default=1 value=1
+gain_ch0 (int) : min=0 max=... step=1 default=256 value=256
 
-Camera Controls
-
-                  auto_exposure 0x009a0901 (menu)   : min=0 max=1 default=0 value=0
-                                0: Auto Mode
-                                1: Manual Mode
 ```
 
-### 4.2 공통(표준) 컨트롤 설정 예시
+### 4.2 공통(커스텀) 컨트롤 설정 예시
 
 ```bash
-# gain: 2.0x (512 in ufixed8)
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=gain=512
-
-# exposure: 예) 20000
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=exposure=20000
+# ext_time: 예) 20000
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=ext_time=20000
 
 # fixed12: contrast/saturation 1.0 (4096)
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=contrast=4096,saturation=4096
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=contrast_ch0=4096,contrast_ch1=4096,saturation_ch0=4096,saturation_ch1=4096
 
-# brightness: 0 기준(드라이버/펌웨어 정의에 따라 mid-point가 다를 수 있으니 list-ctrls의 default를 참고)
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=brightness=0
+# brightness: default/mid-point는 list-ctrls에서 default 값을 확인 권장
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=brightness_ch0=0,brightness_ch1=0
 
 # LSC: 1.0 근처(예: 0x3fff)
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=lsc=16383
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=lsc_ch0=16383,lsc_ch1=16383
 ```
 
 ### 4.3 채널별(커스텀) 설정 예시
@@ -174,11 +158,11 @@ sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=lsc=16383
 ```bash
 # /dev/v4l-subdev2 = ch0/ch1
 sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=gain_ch0=256,gain_ch1=512
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=horizontal_flip_ch0=1,horizontal_flip_ch1=0
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=hflip_ch0=1,hflip_ch1=0
 
 # /dev/v4l-subdev3 = ch2/ch3
 sudo v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=gain_ch2=256,gain_ch3=512
-sudo v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=vertical_flip_ch2=0,vertical_flip_ch3=1
+sudo v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=vflip_ch2=0,vflip_ch3=1
 ```
 
 ### 4.4 Auto/Manual 권장 순서
@@ -186,17 +170,14 @@ sudo v4l2-ctl -d /dev/v4l-subdev3 --set-ctrl=vertical_flip_ch2=0,vertical_flip_c
 Auto가 켜져 있으면 manual 값이 즉시 덮어써질 수 있다. 실사용 권장 순서:
 
 ```bash
-# AE를 manual로(장치에 따라 auto_exposure 메뉴가 다를 수 있으니 list-ctrls-menus 확인)
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=auto_exposure=1
+# AE를 manual로 (ch0/ch1)
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=ae_on_ch0=0,ae_on_ch1=0
 
-# gain auto off
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=gain_automatic=0
-
-# 이후 exposure/gain 값을 설정
-sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=exposure=20000,gain=512
+# 이후 채널별 ext_time/gain 값을 설정(예: ch0)
+sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=ae_on_ch0=0,ext_time_ch0=20000,gain_ch0=512
 ```
 
-채널별로 AE on/off를 하고 싶으면 `exposure_auto_chX` / `auto_gain_chX`를 사용한다.
+채널별로 AE on/off를 하고 싶으면 `ae_on_chX` / `auto_gain_chX`를 사용한다.
 
 ## 5) 운영 절차(서비스/스크립트와 함께 안전하게 쓰기)
 
