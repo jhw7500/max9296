@@ -1166,8 +1166,9 @@ static int max9296_write_per_channel(struct max9296_dev *sensor,
   if (dual) {
     ret = maxim_ops_i2c_write(sensor, AP1302_CH0_I2C_ADDR, reg, val, reg_byte,
                               val_byte, 0);
-    ret |= maxim_ops_i2c_write(sensor, AP1302_CH1_I2C_ADDR, reg, val, reg_byte,
-                               val_byte, 0);
+    if (!ret)
+      ret = maxim_ops_i2c_write(sensor, AP1302_CH1_I2C_ADDR, reg, val, reg_byte,
+                                val_byte, 0);
   } else {
     ret = maxim_ops_i2c_write(sensor, AP1302_I2C_ADDR, reg, val, reg_byte,
                               val_byte, 0);
@@ -1395,11 +1396,13 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
   u16 ae_val, awb_val, rot;
   u32 exp_seed;
   u16 gain_seed;
-  int ret = 0;
+  int ret, err = 0;
 
   /* STEP 1: Initialize AE to manual mode first */
-  ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL,
-                             AP1302_AE_CTRL_MANUAL, 2, 2, 0);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL,
+                            AP1302_AE_CTRL_MANUAL, 2, 2, 0);
+  if (ret)
+    err = ret;
   msleep(100);
 
   /*
@@ -1410,47 +1413,64 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
       ch_ctrl->exposure
           ? ch_ctrl->exposure
           : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure : 10000);
-  ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_EXP_TIME, exp_seed, 2,
-                             4, 0);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_EXP_TIME, exp_seed, 2,
+                            4, 0);
+  if (ret)
+    err = ret;
   msleep(100);
 
   /* STEP 2: Apply configured AE mode (auto/manual) */
   ae_val = ch_ctrl->ae_on ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
-  ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2,
-                             0);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2,
+                            0);
+  if (ret)
+    err = ret;
   if (ch_ctrl->ae_on)
     msleep(100);
 
   /* AWB (auto/manual) */
   awb_val = ch_ctrl->awb ? AP1302_AWB_CTRL_AUTO : 0x0000;
-  ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2,
-                             2, 0);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2,
+                            2, 0);
+  if (ret)
+    err = ret;
 
   /* Gain value (always set, used when switching to manual) */
   gain_seed = ch_ctrl->gain ? ch_ctrl->gain : 256;
-  ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_GAIN, gain_seed, 2,
-                             2, 0);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_GAIN, gain_seed, 2,
+                            2, 0);
+  if (ret)
+    err = ret;
 
   /* Rotation (hflip + vflip combined) */
   rot = (ch_ctrl->hflip ? 0x01 : 0x00) | (ch_ctrl->vflip ? 0x02 : 0x00);
-  ret |=
-      maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_ROTATION, rot, 2, 2, 0);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_ROTATION, rot, 2, 2, 0);
+  if (ret)
+    err = ret;
 
   /* Per-channel tuning values */
-  ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_LSC_CTRL,
-                             ch_ctrl->lsc, 2, 2, 0);
-  ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_BRIGHTNESS,
-                             ch_ctrl->brightness, 2, 2, 0);
-  ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_CONTRAST,
-                             ch_ctrl->contrast, 2, 2, 0);
-  ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_SATURATION,
-                             ch_ctrl->saturation, 2, 2, 0);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_LSC_CTRL,
+                            ch_ctrl->lsc, 2, 2, 0);
+  if (ret)
+    err = ret;
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_BRIGHTNESS,
+                            ch_ctrl->brightness, 2, 2, 0);
+  if (ret)
+    err = ret;
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_CONTRAST,
+                            ch_ctrl->contrast, 2, 2, 0);
+  if (ret)
+    err = ret;
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_SATURATION,
+                            ch_ctrl->saturation, 2, 2, 0);
+  if (ret)
+    err = ret;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied (i2c:0x%02x ae:%s awb:%d "
                      "gain:%d exp_seed:%u rot:0x%02x) ret:%d\n",
          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
          __FUNCTION__, ch_name, i2c_addr, ch_ctrl->ae_on ? "auto" : "manual",
-         ch_ctrl->awb, gain_seed, exp_seed, rot, ret);
+         ch_ctrl->awb, gain_seed, exp_seed, rot, err);
 }
 
 static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
@@ -2614,7 +2634,7 @@ int max9296_loadfw(struct i2c_client *client) {
   // size);
   if (CTS_DEBUG)
     printk(KERN_NOTICE
-           "\x1b[32m[%s:%d][%s:%d] loaded %s firmware (%d bytes)\x1b[0m",
+           "[%s:%d][%s:%d] loaded %s firmware (%d bytes)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            get_fw_name(client), size);
   sensor->state.firmware = MAX9296_STATE_DONE;
@@ -2920,8 +2940,8 @@ static int max9296_fsync(void *data) {
             low -= high;
           }
 
-          pr_notice_once("\x1b[32m[%s:%d][%s:%d] %s fps : %d, low : %d, high : "
-                         "%d \x1b[0m\n",
+          pr_notice_once("[%s:%d][%s:%d] %s fps : %d, low : %d, high : "
+                         "%d\n",
                          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
                          __LINE__, __FUNCTION__, sensor->fps, low, high);
           // if(CTS_DEBUG) printk(KERN_DEBUG "[%s:%d][%s:%d] fps : %d, low : %d,
@@ -2967,8 +2987,8 @@ static int max9296_fsync(void *data) {
             low -= high;
           }
 
-          pr_notice_once("\x1b[32m[%s:%d][%s:%d]\x1b[0m %s fps : %d, low : %d, "
-                         "high : %d \n",
+          pr_notice_once("[%s:%d][%s:%d] %s fps : %d, low : %d, "
+                         "high : %d\n",
                          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
                          __LINE__, __FUNCTION__, fps, low, high);
           // if(CTS_DEBUG) printk(KERN_DEBUG "[%s:%d][%s:%d] fps : %d, low : %d,
@@ -3234,7 +3254,7 @@ static int max9296_probe(struct i2c_client *client) {
   int ret;
 
   if (CTS_DEBUG)
-    printk(KERN_ALERT "\033[0;34m[%s:%d][%s:%d]\033[0m max9296 version : %s",
+    printk(KERN_ALERT "[%s:%d][%s:%d] max9296 version : %s",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__, SW_VERSION);
 
   sensor = devm_kzalloc(dev, sizeof(*sensor), GFP_KERNEL);
@@ -3251,38 +3271,7 @@ static int max9296_probe(struct i2c_client *client) {
   sensor->stream_on = 0;
   sensor->ctrl_cache.firmware_ready = false;
   sensor->ctrl_cache.pending = false;
-
-  /* Initialize per-channel cache with default values */
-  sensor->ctrl_cache.ch0.ae_on = 1;
-  sensor->ctrl_cache.ch0.awb = 1;       /* auto */
-  sensor->ctrl_cache.ch0.gain_auto = 1; /* auto */
-  sensor->ctrl_cache.ch0.gain = 256;
-  sensor->ctrl_cache.ch0.exposure = 10000;
-  sensor->ctrl_cache.ch0.hflip = 0;
-  sensor->ctrl_cache.ch0.vflip = 0;
-  sensor->ctrl_cache.ch0.lsc = 0x3fff;
-  sensor->ctrl_cache.ch0.brightness = 0;
-  sensor->ctrl_cache.ch0.contrast = 0;
-  sensor->ctrl_cache.ch0.saturation = 4096;
-
-  sensor->ctrl_cache.ch1.ae_on = 1;
-  sensor->ctrl_cache.ch1.awb = 1;       /* auto */
-  sensor->ctrl_cache.ch1.gain_auto = 1; /* auto */
-  sensor->ctrl_cache.ch1.gain = 256;
-  sensor->ctrl_cache.ch1.exposure = 10000;
-  sensor->ctrl_cache.ch1.hflip = 0;
-  sensor->ctrl_cache.ch1.vflip = 0;
-  sensor->ctrl_cache.ch1.lsc = 0x3fff;
-  sensor->ctrl_cache.ch1.brightness = 0;
-  sensor->ctrl_cache.ch1.contrast = 0;
-  sensor->ctrl_cache.ch1.saturation = 4096;
-
-  /*
-   * Align default exposure to legacy app config (exp_time=10000).
-   * This is used as a manual exposure value and also as an initial seed
-   * during the manual->auto AE transition on stream start.
-   */
-  sensor->ctrl_cache.exposure = 10000; /* shared exp_time */
+  /* Per-channel cache defaults are set after max9296_init_controls() below */
 
   sensor->fps = DEFAULT_FRAMRATE_FPS;
 
@@ -3297,7 +3286,6 @@ static int max9296_probe(struct i2c_client *client) {
   fmt->quantization = V4L2_QUANTIZATION_FULL_RANGE;
   fmt->xfer_func = V4L2_MAP_XFER_FUNC_DEFAULT(fmt->colorspace);
   fmt->width = DEFAULT_RESOLUTION_WIDTH;
-  ;
   fmt->height = DEFAULT_RESOLUTION_HEIGHT;
   fmt->field = V4L2_FIELD_NONE;
 
@@ -3436,7 +3424,7 @@ static int max9296_probe(struct i2c_client *client) {
       sensor->ctrls.gain_ch0 ? sensor->ctrls.gain_ch0->val : 256;
   sensor->ctrl_cache.ch0.exposure = sensor->ctrls.exposure_ch0
                                         ? sensor->ctrls.exposure_ch0->val
-                                        : sensor->ctrl_cache.exposure;
+                                        : 10000;
   sensor->ctrl_cache.ch0.hflip =
       sensor->ctrls.hflip_ch0 ? sensor->ctrls.hflip_ch0->val : 0;
   sensor->ctrl_cache.ch0.vflip =
@@ -3461,7 +3449,7 @@ static int max9296_probe(struct i2c_client *client) {
       sensor->ctrls.gain_ch1 ? sensor->ctrls.gain_ch1->val : 256;
   sensor->ctrl_cache.ch1.exposure = sensor->ctrls.exposure_ch1
                                         ? sensor->ctrls.exposure_ch1->val
-                                        : sensor->ctrl_cache.exposure;
+                                        : 10000;
   sensor->ctrl_cache.ch1.hflip =
       sensor->ctrls.hflip_ch1 ? sensor->ctrls.hflip_ch1->val : 0;
   sensor->ctrl_cache.ch1.vflip =
@@ -3477,7 +3465,7 @@ static int max9296_probe(struct i2c_client *client) {
 
   sensor->ctrl_cache.exposure = sensor->ctrls.exp_time
                                     ? sensor->ctrls.exp_time->val
-                                    : sensor->ctrl_cache.exposure;
+                                    : 10000;
   sensor->ctrl_cache.pending = true; /* Mark as having cached values */
 
   if (CTS_DEBUG)
@@ -3521,7 +3509,7 @@ static int max9296_probe(struct i2c_client *client) {
       printk(KERN_CRIT "[%s:%d][%s:%d] sensor thread enable error", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
     else
-      printk("\x1b[41m%s() %d line in %s file : \x1b[0m\n", __FUNCTION__,
+      printk(KERN_CRIT "%s() %d line in %s file\n", __FUNCTION__,
              __LINE__, __FILE__);
     goto free_ctrls;
   }
