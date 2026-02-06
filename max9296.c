@@ -43,7 +43,7 @@
 #define CTS_DEBUG 1
 #define SERDES_3GBPS
 #define SERDES_STPx
-#define _FILE_ strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__
+#define _FILE_ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define KEYWORD "I2C"
 
 #define DEFAULT_FRAMRATE_FPS (30)
@@ -521,23 +521,6 @@ static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
         MAX9296_30_FPS,
     },
 };
-#if 0
-static const struct max9296_mode_info
-max9296_mode_data_R[2] = {
-	{
-		MAX9296_MODE_1280x720, 1280, 720,
-		max9296_init_setting_720p_30fps_L,
-		ARRAY_SIZE(max9296_init_setting_720p_30fps_L),
-		MAX9296_30_FPS,
-	},
-	{
-		MAX9296_MODE_1920x1080, 1920, 1080
-		max9296_init_setting_720p_30fps_L,
-		ARRAY_SIZE(max9296_init_setting_720p_30fps_L),
-		MAX9296_30_FPS,
-	},
-};
-#endif
 static const struct max9296_mode_info max9296_mode_data_HD_R = {
     MAX9296_MODE_1280x720,
     1280,
@@ -862,7 +845,7 @@ static void max9296_power(struct max9296_dev *sensor, bool enable) {
              enable ? "high" : "low");
     gpiod_set_value_cansleep(sensor->shared.sensor->pwdn_gpio, enable ? 0 : 1);
   }
-  usleep_range(10000, 10000);
+  usleep_range(10000, 11000);
 }
 
 static void max9296_reset(struct max9296_dev *sensor) {
@@ -875,14 +858,14 @@ static void max9296_reset(struct max9296_dev *sensor) {
     reset_gpio = sensor->reset_gpio;
 
   max9296_power(sensor, false);
-  usleep_range(1000000, 1000000);
+  ssleep(1);
 
   if (reset_gpio) {
     if (CTS_DEBUG)
       printk(KERN_NOTICE "[%s:%d][%s:%d] %s (reset low)", "RST",
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     gpiod_set_value_cansleep(reset_gpio, 1);
-    usleep_range(2000000, 2000000);
+    ssleep(2);
   }
 
   if (reset_gpio) {
@@ -890,14 +873,14 @@ static void max9296_reset(struct max9296_dev *sensor) {
       printk(KERN_NOTICE "[%s:%d][%s:%d] %s (reset high)", "RST",
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     gpiod_set_value_cansleep(reset_gpio, 0);
-    usleep_range(1000000, 1000000);
+    ssleep(1);
   }
 
   /* camera power cycle */
   max9296_power(sensor, true);
-  usleep_range(1000000, 1000000);
+  ssleep(1);
 
-  // usleep_range(2000000, 2000000);
+  // ssleep(2);
   if (CTS_DEBUG)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
@@ -907,9 +890,9 @@ static int max9296_set_power_on(struct max9296_dev *sensor) {
   if (CTS_DEBUG)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s start", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  usleep_range(10000, 10000);
+  usleep_range(10000, 11000);
   max9296_reset(sensor);
-  usleep_range(10000, 10000);
+  usleep_range(10000, 11000);
   if (CTS_DEBUG)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
@@ -950,7 +933,7 @@ static int max9296_set_power(struct max9296_dev *sensor, bool on) {
   if (sensor->shared.sensor != NULL) {
     while (sensor->shared.sensor->state.power == MAX9296_STATE_RUNNING) {
       shared_power_ctl = 1;
-      usleep_range(100000, 100000);
+      msleep(100);
     }
 
     if ((sensor->shared.sensor->state.power != MAX9296_STATE_DONE) &&
@@ -1018,7 +1001,7 @@ static int max9296_s_power(struct v4l2_subdev *sd, int on) {
     sensor->state.power = MAX9296_STATE_IDLE;
     if (sensor->shared.sensor != NULL)
       sensor->shared.sensor->state.power = MAX9296_STATE_IDLE;
-    usleep_range(5000000, 5000000);
+    ssleep(5);
   }
   if (CTS_DEBUG)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end(%d)", "RST",
@@ -1290,41 +1273,11 @@ static int max9296_set_ctrl_light_freq(struct max9296_dev *sensor, int value) {
   return 0;
 }
 
-static int max9286_set_ctrl_pixelrate(struct max9296_dev *sensor, int value) {
+static int max9296_set_ctrl_pixelrate(struct max9296_dev *sensor, int value) {
   if (CTS_DEBUG)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s value:%d", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            value);
-#if 0
-	if( (sensor->current_mode->id != MAX9296_MODE_3840x1080) &&
-			(sensor->current_mode->id != MAX9296_MODE_1920x1080) )
-	{
-		maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0001, 2, 2, 100); 
-		usleep_range(10000, 10000);
-		maxim_ops_i2c_write(sensor, 0x3c, 0x2000, 0x0500, 2, 2, 100); 
-		usleep_range(10000, 10000);
-		maxim_ops_i2c_write(sensor, 0x3c, 0x2002, 0x02d0, 2, 2, 100); 
-		usleep_range(10000, 10000);
-		maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0013, 2, 2, 100); 
-		usleep_range(10000, 10000);
-		maxim_ops_i2c_write(sensor, 0x3c, 0x1010, 0x0140, 2, 2, 100); 
-		usleep_range(10000, 10000);
-		if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s resolution:HD", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-	}
-	else
-	{
-		maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0001, 2, 2, 100); 
-		usleep_range(10000, 10000);
-		maxim_ops_i2c_write(sensor, 0x3c, 0x2000, 0x0780, 2, 2, 100); 
-		usleep_range(10000, 10000);
-		maxim_ops_i2c_write(sensor, 0x3c, 0x2002, 0x0438, 2, 2, 100); 
-		usleep_range(10000, 10000);
-		maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0013, 2, 2, 100); 
-		usleep_range(10000, 10000);
-		maxim_ops_i2c_write(sensor, 0x3c, 0x1010, 0x0100, 2, 2, 100); 
-		if(CTS_DEBUG) printk(KERN_NOTICE "[%s:%d][%s:%d] %s resolution:FHD", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-	}
-#endif
   return 0;
 }
 
@@ -1447,7 +1400,7 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
   /* STEP 1: Initialize AE to manual mode first */
   ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL,
                              AP1302_AE_CTRL_MANUAL, 2, 2, 0);
-  usleep_range(100000, 100000);
+  msleep(100);
 
   /*
    * Seed exposure time while in manual mode.
@@ -1459,14 +1412,14 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
           : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure : 10000);
   ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_EXP_TIME, exp_seed, 2,
                              4, 0);
-  usleep_range(100000, 100000);
+  msleep(100);
 
   /* STEP 2: Apply configured AE mode (auto/manual) */
   ae_val = ch_ctrl->ae_on ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
   ret |= maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2,
                              0);
   if (ch_ctrl->ae_on)
-    usleep_range(100000, 100000);
+    msleep(100);
 
   /* AWB (auto/manual) */
   awb_val = ch_ctrl->awb ? AP1302_AWB_CTRL_AUTO : 0x0000;
@@ -1598,7 +1551,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     ret = max9296_set_ctrl_light_freq(sensor, ctrl->val);
     break;
   case V4L2_CID_PIXEL_RATE:
-    ret = max9286_set_ctrl_pixelrate(sensor, ctrl->val);
+    ret = max9296_set_ctrl_pixelrate(sensor, ctrl->val);
     break;
 
   /* Per-channel controls - Channel 0 */
@@ -2511,7 +2464,7 @@ static int start_fw_load(struct i2c_client *client) {
 
   // maxim_ops_i2c_write(sensor, 0x3c, 0xf052, 0xffff, 2, 2, 0);
 
-  usleep_range(300000, 300000);
+  msleep(300);
   if (CTS_DEBUG)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
@@ -2528,7 +2481,7 @@ static int end_fw_load(struct i2c_client *client) {
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   ret = maxim_ops_i2c_write(sensor, 0x3c, 0x6002, 0xffff, 2, 2, 0);
 
-  usleep_range(300000, 300000);
+  msleep(300);
   if (CTS_DEBUG)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
@@ -2547,7 +2500,7 @@ static int fw_write(struct i2c_client *client, const u8 *data, int size) {
     return -ENOSYS;
   }
 
-  // usleep_range(10000, 10000);
+  // usleep_range(10000, 11000);
 
   client->addr = addr;
 
@@ -2560,38 +2513,6 @@ static const char *get_fw_name(struct i2c_client *client) {
   else
     return MAX9296_FIRMWARE;
 }
-#if 0
-#include <linux/regmap.h>
-#define AP1302_FW_WINDOW_OFFSET 0x8000
-#define AP1302_FW_WINDOW_SIZE 0x2000
-
-static int ap1302_write_fw_window(struct v4l2_subdev *sd,
-				  u16 *win_pos, const u8 *buf, u32 len)
-{
-	struct max9296_dev *dev = to_max9296_dev(sd);
-	int ret;
-	u32 pos;
-	u32 sub_len;
-
-	for (pos = 0; pos < len; pos += sub_len) {
-		if (len - pos < AP1302_FW_WINDOW_SIZE - *win_pos)
-			sub_len = len - pos; 
-		else
-			sub_len = AP1302_FW_WINDOW_SIZE - *win_pos;
-
-		ret = regmap_raw_write(dev->regmap16,
-					*win_pos + AP1302_FW_WINDOW_OFFSET,
-					buf + pos, sub_len);
-
-		if (ret)
-			return ret;
-		*win_pos += sub_len;
-		if (*win_pos >= AP1302_FW_WINDOW_SIZE)
-			*win_pos = 0;
-	}
-	return 0;
-}
-#endif
 int max9296_loadfw(struct i2c_client *client) {
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
@@ -2657,7 +2578,7 @@ int max9296_loadfw(struct i2c_client *client) {
 
     if (burst_size == 0) {
       burst_size = BURST_SIZE;
-      usleep_range(5000, 5000);
+      usleep_range(5000, 5500);
     }
 
     if (0) {
@@ -2728,41 +2649,6 @@ static int max9296_load_firmware(struct v4l2_subdev *sd) {
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
-#if 0
-	unsigned int val;
-	maxim_ops_i2c_read(sensor, 0x11, 0xfffe, 2, 2, &val);
-	//maxim_ops_i2c_write(sensor, 0x11, 0xfffe, val|0x02, 2, 2, 100);
-	//maxim_ops_i2c_read(sensor, 0x11, 0xfffe, 2, 2, &val);
-
-	//maxim_ops_i2c_read(sensor, 0x11, 0x1186, 2, 2, &val);
-	//maxim_ops_i2c_write(sensor, 0x11, 0x1186, val&0xfd, 2, 2, 100);
-	//maxim_ops_i2c_read(sensor, 0x11, 0x1186, 2, 2, &val);
-
-	maxim_ops_i2c_read(sensor, 0x11, 0x002a0004, 4, 4, &val);
-	//maxim_ops_i2c_write(sensor, 0x11, 0x002a0004, val|0x02, 4, 4, 100);
-	maxim_ops_i2c_read(sensor, 0x11, 0x002a0004, 4, 4, &val);
-
-	maxim_ops_i2c_read(sensor, 0x11, 0x002a0000, 4, 4, &val);
-	//maxim_ops_i2c_write(sensor, 0x11, 0x002a0000, val|0x02, 4, 4, 100);
-	maxim_ops_i2c_read(sensor, 0x11, 0x002a0000, 4, 4, &val);
-
-	maxim_ops_i2c_read(sensor, 0x12, 0xfffe, 2, 2, &val);
-	//maxim_ops_i2c_write(sensor, 0x12, 0xfffe, val|0x02, 2, 2, 100);
-	//maxim_ops_i2c_read(sensor, 0x12, 0xfffe, 2, 2, &val);
-
-	//maxim_ops_i2c_read(sensor, 0x12, 0x1186, 2, 2, &val);
-	//maxim_ops_i2c_write(sensor, 0x12, 0x1186, val&0xfd, 2, 2, 100);
-	//maxim_ops_i2c_read(sensor, 0x12, 0x1186, 2, 2, &val);
-
-	maxim_ops_i2c_read(sensor, 0x12, 0x002a0004, 4, 4, &val);
-	//maxim_ops_i2c_write(sensor, 0x12, 0x002a0004, val|0x02, 4, 4, 100);
-	maxim_ops_i2c_read(sensor, 0x12, 0x002a0004, 4, 4, &val);
-
-	maxim_ops_i2c_read(sensor, 0x12, 0x002a0000, 4, 4, &val);
-	//maxim_ops_i2c_write(sensor, 0x12, 0x002a0000, val|0x02, 4, 4, 100);
-	maxim_ops_i2c_read(sensor, 0x12, 0x002a0000, 4, 4, &val);
-#endif
-
   DEFINE_WAIT(wait);
 
   INIT_WORK(&sensor->fw_work, max9296_fw_work_handler);
@@ -2790,20 +2676,16 @@ static int max9296_set_mode(struct max9296_dev *sensor) {
            __FUNCTION__, mode->width, mode->height, sensor->enable);
   sensor->state.init = MAX9296_STATE_RUNNING;
 
-#if 1
   if (sensor->enable == 0x02) {
     if (CTS_DEBUG)
       printk(KERN_NOTICE "[%s:%d][%s:%d] mode change : right", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-    // mode->reg_data = max9296_init_setting_720p_30fps_R;
-    // mode->reg_data_size = ARRAY_SIZE(max9296_init_setting_720p_30fps_R);
     if (mode->width == 1280 && mode->height == 720) {
       sensor->current_mode = &max9296_mode_data_HD_R;
     } else if (mode->width == 1920 && mode->height == 1080) {
       sensor->current_mode = &max9296_mode_data_FHD_R;
     }
   }
-#endif
   mode = sensor->current_mode;
   sensor->last_mode = mode;
 
@@ -2834,7 +2716,7 @@ static int max9296_fw_init(void *data) {
     if (sensor->state.firmware == MAX9296_STATE_DONE)
       break;
     else
-      usleep_range(300000, 300000);
+      msleep(300);
   }
 
   return 0;
@@ -2873,101 +2755,23 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
       }
 
       while (sensor->state.firmware != MAX9296_STATE_DONE)
-        usleep_range(100000, 100000);
+        msleep(100);
 
       sensor->state.enable = MAX9296_STATE_RUNNING;
 
       if ((sensor->current_mode->id != MAX9296_MODE_3840x1080) &&
           (sensor->current_mode->id != MAX9296_MODE_1920x1080)) {
         maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0001, 2, 2, 100);
-        usleep_range(10000, 10000);
+        usleep_range(10000, 11000);
         maxim_ops_i2c_write(sensor, 0x3c, 0x2000, 0x0500, 2, 2, 100);
-        usleep_range(10000, 10000);
+        usleep_range(10000, 11000);
         maxim_ops_i2c_write(sensor, 0x3c, 0x2002, 0x02d0, 2, 2, 100);
-        usleep_range(10000, 10000);
+        usleep_range(10000, 11000);
         maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0013, 2, 2, 100);
-        usleep_range(10000, 10000);
+        usleep_range(10000, 11000);
         maxim_ops_i2c_write(sensor, 0x3c, 0x1010, 0x0140, 2, 2, 100);
-        usleep_range(10000, 10000);
+        usleep_range(10000, 11000);
       }
-#if 0
-			if( (sensor->current_mode->id == MAX9296_MODE_2560x720) ||
-					(sensor->current_mode->id == MAX9296_MODE_3840x1080) )
-			{
-				switch((sensor->rotate)&0x03)
-				{
-					case 1: /* ch 0 */
-						maxim_ops_i2c_write(sensor, 0x11, 0x100c, 0x0001, 2, 2, 100); 
-						break;
-					case 2: /* ch 1 */
-						maxim_ops_i2c_write(sensor, 0x11, 0x100c, 0x0002, 2, 2, 100); 
-						break;
-					case 3: /* ch 0/1 */
-						maxim_ops_i2c_write(sensor, 0x11, 0x100c, 0x0003, 2, 2, 100); 
-						break;
-					default:
-						maxim_ops_i2c_write(sensor, 0x11, 0x100c, 0x0000, 2, 2, 100); 
-						break;
-				}
-				switch(((sensor->rotate)>>2)&0x03)
-				{
-					case 1: /* ch 0 */
-						maxim_ops_i2c_write(sensor, 0x12, 0x100c, 0x0001, 2, 2, 100); 
-						break;
-					case 2: /* ch 1 */
-						maxim_ops_i2c_write(sensor, 0x12, 0x100c, 0x0002, 2, 2, 100); 
-						break;
-					case 3: /* ch 0/1 */
-						maxim_ops_i2c_write(sensor, 0x12, 0x100c, 0x0003, 2, 2, 100); 
-						break;
-					default:
-						maxim_ops_i2c_write(sensor, 0x12, 0x100c, 0x0000, 2, 2, 100); 
-						break;
-				}
-#if 0
-				switch(sensor->rotate)
-				{
-					case 1: /* ch 0 */
-						maxim_ops_i2c_write(sensor, 0x11, 0x100c, 0x0003, 2, 2, 100); 
-						break;
-					case 2: /* ch 1 */
-						maxim_ops_i2c_write(sensor, 0x12, 0x100c, 0x0003, 2, 2, 100); 
-						break;
-					case 3: /* ch 0/1 */
-						maxim_ops_i2c_write(sensor, 0x3c, 0x100c, 0x0003, 2, 2, 100); 
-						break;
-					default:
-						maxim_ops_i2c_write(sensor, 0x3c, 0x100c, 0x0000, 2, 2, 100); 
-						break;
-				}
-#endif
-			}
-			else
-			{
-				switch(sensor->rotate)
-				{
-					case 1: /* ch 0 */
-						maxim_ops_i2c_write(sensor, 0x3c, 0x100c, 0x0001, 2, 2, 100); 
-						break;
-					case 2: /* ch 1 */
-						maxim_ops_i2c_write(sensor, 0x3c, 0x100c, 0x0002, 2, 2, 100); 
-						break;
-					case 3: /* ch 0/1 */
-						maxim_ops_i2c_write(sensor, 0x3c, 0x100c, 0x0003, 2, 2, 100); 
-						break;
-					default:
-						maxim_ops_i2c_write(sensor, 0x3c, 0x100c, 0x0000, 2, 2, 100); 
-						break;
-				}
-#if 0
-				if(sensor->rotate)
-					maxim_ops_i2c_write(sensor, 0x3c, 0x100c, 0x0003, 2, 2, 100); 
-				else
-					maxim_ops_i2c_write(sensor, 0x3c, 0x100c, 0x0000, 2, 2, 100);
-#endif
-			}
-			usleep_range(10000, 10000);
-#endif
       // maxim_ops_i2c_write(sensor, 0x3c, 0x2012, 0x0040, 2, 2, 100); //format
       // RGB888 default YUV422 maxim_ops_i2c_write(sensor, 0x3c, 0x2012, 0x0041,
       // 2, 2, 100); //format RGB565 default YUV422
@@ -2977,7 +2781,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
       if ((sensor->current_mode->id == MAX9296_MODE_2560x720) ||
           (sensor->current_mode->id == MAX9296_MODE_3840x1080)) {
         maxim_ops_i2c_write(sensor, 0x00, 0x0471, 0x83, 2, 1, 500);
-        usleep_range(500000, 500000);
+        msleep(500);
       }
 
       sensor->state.enable = MAX9296_STATE_DONE;
@@ -3004,31 +2808,6 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
       sensor->shared.sensor->state.fsync = MAX9296_STATE_IDLE;
     }
 
-#if 0  /* Pointimage : removed by youstar02 start: 2023/05/27 */
-		sensor->stream_on = 0;
-		sensor->state.enable = MAX9296_STATE_IDLE;
-
-		// for power down
-		sensor->state.init = MAX9296_STATE_IDLE;
-		sensor->state.firmware = MAX9296_STATE_IDLE;
-		sensor->state.enable = MAX9296_STATE_IDLE;
-		sensor->state.fsync = MAX9296_STATE_IDLE;
-		sensor->state.setup = MAX9296_STATE_IDLE;
-		sensor->state.power = MAX9296_STATE_IDLE;
-
-		if(sensor->shared.sensor != NULL)
-		{
-			sensor->shared.sensor->state.init = MAX9296_STATE_IDLE;
-			sensor->shared.sensor->state.firmware = MAX9296_STATE_IDLE;
-			sensor->shared.sensor->state.enable = MAX9296_STATE_IDLE;
-			sensor->shared.sensor->state.fsync = MAX9296_STATE_IDLE;
-			sensor->shared.sensor->state.setup = MAX9296_STATE_IDLE;
-			sensor->shared.sensor->state.power = MAX9296_STATE_IDLE;
-		}
-
-		usleep_range(100000, 100000);
-		max9296_s_power(sd, 0);
-#endif /* Pointimage : removed by youstar02 end  : 2023/05/27 */
   }
 
   sensor->streaming = enable;
@@ -3093,13 +2872,13 @@ static int max9296_fsync(void *data) {
 
     if (sensor->restart == 1) {
       restart_cnt = 1;
-      usleep_range(300000, 300000);
+      msleep(300);
       continue;
     }
 
     if (restart_cnt > 0) {
       --restart_cnt;
-      usleep_range(1000000, 1000000);
+      ssleep(1);
       continue;
     }
 
@@ -3107,7 +2886,7 @@ static int max9296_fsync(void *data) {
     if (sensor->shared.sensor == NULL) {
       if (sensor->state.enable == MAX9296_STATE_DONE) {
         if (sensor->state.fsync != MAX9296_STATE_RUNNING)
-          usleep_range(1000000, 1000000);
+          ssleep(1);
 
         if (low == 0) {
           low = (1000000 / sensor->fps);
@@ -3115,13 +2894,13 @@ static int max9296_fsync(void *data) {
         }
 
         gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
-        usleep_range(high, high);
+        usleep_range(high, high + high / 10);
         gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
         // usleep_range(33000, 33000);
-        usleep_range(low, low);
+        usleep_range(low, low + low / 10);
         sensor->state.fsync = MAX9296_STATE_RUNNING;
       } else {
-        usleep_range(10000, 10000);
+        usleep_range(10000, 11000);
       }
     } else /* default dual mode */
     {
@@ -3131,10 +2910,10 @@ static int max9296_fsync(void *data) {
         if ((sensor->state.enable == MAX9296_STATE_DONE) &&
             (sensor->shared.sensor->state.enable == MAX9296_STATE_DONE)) {
           if (sensor->state.fsync != MAX9296_STATE_RUNNING)
-            usleep_range(1000000, 1000000);
+            ssleep(1);
 
           if (sensor->shared.sensor->state.fsync != MAX9296_STATE_RUNNING)
-            usleep_range(1000000, 1000000);
+            ssleep(1);
 
           if (low == 0) {
             low = (1000000 / sensor->fps);
@@ -3149,13 +2928,13 @@ static int max9296_fsync(void *data) {
           // high : %d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
           // __LINE__, sensor->fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
-          usleep_range(high, high);
+          usleep_range(high, high + high / 10);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
-          usleep_range(low, low);
+          usleep_range(low, low + low / 10);
           sensor->shared.sensor->state.fsync = sensor->state.fsync =
               MAX9296_STATE_RUNNING;
         } else {
-          usleep_range(10000, 10000);
+          usleep_range(10000, 11000);
         }
       }
       /* single mode init */
@@ -3176,12 +2955,12 @@ static int max9296_fsync(void *data) {
           fps = sensor->shared.sensor->fps;
           start = 1;
         } else {
-          usleep_range(10000, 10000);
+          usleep_range(10000, 11000);
         }
 
         if (start) {
           if (*fsync_state != MAX9296_STATE_RUNNING)
-            usleep_range(1000000, 1000000);
+            ssleep(1);
 
           if (low == 0) {
             low = (1000000 / fps);
@@ -3196,9 +2975,9 @@ static int max9296_fsync(void *data) {
           // high : %d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
           // __LINE__, fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
-          usleep_range(high, high);
+          usleep_range(high, high + high / 10);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
-          usleep_range(low, low);
+          usleep_range(low, low + low / 10);
           *fsync_state = MAX9296_STATE_RUNNING;
         }
       }
@@ -3230,22 +3009,22 @@ static int max9296_enable(void *data) {
         (sensor->state.fsync == MAX9296_STATE_RUNNING)) {
       // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
       // __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
-      usleep_range(300000, 300000);
+      msleep(300);
       if (sensor->shared.sensor != NULL) {
         if (sensor->shared.sensor->state.setup == MAX9296_STATE_DONE) {
           if (sensor->fsync_gpio != NULL) {
             if (sensor->current_mode->id == MAX9296_MODE_1280x720) {
               maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1, 0);
-              // usleep_range(10000, 10000);
+              // usleep_range(10000, 11000);
               maxim_ops_i2c_write(sensor->shared.sensor, 0x00, 0x0313, 0x02, 2,
                                   1, 0);
-              usleep_range(10000, 10000);
+              usleep_range(10000, 11000);
             } else {
               maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1, 0);
-              // usleep_range(10000, 10000);
+              // usleep_range(10000, 11000);
               maxim_ops_i2c_write(sensor->shared.sensor, 0x00, 0x0313, 0x82, 2,
                                   1, 0);
-              usleep_range(10000, 10000);
+              usleep_range(10000, 11000);
             }
 
             // ae - per-channel (init to manual first)
@@ -3253,7 +3032,7 @@ static int max9296_enable(void *data) {
                                       AP1302_AE_CTRL_MANUAL, 2, 2);
             max9296_write_per_channel(sensor->shared.sensor, AP1302_REG_AE_CTRL,
                                       AP1302_AE_CTRL_MANUAL, 2, 2);
-            usleep_range(100000, 100000);
+            msleep(100);
 
             // awb - per-channel
             max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
@@ -3261,7 +3040,7 @@ static int max9296_enable(void *data) {
             max9296_write_per_channel(sensor->shared.sensor,
                                       AP1302_REG_AWB_CTRL, AP1302_AWB_CTRL_AUTO,
                                       2, 2);
-            usleep_range(100000, 100000);
+            msleep(100);
 
             // lsc - per-channel
             max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2,
@@ -3272,24 +3051,24 @@ static int max9296_enable(void *data) {
         } else {
           if (sensor->current_mode->id == MAX9296_MODE_1280x720) {
             maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1, 0);
-            usleep_range(10000, 10000);
+            usleep_range(10000, 11000);
           } else {
             maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1, 0);
-            usleep_range(10000, 10000);
+            usleep_range(10000, 11000);
           }
 
           // ae - per-channel (init to manual first, then auto)
           max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                     AP1302_AE_CTRL_MANUAL, 2, 2);
-          usleep_range(100000, 100000);
+          msleep(100);
           max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                     AP1302_AE_CTRL_AUTO, 2, 2);
-          usleep_range(100000, 100000);
+          msleep(100);
 
           // awb - per-channel
           max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
                                     AP1302_AWB_CTRL_AUTO, 2, 2);
-          usleep_range(100000, 100000);
+          msleep(100);
 
           // lsc - per-channel
           max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
@@ -3297,24 +3076,24 @@ static int max9296_enable(void *data) {
       } else {
         if (sensor->current_mode->id == MAX9296_MODE_1280x720) {
           maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1, 0);
-          usleep_range(10000, 10000);
+          usleep_range(10000, 11000);
         } else {
           maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1, 0);
-          usleep_range(10000, 10000);
+          usleep_range(10000, 11000);
         }
 
         // ae - per-channel (init to manual first, then auto)
         max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                   AP1302_AE_CTRL_MANUAL, 2, 2);
-        usleep_range(100000, 100000);
+        msleep(100);
         max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                   AP1302_AE_CTRL_AUTO, 2, 2);
-        usleep_range(100000, 100000);
+        msleep(100);
 
         // awb - per-channel
         max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
                                   AP1302_AWB_CTRL_AUTO, 2, 2);
-        usleep_range(100000, 100000);
+        msleep(100);
 
         // lsc - per-channel
         max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
@@ -3324,11 +3103,11 @@ static int max9296_enable(void *data) {
       /* Override hardcoded AE/AWB init with V4L2 cached controls */
       max9296_apply_cached_controls(sensor);
 
-      usleep_range(10000, 10000);
+      usleep_range(10000, 11000);
       // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
       // __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
     } else
-      usleep_range(10000, 10000);
+      usleep_range(10000, 11000);
   }
   if (CTS_DEBUG)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
@@ -3355,25 +3134,25 @@ static int max9296_shared_init(void *data) {
         if (sensor->shared.client == NULL) {
           // dev_warn(&sensor->i2c_client->dev, "warning not found i2c_client
           // from handle.. this device works in single mode..\n");
-          usleep_range(10000, 10000);
+          usleep_range(10000, 11000);
         } else {
           sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
           if (sensor->shared.sd == NULL)
-            usleep_range(10000, 10000);
+            usleep_range(10000, 11000);
           else {
             sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
             if (sensor->shared.sensor == NULL)
-              usleep_range(10000, 10000);
+              usleep_range(10000, 11000);
           }
         }
       } else {
         sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
         if (sensor->shared.sd == NULL)
-          usleep_range(10000, 10000);
+          usleep_range(10000, 11000);
         else {
           sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
           if (sensor->shared.sensor == NULL)
-            usleep_range(10000, 10000);
+            usleep_range(10000, 11000);
         }
       }
     } else
@@ -3386,7 +3165,6 @@ static int max9296_shared_init(void *data) {
 }
 
 //-------------------------------------------------------------------------
-#if 1
 static ssize_t sysfs_rotate_show(struct device *dev,
                                  struct device_attribute *attr, char *buf) {
   struct v4l2_subdev *sd = i2c_get_clientdata(to_i2c_client(dev));
@@ -3417,7 +3195,6 @@ static ssize_t sysfs_rotate_store(struct device *dev,
   return count;
 }
 static DEVICE_ATTR(rotate, 0664, sysfs_rotate_show, sysfs_rotate_store);
-#endif
 //-------------------------------------------------------------------------
 static ssize_t sysfs_enable_show(struct device *dev,
                                  struct device_attribute *attr, char *buf) {
@@ -3748,7 +3525,6 @@ static int max9296_probe(struct i2c_client *client) {
              __LINE__, __FILE__);
     goto free_ctrls;
   }
-#if 1
   if (device_create_file(&client->dev, &dev_attr_rotate) != 0) {
     if (CTS_DEBUG)
       printk(KERN_CRIT "[%s:%d][%s:%d] sysfs rotate entry failed", KEYWORD,
@@ -3758,7 +3534,6 @@ static int max9296_probe(struct i2c_client *client) {
     ret = (-EINVAL);
     goto free_ctrls;
   }
-#endif
   if (device_create_file(&client->dev, &dev_attr_enable) != 0) {
     if (CTS_DEBUG)
       printk(KERN_CRIT "[%s:%d][%s:%d] sysfs enable entry failed", KEYWORD,
@@ -3789,6 +3564,15 @@ static int max9296_remove(struct i2c_client *client) {
   if (CTS_DEBUG)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+
+  /* Stop kernel threads before tearing down resources */
+  if (sensor->thread_en && !IS_ERR(sensor->thread_en))
+    kthread_stop(sensor->thread_en);
+  if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync))
+    kthread_stop(sensor->thread_fsync);
+  if (sensor->thread_fw_init && !IS_ERR(sensor->thread_fw_init))
+    kthread_stop(sensor->thread_fw_init);
+
   device_remove_file(&client->dev, &dev_attr_rotate);
   device_remove_file(&client->dev, &dev_attr_enable);
 
