@@ -1723,6 +1723,60 @@ static const char *max9296_devm_ctrl_name(struct max9296_dev *sensor,
   return devm_kstrdup(&sensor->i2c_client->dev, tmp, GFP_KERNEL);
 }
 
+/* Per-channel control descriptor for table-driven registration */
+struct max9296_ctrl_desc {
+  u32 cid_ch0;
+  u32 cid_ch1;
+  enum v4l2_ctrl_type type;
+  const char *name;
+  s64 min;
+  s64 max;
+  s64 def;
+  size_t offset_ch0; /* offset into struct max9296_ctrls */
+  size_t offset_ch1;
+};
+
+#define CTRL_DESC(_cid0, _cid1, _type, _name, _min, _max, _def, _m0, _m1) \
+  { _cid0, _cid1, _type, _name, _min, _max, _def,                        \
+    offsetof(struct max9296_ctrls, _m0),                                   \
+    offsetof(struct max9296_ctrls, _m1) }
+
+static const struct max9296_ctrl_desc max9296_per_ch_ctrls[] = {
+    CTRL_DESC(V4L2_CID_EXPOSURE_AUTO_CH0, V4L2_CID_EXPOSURE_AUTO_CH1,
+              V4L2_CTRL_TYPE_BOOLEAN, "AE On", 0, 1, 1,
+              auto_exp_ch0, auto_exp_ch1),
+    CTRL_DESC(V4L2_CID_AUTO_WHITE_BALANCE_CH0, V4L2_CID_AUTO_WHITE_BALANCE_CH1,
+              V4L2_CTRL_TYPE_BOOLEAN, "Auto White Balance", 0, 1, 1,
+              auto_wb_ch0, auto_wb_ch1),
+    CTRL_DESC(V4L2_CID_AUTOGAIN_CH0, V4L2_CID_AUTOGAIN_CH1,
+              V4L2_CTRL_TYPE_BOOLEAN, "Auto Gain", 0, 1, 1,
+              auto_gain_ch0, auto_gain_ch1),
+    CTRL_DESC(V4L2_CID_GAIN_CH0, V4L2_CID_GAIN_CH1,
+              V4L2_CTRL_TYPE_INTEGER, "Gain", 0, 65535, 256,
+              gain_ch0, gain_ch1),
+    CTRL_DESC(V4L2_CID_EXPOSURE_CH0, V4L2_CID_EXPOSURE_CH1,
+              V4L2_CTRL_TYPE_INTEGER, "Ext Time", 0, INT_MAX, 10000,
+              exposure_ch0, exposure_ch1),
+    CTRL_DESC(V4L2_CID_HFLIP_CH0, V4L2_CID_HFLIP_CH1,
+              V4L2_CTRL_TYPE_BOOLEAN, "HFlip", 0, 1, 0,
+              hflip_ch0, hflip_ch1),
+    CTRL_DESC(V4L2_CID_VFLIP_CH0, V4L2_CID_VFLIP_CH1,
+              V4L2_CTRL_TYPE_BOOLEAN, "VFlip", 0, 1, 0,
+              vflip_ch0, vflip_ch1),
+    CTRL_DESC(V4L2_CID_LSC_CH0, V4L2_CID_LSC_CH1,
+              V4L2_CTRL_TYPE_INTEGER, "LSC", 0, 65535, 0x3fff,
+              lsc_ch0, lsc_ch1),
+    CTRL_DESC(V4L2_CID_BRIGHTNESS_CH0, V4L2_CID_BRIGHTNESS_CH1,
+              V4L2_CTRL_TYPE_INTEGER, "Brightness", 0, 65535, 0,
+              brightness_ch0, brightness_ch1),
+    CTRL_DESC(V4L2_CID_CONTRAST_CH0, V4L2_CID_CONTRAST_CH1,
+              V4L2_CTRL_TYPE_INTEGER, "Contrast", 0, 65535, 0,
+              contrast_ch0, contrast_ch1),
+    CTRL_DESC(V4L2_CID_SATURATION_CH0, V4L2_CID_SATURATION_CH1,
+              V4L2_CTRL_TYPE_INTEGER, "Saturation", 0, 65535, 4096,
+              saturation_ch0, saturation_ch1),
+};
+
 static int max9296_init_controls(struct max9296_dev *sensor) {
   const struct v4l2_ctrl_ops *ops = &max9296_ctrl_ops;
   struct max9296_ctrls *ctrls = &sensor->ctrls;
@@ -1761,497 +1815,41 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
                              V4L2_CID_POWER_LINE_FREQUENCY_AUTO, 0,
                              V4L2_CID_POWER_LINE_FREQUENCY_50HZ);
 
-  /* Per-channel controls for dual-channel mode - use v4l2_ctrl_new_custom for
-   * custom IDs */
-  /* AE on/off: 1=auto, 0=manual (BOOLEAN) */ {
-    static const struct v4l2_ctrl_config cfg_exp_auto_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_EXPOSURE_AUTO_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "AE On CH0",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_exp_auto_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_EXPOSURE_AUTO_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "AE On CH1",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_exp_auto_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_EXPOSURE_AUTO_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "AE On CH2",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_exp_auto_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_EXPOSURE_AUTO_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "AE On CH3",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_awb_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_AUTO_WHITE_BALANCE_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "Auto White Balance CH0",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_awb_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_AUTO_WHITE_BALANCE_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "Auto White Balance CH1",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_awb_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_AUTO_WHITE_BALANCE_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "Auto White Balance CH2",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_awb_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_AUTO_WHITE_BALANCE_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "Auto White Balance CH3",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_autogain_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_AUTOGAIN_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "Auto Gain CH0",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_autogain_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_AUTOGAIN_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "Auto Gain CH1",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_autogain_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_AUTOGAIN_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "Auto Gain CH2",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_autogain_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_AUTOGAIN_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "Auto Gain CH3",
-        .min = 0,
-        .max = 1,
-        .def = 1,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_gain_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_GAIN_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Gain CH0",
-        .min = 0,
-        .max = 65535,
-        .def = 256,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_gain_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_GAIN_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Gain CH1",
-        .min = 0,
-        .max = 65535,
-        .def = 256,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_gain_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_GAIN_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Gain CH2",
-        .min = 0,
-        .max = 65535,
-        .def = 256,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_gain_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_GAIN_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Gain CH3",
-        .min = 0,
-        .max = 65535,
-        .def = 256,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_exposure_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_EXPOSURE_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Ext Time CH0",
-        .min = 0,
-        .max = INT_MAX,
-        .def = 10000,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_exposure_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_EXPOSURE_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Ext Time CH1",
-        .min = 0,
-        .max = INT_MAX,
-        .def = 10000,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_exposure_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_EXPOSURE_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Ext Time CH2",
-        .min = 0,
-        .max = INT_MAX,
-        .def = 10000,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_exposure_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_EXPOSURE_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Ext Time CH3",
-        .min = 0,
-        .max = INT_MAX,
-        .def = 10000,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_lsc_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_LSC_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "LSC CH0",
-        .min = 0,
-        .max = 65535,
-        .def = 0x3fff,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_lsc_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_LSC_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "LSC CH1",
-        .min = 0,
-        .max = 65535,
-        .def = 0x3fff,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_lsc_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_LSC_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "LSC CH2",
-        .min = 0,
-        .max = 65535,
-        .def = 0x3fff,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_lsc_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_LSC_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "LSC CH3",
-        .min = 0,
-        .max = 65535,
-        .def = 0x3fff,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_brightness_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_BRIGHTNESS_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Brightness CH0",
-        .min = 0,
-        .max = 65535,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_brightness_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_BRIGHTNESS_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Brightness CH1",
-        .min = 0,
-        .max = 65535,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_brightness_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_BRIGHTNESS_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Brightness CH2",
-        .min = 0,
-        .max = 65535,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_brightness_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_BRIGHTNESS_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Brightness CH3",
-        .min = 0,
-        .max = 65535,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_contrast_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_CONTRAST_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Contrast CH0",
-        .min = 0,
-        .max = 65535,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_contrast_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_CONTRAST_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Contrast CH1",
-        .min = 0,
-        .max = 65535,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_contrast_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_CONTRAST_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Contrast CH2",
-        .min = 0,
-        .max = 65535,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_contrast_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_CONTRAST_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Contrast CH3",
-        .min = 0,
-        .max = 65535,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_saturation_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_SATURATION_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Saturation CH0",
-        .min = 0,
-        .max = 65535,
-        .def = 4096,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_saturation_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_SATURATION_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Saturation CH1",
-        .min = 0,
-        .max = 65535,
-        .def = 4096,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_saturation_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_SATURATION_CH0,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Saturation CH2",
-        .min = 0,
-        .max = 65535,
-        .def = 4096,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_saturation_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_SATURATION_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Saturation CH3",
-        .min = 0,
-        .max = 65535,
-        .def = 4096,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_hflip_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_HFLIP_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "HFlip CH0",
-        .min = 0,
-        .max = 1,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_hflip_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_HFLIP_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "HFlip CH1",
-        .min = 0,
-        .max = 1,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_hflip_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_HFLIP_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "HFlip CH2",
-        .min = 0,
-        .max = 1,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_hflip_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_HFLIP_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "HFlip CH3",
-        .min = 0,
-        .max = 1,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_vflip_ch0 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_VFLIP_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "VFlip CH0",
-        .min = 0,
-        .max = 1,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_vflip_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_VFLIP_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "VFlip CH1",
-        .min = 0,
-        .max = 1,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_vflip_ch2 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_VFLIP_CH0,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "VFlip CH2",
-        .min = 0,
-        .max = 1,
-        .def = 0,
-        .step = 1,
-    };
-    static const struct v4l2_ctrl_config cfg_vflip_ch3 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_VFLIP_CH1,
-        .type = V4L2_CTRL_TYPE_BOOLEAN,
-        .name = "VFlip CH3",
-        .min = 0,
-        .max = 1,
-        .def = 0,
-        .step = 1,
-    };
+  /* Per-channel controls: table-driven registration */
+  {
+    bool second = (sensor->i2c_client->adapter->nr == 1);
+    int ch0_num = second ? 2 : 0;
+    int ch1_num = second ? 3 : 1;
+    int i;
 
-    {
-      bool second = (sensor->i2c_client->adapter->nr == 1);
+    for (i = 0; i < ARRAY_SIZE(max9296_per_ch_ctrls); i++) {
+      const struct max9296_ctrl_desc *d = &max9296_per_ch_ctrls[i];
+      struct v4l2_ctrl_config cfg = {
+          .ops = &max9296_ctrl_ops,
+          .type = d->type,
+          .min = d->min,
+          .max = d->max,
+          .def = d->def,
+          .step = 1,
+      };
+      struct v4l2_ctrl **p0 =
+          (struct v4l2_ctrl **)((char *)ctrls + d->offset_ch0);
+      struct v4l2_ctrl **p1 =
+          (struct v4l2_ctrl **)((char *)ctrls + d->offset_ch1);
 
-      ctrls->auto_exp_ch0 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_exp_auto_ch2 : &cfg_exp_auto_ch0, NULL);
-      ctrls->auto_exp_ch1 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_exp_auto_ch3 : &cfg_exp_auto_ch1, NULL);
-      ctrls->auto_wb_ch0 =
-          v4l2_ctrl_new_custom(hdl, second ? &cfg_awb_ch2 : &cfg_awb_ch0, NULL);
-      ctrls->auto_wb_ch1 =
-          v4l2_ctrl_new_custom(hdl, second ? &cfg_awb_ch3 : &cfg_awb_ch1, NULL);
-      ctrls->auto_gain_ch0 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_autogain_ch2 : &cfg_autogain_ch0, NULL);
-      ctrls->auto_gain_ch1 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_autogain_ch3 : &cfg_autogain_ch1, NULL);
-      ctrls->gain_ch0 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_gain_ch2 : &cfg_gain_ch0, NULL);
-      ctrls->gain_ch1 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_gain_ch3 : &cfg_gain_ch1, NULL);
-      ctrls->exposure_ch0 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_exposure_ch2 : &cfg_exposure_ch0, NULL);
-      ctrls->exposure_ch1 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_exposure_ch3 : &cfg_exposure_ch1, NULL);
-      ctrls->hflip_ch0 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_hflip_ch2 : &cfg_hflip_ch0, NULL);
-      ctrls->hflip_ch1 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_hflip_ch3 : &cfg_hflip_ch1, NULL);
-      ctrls->vflip_ch0 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_vflip_ch2 : &cfg_vflip_ch0, NULL);
-      ctrls->vflip_ch1 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_vflip_ch3 : &cfg_vflip_ch1, NULL);
-      ctrls->lsc_ch0 =
-          v4l2_ctrl_new_custom(hdl, second ? &cfg_lsc_ch2 : &cfg_lsc_ch0, NULL);
-      ctrls->lsc_ch1 =
-          v4l2_ctrl_new_custom(hdl, second ? &cfg_lsc_ch3 : &cfg_lsc_ch1, NULL);
-      ctrls->brightness_ch0 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_brightness_ch2 : &cfg_brightness_ch0, NULL);
-      ctrls->brightness_ch1 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_brightness_ch3 : &cfg_brightness_ch1, NULL);
-      ctrls->contrast_ch0 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_contrast_ch2 : &cfg_contrast_ch0, NULL);
-      ctrls->contrast_ch1 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_contrast_ch3 : &cfg_contrast_ch1, NULL);
-      ctrls->saturation_ch0 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_saturation_ch2 : &cfg_saturation_ch0, NULL);
-      ctrls->saturation_ch1 = v4l2_ctrl_new_custom(
-          hdl, second ? &cfg_saturation_ch3 : &cfg_saturation_ch1, NULL);
+      cfg.id = d->cid_ch0;
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "%s CH%d", d->name, ch0_num);
+      if (!cfg.name)
+        return -ENOMEM;
+      *p0 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
+
+      cfg.id = d->cid_ch1;
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "%s CH%d", d->name, ch1_num);
+      if (!cfg.name)
+        return -ENOMEM;
+      *p1 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
     }
   }
 
