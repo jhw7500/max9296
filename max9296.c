@@ -1117,13 +1117,13 @@ static int max9296_write_per_channel(struct max9296_dev *sensor,
 
   if (dual) {
     ret = maxim_ops_i2c_write(sensor, AP1302_CH0_I2C_ADDR, reg, val, reg_byte,
-                              val_byte, 0);
+                              val_byte);
     if (!ret)
       ret = maxim_ops_i2c_write(sensor, AP1302_CH1_I2C_ADDR, reg, val, reg_byte,
-                                val_byte, 0);
+                                val_byte);
   } else {
     ret = maxim_ops_i2c_write(sensor, AP1302_I2C_ADDR, reg, val, reg_byte,
-                              val_byte, 0);
+                              val_byte);
   }
   return ret;
 }
@@ -1343,7 +1343,7 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
 
   /* STEP 1: Initialize AE to manual mode first */
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL,
-                            AP1302_AE_CTRL_MANUAL, 2, 2, 0);
+                            AP1302_AE_CTRL_MANUAL, 2, 2);
   if (ret)
     err = ret;
   msleep(100);
@@ -1357,15 +1357,14 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
           ? ch_ctrl->exposure
           : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure : 10000);
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_EXP_TIME, exp_seed, 2,
-                            4, 0);
+                            4);
   if (ret)
     err = ret;
   msleep(100);
 
   /* STEP 2: Apply configured AE mode (auto/manual) */
   ae_val = ch_ctrl->ae_on ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
-  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2,
-                            0);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2);
   if (ret)
     err = ret;
   if (ch_ctrl->ae_on)
@@ -1374,14 +1373,14 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
   /* AWB (auto/manual) */
   awb_val = ch_ctrl->awb ? AP1302_AWB_CTRL_AUTO : 0x0000;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2,
-                            2, 0);
+                            2);
   if (ret)
     err = ret;
 
   /* Gain value (always set, used when switching to manual) */
   gain_seed = ch_ctrl->gain ? ch_ctrl->gain : 256;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_GAIN, gain_seed, 2,
-                            2, 0);
+                            2);
   if (ret)
     err = ret;
 
@@ -1394,19 +1393,19 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
 
   /* Per-channel tuning values */
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_LSC_CTRL, ch_ctrl->lsc,
-                            2, 2, 0);
+                            2, 2);
   if (ret)
     err = ret;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_BRIGHTNESS,
-                            ch_ctrl->brightness, 2, 2, 0);
+                            ch_ctrl->brightness, 2, 2);
   if (ret)
     err = ret;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_CONTRAST,
-                            ch_ctrl->contrast, 2, 2, 0);
+                            ch_ctrl->contrast, 2, 2);
   if (ret)
     err = ret;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_SATURATION,
-                            ch_ctrl->saturation, 2, 2, 0);
+                            ch_ctrl->saturation, 2, 2);
   if (ret)
     err = ret;
 
@@ -1522,7 +1521,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   case V4L2_CID_EXPOSURE_AUTO_CH0: {
     u16 ae_val = ctrl->val ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_AE_CTRL, ae_val, 2,
-                              2, 0);
+                              2);
     if (!ret && !ctrl->val) {
       u32 exp_val =
           sensor->ctrl_cache.ch0.exposure
@@ -1530,14 +1529,14 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
               : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure
                                              : 10000);
       ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_EXP_TIME, exp_val,
-                                2, 4, 0);
+                                2, 4);
     }
     break;
   }
   case V4L2_CID_AUTO_WHITE_BALANCE_CH0: {
     u16 awb_val = ctrl->val ? AP1302_AWB_CTRL_AUTO : 0x0000;
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_AWB_CTRL, awb_val, 2,
-                              2, 0);
+                              2);
     break;
   }
   case V4L2_CID_AUTOGAIN_CH0:
@@ -1546,16 +1545,16 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     break;
   case V4L2_CID_GAIN_CH0:
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_AE_GAIN, ctrl->val,
-                              2, 2, 0);
+                              2, 2);
     break;
   case V4L2_CID_LSC_CH0:
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_LSC_CTRL, ctrl->val,
-                              2, 2, 0);
+                              2, 2);
     break;
   case V4L2_CID_EXPOSURE_CH0:
     if (!sensor->ctrl_cache.ch0.ae_on) {
       ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_EXP_TIME,
-                                ctrl->val, 2, 4, 0);
+                                ctrl->val, 2, 4);
     } else {
       ret = 0;
     }
@@ -1564,28 +1563,27 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   case V4L2_CID_VFLIP_CH0: {
     unsigned int rot = (sensor->ctrl_cache.ch0.hflip ? 0x01 : 0x00) |
                        (sensor->ctrl_cache.ch0.vflip ? 0x02 : 0x00);
-    ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_ROTATION, rot, 2, 2,
-                              0);
+    ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_ROTATION, rot, 2, 2);
     break;
   }
   case V4L2_CID_BRIGHTNESS_CH0:
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_BRIGHTNESS,
-                              ctrl->val, 2, 2, 0);
+                              ctrl->val, 2, 2);
     break;
   case V4L2_CID_CONTRAST_CH0:
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_CONTRAST, ctrl->val,
-                              2, 2, 0);
+                              2, 2);
     break;
   case V4L2_CID_SATURATION_CH0:
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_SATURATION,
-                              ctrl->val, 2, 2, 0);
+                              ctrl->val, 2, 2);
     break;
 
   /* Per-channel controls - Channel 1 */
   case V4L2_CID_EXPOSURE_AUTO_CH1: {
     u16 ae_val = ctrl->val ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_AE_CTRL, ae_val, 2,
-                              2, 0);
+                              2);
     if (!ret && !ctrl->val) {
       u32 exp_val =
           sensor->ctrl_cache.ch1.exposure
@@ -1593,14 +1591,14 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
               : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure
                                              : 10000);
       ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_EXP_TIME, exp_val,
-                                2, 4, 0);
+                                2, 4);
     }
     break;
   }
   case V4L2_CID_AUTO_WHITE_BALANCE_CH1: {
     u16 awb_val = ctrl->val ? AP1302_AWB_CTRL_AUTO : 0x0000;
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_AWB_CTRL, awb_val, 2,
-                              2, 0);
+                              2);
     break;
   }
   case V4L2_CID_AUTOGAIN_CH1:
@@ -1609,16 +1607,16 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     break;
   case V4L2_CID_GAIN_CH1:
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_AE_GAIN, ctrl->val,
-                              2, 2, 0);
+                              2, 2);
     break;
   case V4L2_CID_LSC_CH1:
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_LSC_CTRL, ctrl->val,
-                              2, 2, 0);
+                              2, 2);
     break;
   case V4L2_CID_EXPOSURE_CH1:
     if (!sensor->ctrl_cache.ch1.ae_on) {
       ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_EXP_TIME,
-                                ctrl->val, 2, 4, 0);
+                                ctrl->val, 2, 4);
     } else {
       ret = 0;
     }
@@ -1627,21 +1625,20 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   case V4L2_CID_VFLIP_CH1: {
     unsigned int rot = (sensor->ctrl_cache.ch1.hflip ? 0x01 : 0x00) |
                        (sensor->ctrl_cache.ch1.vflip ? 0x02 : 0x00);
-    ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_ROTATION, rot, 2, 2,
-                              0);
+    ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_ROTATION, rot, 2, 2);
     break;
   }
   case V4L2_CID_BRIGHTNESS_CH1:
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_BRIGHTNESS,
-                              ctrl->val, 2, 2, 0);
+                              ctrl->val, 2, 2);
     break;
   case V4L2_CID_CONTRAST_CH1:
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_CONTRAST, ctrl->val,
-                              2, 2, 0);
+                              2, 2);
     break;
   case V4L2_CID_SATURATION_CH1:
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_SATURATION,
-                              ctrl->val, 2, 2, 0);
+                              ctrl->val, 2, 2);
     break;
 
   default:
@@ -2542,13 +2539,13 @@ static int max9296_enable(void *data) {
               maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1);
               // usleep_range(10000, 11000);
               maxim_ops_i2c_write(sensor->shared.sensor, 0x00, 0x0313, 0x02, 2,
-                                  1, 0);
+                                  1);
               usleep_range(10000, 11000);
             } else {
               maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1);
               // usleep_range(10000, 11000);
               maxim_ops_i2c_write(sensor->shared.sensor, 0x00, 0x0313, 0x82, 2,
-                                  1, 0);
+                                  1);
               usleep_range(10000, 11000);
             }
 
