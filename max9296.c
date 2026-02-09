@@ -39,11 +39,11 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-#define SW_VERSION "1.8"
+#define SW_VERSION "1.9"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
-  (strrchr(__FILE__, '/') ? (strrchr(__FILE__, '/') + 1) : __FILE__)
+  (strrchr(__FILE__, '/') ? (strrchr(__FILE__, '/') + 1) : (__FILE__))
 #define KEYWORD "I2C"
 
 static int debug;
@@ -705,7 +705,7 @@ static int max9296_load_regs(struct max9296_dev *sensor,
     ret = maxim_ops_i2c_write(sensor, slave_addr, reg_addr, val, reg_byte,
                               val_byte);
     if (delay_ms)
-      usleep_range(1000 * delay_ms, 1000 * delay_ms + 100);
+      usleep_range(1000 * delay_ms, 1000 * delay_ms + 1000 * delay_ms / 10);
   }
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
