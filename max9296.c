@@ -3033,6 +3033,20 @@ static int max9296_remove(struct i2c_client *client) {
     kthread_stop(sensor->thread_fsync);
   if (sensor->thread_fw_init && !IS_ERR(sensor->thread_fw_init))
     kthread_stop(sensor->thread_fw_init);
+  if (sensor->shared.thread_shared_init && !IS_ERR(sensor->shared.thread_shared_init))
+    kthread_stop(sensor->shared.thread_shared_init);
+
+  /* Clean up shared sensor references to prevent use-after-free */
+  if (sensor->shared.sensor) {
+    /* If the other sensor points back to us, clear its reference */
+    if (sensor->shared.sensor->shared.sensor == sensor)
+      sensor->shared.sensor->shared.sensor = NULL;
+    sensor->shared.sensor = NULL;
+  }
+  if (sensor->shared.client) {
+    put_device(&sensor->shared.client->dev);
+    sensor->shared.client = NULL;
+  }
 
   device_remove_file(&client->dev, &dev_attr_rotate);
   device_remove_file(&client->dev, &dev_attr_enable);
