@@ -2219,20 +2219,20 @@ static int max9296_fw_init(void *data) {
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  while (1) {
+  while (!kthread_should_stop()) {
     set_current_state(TASK_INTERRUPTIBLE);
 
-    if (kthread_should_stop())
-      break;
+    if (sensor->state.firmware == MAX9296_STATE_DONE) {
+      schedule();
+      continue;
+    }
 
     if (sensor->state.firmware == MAX9296_STATE_IDLE)
       sensor->state.firmware = MAX9296_STATE_RUNNING;
 
     max9296_load_firmware(&sensor->sd);
 
-    if (sensor->state.firmware == MAX9296_STATE_DONE)
-      break;
-    else
+    if (sensor->state.firmware != MAX9296_STATE_DONE)
       msleep(300);
   }
 
@@ -2637,41 +2637,31 @@ static int max9296_shared_init(void *data) {
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  while (1) {
+  while (!kthread_should_stop()) {
     set_current_state(TASK_INTERRUPTIBLE);
 
-    if (kthread_should_stop())
-      break;
+    if (sensor->shared.sensor != NULL) {
+      schedule();
+      continue;
+    }
 
-    if (sensor->shared.sensor == NULL) {
+    if (sensor->shared.client == NULL) {
+      sensor->shared.client = of_find_i2c_device_by_node(sensor->shared.np);
       if (sensor->shared.client == NULL) {
-        sensor->shared.client = of_find_i2c_device_by_node(sensor->shared.np);
-        if (sensor->shared.client == NULL) {
-          // dev_warn(&sensor->i2c_client->dev, "warning not found i2c_client
-          // from handle.. this device works in single mode..\n");
-          usleep_range(10000, 11000);
-        } else {
-          sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
-          if (sensor->shared.sd == NULL)
-            usleep_range(10000, 11000);
-          else {
-            sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
-            if (sensor->shared.sensor == NULL)
-              usleep_range(10000, 11000);
-          }
-        }
-      } else {
-        sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
-        if (sensor->shared.sd == NULL)
-          usleep_range(10000, 11000);
-        else {
-          sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
-          if (sensor->shared.sensor == NULL)
-            usleep_range(10000, 11000);
-        }
+        usleep_range(10000, 11000);
+        continue;
       }
-    } else
-      break;
+    }
+
+    sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
+    if (sensor->shared.sd == NULL) {
+      usleep_range(10000, 11000);
+      continue;
+    }
+
+    sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
+    if (sensor->shared.sensor == NULL)
+      usleep_range(10000, 11000);
   }
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
