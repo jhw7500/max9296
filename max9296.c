@@ -1883,9 +1883,10 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
     return -EINVAL;
   }
   if (fie->index >= MAX9296_NUM_FRAMERATES) {
-    printk(KERN_CRIT "[%s:%d][%s:%d] %s fie->index:%d return err", KEYWORD,
-           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
-           fie->index);
+    if (debug)
+      printk(KERN_CRIT "[%s:%d][%s:%d] %s fie->index:%d return err", KEYWORD,
+             sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
+             fie->index);
     return -EINVAL;
   }
 
