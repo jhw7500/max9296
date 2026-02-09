@@ -69,6 +69,68 @@ V4L2 컨트롤은 기본적으로 정수값으로 노출된다. 드라이버는 
 - `saturation_chX` -> `0x7006` (u16, fixed12)
 - `lsc_chX` -> `0x54a0` (u16, fixed12)
 
+## 3.5) FPS 제어 (Frame Sync)
+
+### FSYNC 기반 프레임 레이트 제어
+
+이 드라이버는 AP1302 펌웨어에서 직접 FPS를 설정하지 않고, **GPIO를 통한 FSYNC(Frame Sync) 신호**로 프레임 레이트를 제어한다.
+
+#### 동작 원리
+
+1. **FPS 설정** (V4L2 Frame Interval)
+   ```bash
+   v4l2-ctl -d /dev/v4l-subdev2 --set-parm=30  # 30 FPS
+   v4l2-ctl -d /dev/v4l-subdev2 --set-parm=15  # 15 FPS
+   v4l2-ctl -d /dev/v4l-subdev2 --set-parm=60  # 60 FPS
+   ```
+
+2. **FSYNC 신호 생성** (`max9296_fsync` 커널 스레드)
+   - GPIO를 통해 주기적인 펄스 신호 생성
+   - 주기 = `1,000,000 / fps` (마이크로초)
+   - 펄스 폭: HIGH 1ms, LOW (주기 - 1ms)
+
+3. **타이밍 예시**
+   ```
+   30 FPS:  HIGH 1.0ms + LOW 32.3ms = 33.3ms 주기
+   15 FPS:  HIGH 1.0ms + LOW 65.7ms = 66.7ms 주기
+   60 FPS:  HIGH 1.0ms + LOW 15.7ms = 16.7ms 주기
+   120 FPS: HIGH 1.0ms + LOW 7.3ms  = 8.3ms 주기
+   ```
+
+4. **AP1302 동작**
+   - FSYNC 신호의 rising edge마다 새 프레임 캡처 시작
+   - 펌웨어가 센서(AR0234)를 FSYNC에 동기화
+
+#### 지원 FPS 범위
+
+- **최소**: 1 FPS
+- **최대**: 120 FPS (센서 스펙 기준)
+- **권장**: 15, 30, 60 FPS
+
+#### 코드 위치
+
+- FSYNC 스레드: `max9296.c:2373-2502` (`max9296_fsync`)
+- FPS 저장: `max9296.c:1949` (`max9296_s_frame_interval`)
+- GPIO 초기화: `max9296.c:2834-2842`
+- 스레드 시작: `max9296.c:2971`
+
+#### FPS 확인
+
+```bash
+# 현재 FPS 확인
+v4l2-ctl -d /dev/v4l-subdev2 --get-parm
+
+# 출력 예:
+# Streaming Parameters Video Capture:
+#   Frames per second: 30.000 (30/1)
+```
+
+#### 주의사항
+
+- FPS 변경은 스트리밍 시작 전에 설정하는 것을 권장
+- 듀얼 채널 모드에서는 양쪽 채널이 동일한 FSYNC 신호를 공유
+- FSYNC GPIO가 없으면 FPS 제어가 불가능 (Device Tree 확인 필요)
+
 ## 4) v4l2-ctl 기본 사용
 
 ### 4.0 현재값 스냅샷/원복(권장)
