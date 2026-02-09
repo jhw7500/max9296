@@ -48,23 +48,30 @@ jobs:
     needs: check-enabled
     if: needs.check-enabled.outputs.enabled == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ubuntu:20.04
 
     steps:
+      - name: Setup environment
+        run: |
+          apt-get update
+          apt-get install -y git
+
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Install kernel headers and build tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          apt-get install -y \
             build-essential \
-            linux-headers-$(uname -r) \
+            linux-headers-5.10.0-generic \
             kmod
 
       - name: Build kernel module
         run: |
-          # Use system kernel headers for build verification
-          export KERNEL_SRC=/lib/modules/$(uname -r)/build
+          # Use Linux 5.10 kernel headers for build
+          export KERNEL_SRC=/usr/src/linux-headers-5.10.0-generic
           make KERNEL_SRC=$KERNEL_SRC
 
       - name: Verify build artifacts

@@ -20,7 +20,7 @@ review:
 workflows:
   # Repo-specific CI workflows
   build-test:
-    enabled: false  # Disabled: Driver targets Linux 5.10.35 (NXP BSP), incompatible with CI kernel 6.11+
+    enabled: true  # Enabled: Using Ubuntu 20.04 Docker container with Linux 5.10 headers
   shellcheck:
     enabled: true
 
