@@ -937,19 +937,18 @@ static int max9296_s_power(struct v4l2_subdev *sd, int on) {
   int ret = 0;
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s (%d)", "RST",
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, on);
+
+  mutex_lock(&sensor->lock);
+
   /* Update the power count. */
   if ((sensor->power_count == 0) && on) {
     // on
     ret = max9296_set_power(sensor, 1);
   }
 
-  mutex_lock(&sensor->lock);
-
   sensor->power_count += on ? 1 : -1;
 
   WARN_ON(sensor->power_count < 0);
-
-  mutex_unlock(&sensor->lock);
 
   if (sensor->power_count == 0) {
     // off
@@ -959,6 +958,8 @@ static int max9296_s_power(struct v4l2_subdev *sd, int on) {
       sensor->shared.sensor->state.power = MAX9296_STATE_IDLE;
     ssleep(5);
   }
+
+  mutex_unlock(&sensor->lock);
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end(%d)", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, on);
@@ -1902,18 +1903,18 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
 
   fie->interval.numerator = 1;
 
-  count = 0;
-  for (i = 0; i < DEFAULT_FRAMERATE_FPS; i++) {
-    if (fie->index == (count - 1)) {
-      fie->interval.denominator = i + 1;
-      if (debug)
-        printk(KERN_NOTICE "[%s:%d][%s:%d] %s fie->index:%d fie->width:%d "
-                           "fie->height:%d fie->code:%d return",
-               KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-               __FUNCTION__, fie->index, fie->width, fie->height, fie->code);
-      return 0;
-    }
+  /* Only one framerate supported (30fps at index 0) */
+  if (fie->index < MAX9296_NUM_FRAMERATES) {
+    fie->interval.denominator = max9296_framerates[fie->index];
+    if (debug)
+      printk(KERN_NOTICE "[%s:%d][%s:%d] %s fie->index:%d fie->width:%d "
+                         "fie->height:%d fie->code:%d denominator:%d return",
+             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+             __FUNCTION__, fie->index, fie->width, fie->height, fie->code,
+             fie->interval.denominator);
+    return 0;
   }
+
   if (debug)
     printk(KERN_DEBUG "[%s:%d][%s:%d] %s fie->index:%d fie->width:%d "
                       "fie->height:%d fie->code:%d return err",
