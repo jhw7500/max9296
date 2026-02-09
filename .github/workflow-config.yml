@@ -1,0 +1,56 @@
+# GitHub Actions Workflow Configuration
+#
+# This file controls enable/disable toggles for automatic workflows.
+# Workflows should default to enabled if this file is missing.
+
+# Shared workflow version pin for jhw7500/automation.
+#
+# NOTE: GitHub Actions does not allow dynamic refs in `uses: ...@ref`, so this value
+# is used by a repo automation workflow that opens a PR updating all `uses:` refs.
+automation_ref: v1.23
+
+# Global review behavior.
+# - manual triggers (e.g. @gemini-cli /review, @claude) should keep working regardless.
+# - set review.auto=false to disable automatic PR reviews.
+review:
+  auto: false
+
+# Per-workflow toggles.
+# Comment-driven workflows should be explicitly controllable even in internal repos.
+workflows:
+  # Repo-specific CI workflows
+  build-test:
+    enabled: true
+  shellcheck:
+    enabled: true
+
+  # Repo automation helpers
+  bump-automation-ref:
+    enabled: true
+
+  # Shared automation workflow wrappers
+  auto-rereview-request:
+    enabled: true
+  claude-code-review:
+    enabled: true
+  gemini-auto-review:
+    enabled: true
+  gemini-dispatch:
+    enabled: true
+  gemini-invoke:
+    enabled: true
+  gemini-review:
+    enabled: true
+  gemini-scheduled-triage:
+    enabled: true
+  gemini-triage:
+    enabled: true
+
+  opencode:
+    enabled: true
+  opencode-auto-review:
+    enabled: true
+  gemini-chat:
+    enabled: true
+  claude:
+    enabled: true
