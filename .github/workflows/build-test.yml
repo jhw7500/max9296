@@ -5,30 +5,16 @@ on:
     branches: [ main, master ]
     paths:
       - '**.c'
-      - '**.cpp'
-      - '**.cc'
       - '**.h'
-      - '**.hpp'
-      - '**.hh'
       - 'Makefile'
-      - 'build.sh'
-      - 'dist/**'
-      - 'wlan-bridge/**'
       - '.github/workflows/build-test.yml'
       - '.github/workflow-config.yml'
   pull_request:
     branches: [ main, master ]
     paths:
       - '**.c'
-      - '**.cpp'
-      - '**.cc'
       - '**.h'
-      - '**.hpp'
-      - '**.hh'
       - 'Makefile'
-      - 'build.sh'
-      - 'dist/**'
-      - 'wlan-bridge/**'
       - '.github/workflows/build-test.yml'
       - '.github/workflow-config.yml'
   workflow_dispatch:
@@ -58,7 +44,7 @@ jobs:
           force-run: ${{ github.event.inputs.force_run || 'false' }}
 
   build:
-    name: Build Package
+    name: Build Kernel Module
     needs: check-enabled
     if: needs.check-enabled.outputs.enabled == 'true'
     runs-on: ubuntu-latest
@@ -66,94 +52,66 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Install dependencies
+      - name: Install kernel headers and build tools
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
-            libpcap-dev \
-            jq \
-            dpkg-dev
+            linux-headers-$(uname -r) \
+            kmod
 
-      - name: Verify wlan-bridge submodule
+      - name: Build kernel module
         run: |
-          if [ ! -d "wlan-bridge/dumb" ]; then
-            echo "Error: wlan-bridge submodule not properly initialized"
-            exit 1
-          fi
-
-      - name: Run build script
-        run: |
-          chmod +x build.sh
-          ./build.sh
+          # Use system kernel headers for build verification
+          export KERNEL_SRC=/lib/modules/$(uname -r)/build
+          make KERNEL_SRC=$KERNEL_SRC
 
       - name: Verify build artifacts
         run: |
-          # Check if .deb package was created
-          if [ ! -f release/wlan.deb ]; then
-            echo "Error: wlan.deb not found in release/"
+          # Check if kernel module was created
+          if [ ! -f max9296.ko ]; then
+            echo "Error: max9296.ko not found"
             exit 1
           fi
 
-          # Check package metadata
-          dpkg-deb -I release/wlan.deb
+          echo "Kernel module built successfully!"
+          ls -lh max9296.ko
 
-          # Verify package contents
-          echo "Checking package contents..."
-          dpkg-deb -c release/wlan.deb | grep -E "(dumb|config.json|postinst|postrm|prerm)"
-
-          # Verify binaries exist in package
-          dpkg-deb -c release/wlan.deb | grep "usr/local/wlan-bridge/dumb/dumb" || exit 1
-          dpkg-deb -c release/wlan.deb | grep "usr/local/wlan-bridge/dumb/dumb-tpacket" || exit 1
-          dpkg-deb -c release/wlan.deb | grep "usr/local/etc/config.json" || exit 1
-
-          echo "All build artifacts verified!"
-
-      - name: Validate config.json
+      - name: Check module info
         run: |
-          # Extract config.json from package
-          dpkg-deb -x release/wlan.deb /tmp/wlan-extract
+          # Display module information
+          echo "### Module Information"
+          modinfo max9296.ko || true
 
-          # Validate JSON syntax
-          if [ -f /tmp/wlan-extract/usr/local/etc/config.json ]; then
-            jq empty /tmp/wlan-extract/usr/local/etc/config.json
-            echo "config.json is valid JSON"
+          # Check for basic module sections
+          echo ""
+          echo "### Module Sections"
+          readelf -S max9296.ko | grep -E "\.text|\.data|\.bss|\.modinfo" || true
+
+      - name: Verify module symbols
+        run: |
+          # Check for expected symbols
+          echo "### Checking module symbols..."
+          nm max9296.ko | grep -E "(init_module|cleanup_module)" || echo "Warning: Standard module symbols not found"
+
+      - name: Static analysis
+        run: |
+          # Run sparse if available (kernel static analysis)
+          echo "### Static Analysis"
+          if command -v sparse &> /dev/null; then
+            make C=1 KERNEL_SRC=/lib/modules/$(uname -r)/build || echo "Sparse analysis completed with warnings"
           else
-            echo "Error: config.json not found in package"
-            exit 1
+            echo "Sparse not available, skipping static analysis"
           fi
-
-      - name: Verify DEBIAN scripts
-        run: |
-          # Extract DEBIAN scripts
-          dpkg-deb -e release/wlan.deb /tmp/wlan-debian
-
-          # Check if maintainer scripts exist
-          if [ ! -f /tmp/wlan-debian/postinst ]; then
-            echo "Error: postinst not found"
-            exit 1
-          fi
-          if [ ! -f /tmp/wlan-debian/postrm ]; then
-            echo "Error: postrm not found"
-            exit 1
-          fi
-          if [ ! -f /tmp/wlan-debian/prerm ]; then
-            echo "Error: prerm not found"
-            exit 1
-          fi
-
-          echo "All DEBIAN scripts verified!"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wlan-package
+          name: max9296-module
           path: |
-            release/*.deb
-            release/*.tar
+            max9296.ko
+            Module.symvers
           retention-days: 7
 
       - name: Build Summary
@@ -161,13 +119,18 @@ jobs:
         run: |
           echo "## Build Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f release/wlan.deb ]; then
-            echo "Package built successfully" >> $GITHUB_STEP_SUMMARY
+          if [ -f max9296.ko ]; then
+            echo "✅ Kernel module built successfully" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Package Info" >> $GITHUB_STEP_SUMMARY
-            dpkg-deb -I release/wlan.deb | grep -E "(Package|Version|Architecture)" >> $GITHUB_STEP_SUMMARY || true
+            echo "### Module Info" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            modinfo max9296.ko 2>/dev/null || echo "Module info not available" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### File Size" >> $GITHUB_STEP_SUMMARY
+            ls -lh max9296.ko >> $GITHUB_STEP_SUMMARY
           else
-            echo "Package build failed" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Kernel module build failed" >> $GITHUB_STEP_SUMMARY
           fi
 
   skipped:
