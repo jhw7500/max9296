@@ -1882,7 +1882,7 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
            fie->pad);
     return -EINVAL;
   }
-  if (fie->index >= MAX9296_NUM_FRAMERATES) {
+  if (fie->index >= DEFAULT_FRAMERATE_FPS) {
     if (debug)
       printk(KERN_CRIT "[%s:%d][%s:%d] %s fie->index:%d return err", KEYWORD,
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
@@ -1900,25 +1900,15 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
   }
 
   fie->interval.numerator = 1;
-
-  /* Only one framerate supported (30fps at index 0) */
-  if (fie->index < MAX9296_NUM_FRAMERATES) {
-    fie->interval.denominator = max9296_framerates[fie->index];
-    if (debug)
-      printk(KERN_NOTICE "[%s:%d][%s:%d] %s fie->index:%d fie->width:%d "
-                         "fie->height:%d fie->code:%d denominator:%d return",
-             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-             __FUNCTION__, fie->index, fie->width, fie->height, fie->code,
-             fie->interval.denominator);
-    return 0;
-  }
+  fie->interval.denominator = fie->index + 1;  /* 1, 2, 3, ..., 30 fps */
 
   if (debug)
-    printk(KERN_DEBUG "[%s:%d][%s:%d] %s fie->index:%d fie->width:%d "
-                      "fie->height:%d fie->code:%d return err",
+    printk(KERN_NOTICE "[%s:%d][%s:%d] %s fie->index:%d fie->width:%d "
+                       "fie->height:%d fie->code:%d denominator:%d return",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-           __FUNCTION__, fie->index, fie->width, fie->height, fie->code);
-  return -EINVAL;
+           __FUNCTION__, fie->index, fie->width, fie->height, fie->code,
+           fie->interval.denominator);
+  return 0;
 }
 
 static int max9296_g_frame_interval(struct v4l2_subdev *sd,
