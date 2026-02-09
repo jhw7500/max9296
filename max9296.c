@@ -42,7 +42,8 @@
 #define SW_VERSION "1.8"
 #define SERDES_3GBPS
 #define SERDES_STPx
-#define _FILE_ (strrchr(__FILE__, '/') ? (strrchr(__FILE__, '/') + 1) : __FILE__)
+#define _FILE_                                                                 \
+  (strrchr(__FILE__, '/') ? (strrchr(__FILE__, '/') + 1) : __FILE__)
 #define KEYWORD "I2C"
 
 static int debug;
@@ -562,8 +563,8 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
     if (ret < 0) {
       printk(KERN_ERR "[%s:%d][%s:%d] retry:%d Error i2c write reg : [0x%x] "
                       "reg=0x%x(%d byte), val=0x%x(%d byte)",
-             KEYWORD, client->adapter->nr, _FILE_, __LINE__, retry,
-             slave_addr, reg, reg_byte, val, val_byte);
+             KEYWORD, client->adapter->nr, _FILE_, __LINE__, retry, slave_addr,
+             reg, reg_byte, val, val_byte);
     } else
       break;
   } while (--retry);
@@ -579,11 +580,11 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
   if (ret != 1) {
     return -EIO;
   }
-
-  printk(KERN_NOTICE "[%s:%d][%s:%d] Success!! i2c write reg : [0x%x] "
-                     "reg=0x%x(%d byte), val=0x%x(%d byte)(ret:%d)\n",
-         KEYWORD, client->adapter->nr, _FILE_, __LINE__, slave_addr, reg,
-         reg_byte, val, val_byte, ret);
+  if (debug)
+    printk(KERN_NOTICE "[%s:%d][%s:%d] Success!! i2c write reg : [0x%x] "
+                       "reg=0x%x(%d byte), val=0x%x(%d byte)(ret:%d)\n",
+           KEYWORD, client->adapter->nr, _FILE_, __LINE__, slave_addr, reg,
+           reg_byte, val, val_byte, ret);
 
   return 0;
 }
@@ -1033,9 +1034,8 @@ static int max9296_try_fmt_internal(struct v4l2_subdev *sd,
   fmt->quantization = V4L2_QUANTIZATION_FULL_RANGE;
   fmt->xfer_func = V4L2_MAP_XFER_FUNC_DEFAULT(fmt->colorspace);
   if (debug)
-    printk(KERN_INFO
-           "[%s:%d][%s:%d] %s (width:%u height:%u code:0x%x field:%u "
-           "colorspace:%u ycbcr_enc:%u quantization:%u xfer_func:%u)",
+    printk(KERN_INFO "[%s:%d][%s:%d] %s (width:%u height:%u code:0x%x field:%u "
+                     "colorspace:%u ycbcr_enc:%u quantization:%u xfer_func:%u)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            __FUNCTION__, fmt->width, fmt->height, fmt->code, fmt->field,
            fmt->colorspace, fmt->ycbcr_enc, fmt->quantization, fmt->xfer_func);
@@ -1372,8 +1372,8 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
 
   /* AWB (auto/manual) */
   awb_val = ch_ctrl->awb ? AP1302_AWB_CTRL_AUTO : 0x0000;
-  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2,
-                            2);
+  ret =
+      maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2, 2);
   if (ret)
     err = ret;
 
@@ -1386,8 +1386,7 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
 
   /* Rotation (hflip + vflip combined) */
   rot = (ch_ctrl->hflip ? 0x01 : 0x00) | (ch_ctrl->vflip ? 0x02 : 0x00);
-  ret =
-      maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_ROTATION, rot, 2, 2);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_ROTATION, rot, 2, 2);
   if (ret)
     err = ret;
 
@@ -1520,8 +1519,8 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   /* Per-channel controls - Channel 0 */
   case V4L2_CID_EXPOSURE_AUTO_CH0: {
     u16 ae_val = ctrl->val ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
-    ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_AE_CTRL, ae_val, 2,
-                              2);
+    ret =
+        maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2);
     if (!ret && !ctrl->val) {
       u32 exp_val =
           sensor->ctrl_cache.ch0.exposure
@@ -1582,8 +1581,8 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   /* Per-channel controls - Channel 1 */
   case V4L2_CID_EXPOSURE_AUTO_CH1: {
     u16 ae_val = ctrl->val ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
-    ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_AE_CTRL, ae_val, 2,
-                              2);
+    ret =
+        maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2);
     if (!ret && !ctrl->val) {
       u32 exp_val =
           sensor->ctrl_cache.ch1.exposure
@@ -1807,8 +1806,7 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
          ctrls->saturation_ch0 ? ctrls->saturation_ch0->val : 0,
          ctrls->hue->val, ctrls->contrast_ch0 ? ctrls->contrast_ch0->val : 0,
          ctrls->hflip_ch0 ? ctrls->hflip_ch0->val : 0,
-         ctrls->vflip_ch0 ? ctrls->vflip_ch0->val : 0,
-         ctrls->light_freq->val);
+         ctrls->vflip_ch0 ? ctrls->vflip_ch0->val : 0, ctrls->light_freq->val);
 
   if (hdl->error) {
     printk(KERN_CRIT "[%s:%d][%s:%d] %s hdl->error", KEYWORD,
@@ -1900,7 +1898,7 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
   }
 
   fie->interval.numerator = 1;
-  fie->interval.denominator = fie->index + 1;  /* 1, 2, 3, ..., 30 fps */
+  fie->interval.denominator = fie->index + 1; /* 1, 2, 3, ..., 30 fps */
 
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s fie->index:%d fie->width:%d "
@@ -1919,9 +1917,9 @@ static int max9296_g_frame_interval(struct v4l2_subdev *sd,
   fi->interval = sensor->frame_interval;
   mutex_unlock(&sensor->lock);
   if (debug)
-    printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%u denominator:%u)",
-           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-           __FUNCTION__, fi->interval.numerator, fi->interval.denominator);
+    printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%u denominator:%u)", KEYWORD,
+           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
+           fi->interval.numerator, fi->interval.denominator);
   return 0;
 }
 
@@ -1949,9 +1947,9 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
   sensor->fps = fi->interval.denominator;
 
   if (debug)
-    printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%u denominator:%u)",
-           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-           __FUNCTION__, fi->interval.numerator, fi->interval.denominator);
+    printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%u denominator:%u)", KEYWORD,
+           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
+           fi->interval.numerator, fi->interval.denominator);
 
   __v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
                            max9296_calc_pixel_rate(sensor));
@@ -2112,7 +2110,6 @@ int max9296_loadfw(struct i2c_client *client) {
       burst_size = BURST_SIZE;
       usleep_range(5000, 5500);
     }
-
   }
 
   retval = end_fw_load(client);
@@ -2170,7 +2167,8 @@ static int max9296_load_firmware(struct v4l2_subdev *sd) {
 
   INIT_WORK(&sensor->fw_work, max9296_fw_work_handler);
   init_waitqueue_head(&sensor->fw_wait);
-  snprintf(str, sizeof(str), "max9296_fw_%s", dev_name(&sensor->i2c_client->dev));
+  snprintf(str, sizeof(str), "max9296_fw_%s",
+           dev_name(&sensor->i2c_client->dev));
   q = create_singlethread_workqueue(str);
   if (q) {
     prepare_to_wait(&sensor->fw_wait, &wait, TASK_UNINTERRUPTIBLE);
@@ -2637,31 +2635,41 @@ static int max9296_shared_init(void *data) {
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  while (!kthread_should_stop()) {
+  while (1) {
     set_current_state(TASK_INTERRUPTIBLE);
 
-    if (sensor->shared.sensor != NULL) {
-      schedule();
-      continue;
-    }
+    if (kthread_should_stop())
+      break;
 
-    if (sensor->shared.client == NULL) {
-      sensor->shared.client = of_find_i2c_device_by_node(sensor->shared.np);
+    if (sensor->shared.sensor == NULL) {
       if (sensor->shared.client == NULL) {
-        usleep_range(10000, 11000);
-        continue;
+        sensor->shared.client = of_find_i2c_device_by_node(sensor->shared.np);
+        if (sensor->shared.client == NULL) {
+          // dev_warn(&sensor->i2c_client->dev, "warning not found i2c_client
+          // from handle.. this device works in single mode..\n");
+          usleep_range(10000, 11000);
+        } else {
+          sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
+          if (sensor->shared.sd == NULL)
+            usleep_range(10000, 11000);
+          else {
+            sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
+            if (sensor->shared.sensor == NULL)
+              usleep_range(10000, 11000);
+          }
+        }
+      } else {
+        sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
+        if (sensor->shared.sd == NULL)
+          usleep_range(10000, 11000);
+        else {
+          sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
+          if (sensor->shared.sensor == NULL)
+            usleep_range(10000, 11000);
+        }
       }
-    }
-
-    sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
-    if (sensor->shared.sd == NULL) {
-      usleep_range(10000, 11000);
-      continue;
-    }
-
-    sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
-    if (sensor->shared.sensor == NULL)
-      usleep_range(10000, 11000);
+    } else
+      break;
   }
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
@@ -2976,7 +2984,8 @@ static int max9296_probe(struct i2c_client *client) {
     }
   }
 
-  snprintf(str, sizeof(str), "max9296_enable_%s", dev_name(&sensor->i2c_client->dev));
+  snprintf(str, sizeof(str), "max9296_enable_%s",
+           dev_name(&sensor->i2c_client->dev));
   sensor->thread_en = kthread_run(max9296_enable, sensor, str);
   if (IS_ERR(sensor->thread_en)) {
     printk(KERN_CRIT "[%s:%d][%s:%d] sensor thread enable error", KEYWORD,
@@ -3023,7 +3032,8 @@ static int max9296_remove(struct i2c_client *client) {
     kthread_stop(sensor->thread_fsync);
   if (sensor->thread_fw_init && !IS_ERR(sensor->thread_fw_init))
     kthread_stop(sensor->thread_fw_init);
-  if (sensor->shared.thread_shared_init && !IS_ERR(sensor->shared.thread_shared_init))
+  if (sensor->shared.thread_shared_init &&
+      !IS_ERR(sensor->shared.thread_shared_init))
     kthread_stop(sensor->shared.thread_shared_init);
 
   /* Clean up shared sensor references to prevent use-after-free */
