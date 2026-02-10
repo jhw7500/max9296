@@ -39,7 +39,7 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-#define SW_VERSION "1.9"
+#define SW_VERSION "2.0"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
@@ -2383,13 +2383,13 @@ static int max9296_fsync(void *data) {
 
     if (sensor->restart == 1) {
       restart_cnt = 1;
-      msleep(300);
+      msleep_interruptible(300);
       continue;
     }
 
     if (restart_cnt > 0) {
       --restart_cnt;
-      ssleep(1);
+      msleep_interruptible(1000);
       continue;
     }
 
@@ -2397,7 +2397,7 @@ static int max9296_fsync(void *data) {
     if (sensor->shared.sensor == NULL) {
       if (sensor->state.enable == MAX9296_STATE_DONE) {
         if (sensor->state.fsync != MAX9296_STATE_RUNNING)
-          ssleep(1);
+          msleep_interruptible(1000);
 
         if (low == 0) {
           low = (1000000 / sensor->fps);
@@ -2421,10 +2421,10 @@ static int max9296_fsync(void *data) {
         if ((sensor->state.enable == MAX9296_STATE_DONE) &&
             (sensor->shared.sensor->state.enable == MAX9296_STATE_DONE)) {
           if (sensor->state.fsync != MAX9296_STATE_RUNNING)
-            ssleep(1);
+            msleep_interruptible(1000);
 
           if (sensor->shared.sensor->state.fsync != MAX9296_STATE_RUNNING)
-            ssleep(1);
+            msleep_interruptible(1000);
 
           if (low == 0) {
             low = (1000000 / sensor->fps);
@@ -2471,7 +2471,7 @@ static int max9296_fsync(void *data) {
 
         if (start) {
           if (*fsync_state != MAX9296_STATE_RUNNING)
-            ssleep(1);
+            msleep_interruptible(1000);
 
           if (low == 0) {
             low = (1000000 / fps);
@@ -2520,7 +2520,7 @@ static int max9296_enable(void *data) {
         (sensor->state.fsync == MAX9296_STATE_RUNNING)) {
       // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
       // __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
-      msleep(300);
+      msleep_interruptible(300);
       if (sensor->shared.sensor != NULL) {
         if (sensor->shared.sensor->state.setup == MAX9296_STATE_DONE) {
           if (sensor->fsync_gpio != NULL) {
@@ -2543,7 +2543,7 @@ static int max9296_enable(void *data) {
                                       AP1302_AE_CTRL_MANUAL, 2, 2);
             max9296_write_per_channel(sensor->shared.sensor, AP1302_REG_AE_CTRL,
                                       AP1302_AE_CTRL_MANUAL, 2, 2);
-            msleep(100);
+            msleep_interruptible(100);
 
             // awb - per-channel
             max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
@@ -2551,7 +2551,7 @@ static int max9296_enable(void *data) {
             max9296_write_per_channel(sensor->shared.sensor,
                                       AP1302_REG_AWB_CTRL, AP1302_AWB_CTRL_AUTO,
                                       2, 2);
-            msleep(100);
+            msleep_interruptible(100);
 
             // lsc - per-channel
             max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2,
@@ -2571,15 +2571,15 @@ static int max9296_enable(void *data) {
           // ae - per-channel (init to manual first, then auto)
           max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                     AP1302_AE_CTRL_MANUAL, 2, 2);
-          msleep(100);
+          msleep_interruptible(100);
           max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                     AP1302_AE_CTRL_AUTO, 2, 2);
-          msleep(100);
+          msleep_interruptible(100);
 
           // awb - per-channel
           max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
                                     AP1302_AWB_CTRL_AUTO, 2, 2);
-          msleep(100);
+          msleep_interruptible(100);
 
           // lsc - per-channel
           max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
@@ -2596,15 +2596,15 @@ static int max9296_enable(void *data) {
         // ae - per-channel (init to manual first, then auto)
         max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                   AP1302_AE_CTRL_MANUAL, 2, 2);
-        msleep(100);
+        msleep_interruptible(100);
         max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                   AP1302_AE_CTRL_AUTO, 2, 2);
-        msleep(100);
+        msleep_interruptible(100);
 
         // awb - per-channel
         max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
                                   AP1302_AWB_CTRL_AUTO, 2, 2);
-        msleep(100);
+        msleep_interruptible(100);
 
         // lsc - per-channel
         max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
@@ -2871,6 +2871,7 @@ static int max9296_probe(struct i2c_client *client) {
                KEYWORD, client->adapter->nr, _FILE_, __LINE__);
         goto free_ctrls;
       }
+      get_task_struct(sensor->shared.thread_shared_init);
     }
   }
 
@@ -3011,6 +3012,18 @@ static int max9296_probe(struct i2c_client *client) {
   return 0;
 
 free_ctrls:
+  /* Stop threads that were already started */
+  if (sensor->thread_en && !IS_ERR(sensor->thread_en))
+    kthread_stop(sensor->thread_en);
+  if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync))
+    kthread_stop(sensor->thread_fsync);
+  if (sensor->shared.thread_shared_init &&
+      !IS_ERR(sensor->shared.thread_shared_init)) {
+    kthread_stop(sensor->shared.thread_shared_init);
+    put_task_struct(sensor->shared.thread_shared_init);
+  }
+  sensor->shared.thread_shared_init = NULL;
+
   v4l2_ctrl_handler_free(&sensor->ctrls.handler);
 entity_cleanup:
   media_entity_cleanup(&sensor->sd.entity);
@@ -3021,36 +3034,54 @@ entity_cleanup:
 static int max9296_remove(struct i2c_client *client) {
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
+  struct max9296_dev *peer = sensor->shared.sensor;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
-  /* Stop kernel threads before tearing down resources */
-  if (sensor->thread_en && !IS_ERR(sensor->thread_en))
-    kthread_stop(sensor->thread_en);
-  if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync))
-    kthread_stop(sensor->thread_fsync);
-  if (sensor->thread_fw_init && !IS_ERR(sensor->thread_fw_init))
-    kthread_stop(sensor->thread_fw_init);
-  if (sensor->shared.thread_shared_init &&
-      !IS_ERR(sensor->shared.thread_shared_init))
-    kthread_stop(sensor->shared.thread_shared_init);
-
-  /* Clean up shared sensor references to prevent use-after-free */
-  if (sensor->shared.sensor) {
-    /* If the other sensor points back to us, clear its reference */
-    if (sensor->shared.sensor->shared.sensor == sensor)
-      sensor->shared.sensor->shared.sensor = NULL;
-    sensor->shared.sensor = NULL;
+  /* Phase 1: Stop peer threads that reference our memory */
+  if (peer && peer->shared.sensor == sensor) {
+    WRITE_ONCE(peer->shared.sensor, NULL);
+    if (peer->thread_fsync && !IS_ERR(peer->thread_fsync)) {
+      kthread_stop(peer->thread_fsync);
+      peer->thread_fsync = NULL;
+    }
+    if (peer->thread_en && !IS_ERR(peer->thread_en)) {
+      kthread_stop(peer->thread_en);
+      peer->thread_en = NULL;
+    }
   }
+
+  /* Phase 2: Stop our own threads */
+  if (sensor->thread_en && !IS_ERR(sensor->thread_en)) {
+    kthread_stop(sensor->thread_en);
+    sensor->thread_en = NULL;
+  }
+  if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync)) {
+    kthread_stop(sensor->thread_fsync);
+    sensor->thread_fsync = NULL;
+  }
+  if (sensor->thread_fw_init && !IS_ERR(sensor->thread_fw_init)) {
+    kthread_stop(sensor->thread_fw_init);
+    sensor->thread_fw_init = NULL;
+  }
+  if (sensor->shared.thread_shared_init &&
+      !IS_ERR(sensor->shared.thread_shared_init)) {
+    kthread_stop(sensor->shared.thread_shared_init);
+    put_task_struct(sensor->shared.thread_shared_init);
+  }
+  sensor->shared.thread_shared_init = NULL;
+
+  /* Phase 3: Clean up shared references */
+  sensor->shared.sensor = NULL;
   if (sensor->shared.client) {
     put_device(&sensor->shared.client->dev);
     sensor->shared.client = NULL;
   }
 
+  /* Phase 4: V4L2/media cleanup */
   device_remove_file(&client->dev, &dev_attr_rotate);
   device_remove_file(&client->dev, &dev_attr_enable);
-
   v4l2_async_unregister_subdev(&sensor->sd);
   media_entity_cleanup(&sensor->sd.entity);
   v4l2_ctrl_handler_free(&sensor->ctrls.handler);
