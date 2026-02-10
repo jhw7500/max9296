@@ -2367,18 +2367,6 @@ static const struct media_entity_operations max9296_sd_media_ops = {
     .link_setup = max9296_link_setup,
 };
 
-static bool max9296_interruptible_sleep(unsigned int ms)
-{
-    unsigned long end = jiffies + msecs_to_jiffies(ms);
-
-    while (time_before(jiffies, end)) {
-        if (kthread_should_stop())
-            return true;
-        usleep_range(10000, 11000);
-    }
-    return false;
-}
-
 //-------------------------------------------------------------------------
 static int max9296_fsync(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
@@ -2395,15 +2383,13 @@ static int max9296_fsync(void *data) {
 
     if (sensor->restart == 1) {
       restart_cnt = 1;
-      if (max9296_interruptible_sleep(300))
-        break;
+      msleep_interruptible(300);
       continue;
     }
 
     if (restart_cnt > 0) {
       --restart_cnt;
-      if (max9296_interruptible_sleep(1000))
-        break;
+      msleep_interruptible(1000);
       continue;
     }
 
@@ -2411,8 +2397,7 @@ static int max9296_fsync(void *data) {
     if (sensor->shared.sensor == NULL) {
       if (sensor->state.enable == MAX9296_STATE_DONE) {
         if (sensor->state.fsync != MAX9296_STATE_RUNNING)
-          if (max9296_interruptible_sleep(1000))
-            break;
+          msleep_interruptible(1000);
 
         if (low == 0) {
           low = (1000000 / sensor->fps);
@@ -2436,12 +2421,10 @@ static int max9296_fsync(void *data) {
         if ((sensor->state.enable == MAX9296_STATE_DONE) &&
             (sensor->shared.sensor->state.enable == MAX9296_STATE_DONE)) {
           if (sensor->state.fsync != MAX9296_STATE_RUNNING)
-            if (max9296_interruptible_sleep(1000))
-              break;
+            msleep_interruptible(1000);
 
           if (sensor->shared.sensor->state.fsync != MAX9296_STATE_RUNNING)
-            if (max9296_interruptible_sleep(1000))
-              break;
+            msleep_interruptible(1000);
 
           if (low == 0) {
             low = (1000000 / sensor->fps);
@@ -2488,8 +2471,7 @@ static int max9296_fsync(void *data) {
 
         if (start) {
           if (*fsync_state != MAX9296_STATE_RUNNING)
-            if (max9296_interruptible_sleep(1000))
-              break;
+            msleep_interruptible(1000);
 
           if (low == 0) {
             low = (1000000 / fps);
@@ -2538,8 +2520,7 @@ static int max9296_enable(void *data) {
         (sensor->state.fsync == MAX9296_STATE_RUNNING)) {
       // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
       // __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
-      if (max9296_interruptible_sleep(300))
-        break;
+      msleep_interruptible(300);
       if (sensor->shared.sensor != NULL) {
         if (sensor->shared.sensor->state.setup == MAX9296_STATE_DONE) {
           if (sensor->fsync_gpio != NULL) {
@@ -2562,8 +2543,7 @@ static int max9296_enable(void *data) {
                                       AP1302_AE_CTRL_MANUAL, 2, 2);
             max9296_write_per_channel(sensor->shared.sensor, AP1302_REG_AE_CTRL,
                                       AP1302_AE_CTRL_MANUAL, 2, 2);
-            if (max9296_interruptible_sleep(100))
-              break;
+            msleep_interruptible(100);
 
             // awb - per-channel
             max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
@@ -2571,8 +2551,7 @@ static int max9296_enable(void *data) {
             max9296_write_per_channel(sensor->shared.sensor,
                                       AP1302_REG_AWB_CTRL, AP1302_AWB_CTRL_AUTO,
                                       2, 2);
-            if (max9296_interruptible_sleep(100))
-              break;
+            msleep_interruptible(100);
 
             // lsc - per-channel
             max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2,
@@ -2592,18 +2571,15 @@ static int max9296_enable(void *data) {
           // ae - per-channel (init to manual first, then auto)
           max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                     AP1302_AE_CTRL_MANUAL, 2, 2);
-          if (max9296_interruptible_sleep(100))
-            break;
+          msleep_interruptible(100);
           max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                     AP1302_AE_CTRL_AUTO, 2, 2);
-          if (max9296_interruptible_sleep(100))
-            break;
+          msleep_interruptible(100);
 
           // awb - per-channel
           max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
                                     AP1302_AWB_CTRL_AUTO, 2, 2);
-          if (max9296_interruptible_sleep(100))
-            break;
+          msleep_interruptible(100);
 
           // lsc - per-channel
           max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
@@ -2620,18 +2596,15 @@ static int max9296_enable(void *data) {
         // ae - per-channel (init to manual first, then auto)
         max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                   AP1302_AE_CTRL_MANUAL, 2, 2);
-        if (max9296_interruptible_sleep(100))
-          break;
+        msleep_interruptible(100);
         max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
                                   AP1302_AE_CTRL_AUTO, 2, 2);
-        if (max9296_interruptible_sleep(100))
-          break;
+        msleep_interruptible(100);
 
         // awb - per-channel
         max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
                                   AP1302_AWB_CTRL_AUTO, 2, 2);
-        if (max9296_interruptible_sleep(100))
-          break;
+        msleep_interruptible(100);
 
         // lsc - per-channel
         max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
@@ -3068,12 +3041,18 @@ static int max9296_remove(struct i2c_client *client) {
   }
 
   /* Phase 2: Stop our own threads */
-  if (sensor->thread_en && !IS_ERR(sensor->thread_en))
+  if (sensor->thread_en && !IS_ERR(sensor->thread_en)) {
     kthread_stop(sensor->thread_en);
-  if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync))
+    sensor->thread_en = NULL;
+  }
+  if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync)) {
     kthread_stop(sensor->thread_fsync);
-  if (sensor->thread_fw_init && !IS_ERR(sensor->thread_fw_init))
+    sensor->thread_fsync = NULL;
+  }
+  if (sensor->thread_fw_init && !IS_ERR(sensor->thread_fw_init)) {
     kthread_stop(sensor->thread_fw_init);
+    sensor->thread_fw_init = NULL;
+  }
   if (sensor->shared.thread_shared_init &&
       !IS_ERR(sensor->shared.thread_shared_init)) {
     kthread_stop(sensor->shared.thread_shared_init);
