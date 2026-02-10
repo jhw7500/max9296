@@ -3012,6 +3012,18 @@ static int max9296_probe(struct i2c_client *client) {
   return 0;
 
 free_ctrls:
+  /* Stop threads that were already started */
+  if (sensor->thread_en && !IS_ERR(sensor->thread_en))
+    kthread_stop(sensor->thread_en);
+  if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync))
+    kthread_stop(sensor->thread_fsync);
+  if (sensor->shared.thread_shared_init &&
+      !IS_ERR(sensor->shared.thread_shared_init)) {
+    kthread_stop(sensor->shared.thread_shared_init);
+    put_task_struct(sensor->shared.thread_shared_init);
+  }
+  sensor->shared.thread_shared_init = NULL;
+
   v4l2_ctrl_handler_free(&sensor->ctrls.handler);
 entity_cleanup:
   media_entity_cleanup(&sensor->sd.entity);
