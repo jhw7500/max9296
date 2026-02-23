@@ -580,8 +580,8 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
   if (ret != 1) {
     return -EIO;
   }
-  if (debug)
-    printk(KERN_NOTICE "[%s:%d][%s:%d] Success!! i2c write reg : [0x%x] "
+  if (1)
+    printk(KERN_INFO "[%s:%d][%s:%d] Success!! i2c write reg : [0x%x] "
                        "reg=0x%x(%d byte), val=0x%x(%d byte)(ret:%d)\n",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__, slave_addr, reg,
            reg_byte, val, val_byte, ret);
