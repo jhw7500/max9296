@@ -103,7 +103,7 @@ static int debug;
 #define V4L2_CID_EXPOSURE_CH0 (V4L2_CID_USER_BASE + 0x1013)
 #define V4L2_CID_EXPOSURE_CH1 (V4L2_CID_USER_BASE + 0x1014)
 
-/* Exposure time shared control: ext_time (maps to 0x500c) */
+/* Exposure time shared control: exp_time (maps to 0x500c) */
 #define V4L2_CID_EXP_TIME (V4L2_CID_USER_BASE + 0x1015)
 
 /* LSC strength per-channel (fixed12 u16) */
@@ -220,7 +220,7 @@ struct max9296_ctrl_cache {
   struct max9296_channel_ctrl ch1;
 
   /* Shared setting value, applied to both channels when set */
-  int exposure; /* V4L2_CID_EXP_TIME - ext_time (u32) */
+  int exposure; /* V4L2_CID_EXP_TIME - exp_time (u32) */
 };
 
 struct max9296_dev {
@@ -1700,7 +1700,7 @@ static const struct max9296_ctrl_desc max9296_per_ch_ctrls[] = {
     CTRL_DESC(V4L2_CID_GAIN_CH0, V4L2_CID_GAIN_CH1, V4L2_CTRL_TYPE_INTEGER,
               "Gain", 0, 65535, 256, gain_ch0, gain_ch1),
     CTRL_DESC(V4L2_CID_EXPOSURE_CH0, V4L2_CID_EXPOSURE_CH1,
-              V4L2_CTRL_TYPE_INTEGER, "Ext Time", 0, INT_MAX, 10000,
+              V4L2_CTRL_TYPE_INTEGER, "Exp Time", 0, INT_MAX, 10000,
               exposure_ch0, exposure_ch1),
     CTRL_DESC(V4L2_CID_HFLIP_CH0, V4L2_CID_HFLIP_CH1, V4L2_CTRL_TYPE_BOOLEAN,
               "HFlip", 0, 1, 0, hflip_ch0, hflip_ch1),
@@ -1736,13 +1736,13 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
       v4l2_ctrl_new_std(hdl, ops, V4L2_CID_PIXEL_RATE, 0, INT_MAX, 1,
                         max9296_calc_pixel_rate(sensor));
 
-  /* ext_time: exposure time (same HW register 0x500c) */
+  /* exp_time: exposure time (same HW register 0x500c) */
   {
     static const struct v4l2_ctrl_config cfg_exp_time = {
         .ops = &max9296_ctrl_ops,
         .id = V4L2_CID_EXP_TIME,
         .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "Ext Time",
+        .name = "Exp Time",
         .min = 0,
         .max = INT_MAX,
         .def = 10000,
@@ -1934,19 +1934,35 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
     return -EINVAL;
   }
 
+  unsigned int fps;
+
   mutex_lock(&sensor->lock);
 
-  if (sensor->streaming) {
-    printk(KERN_CRIT "[%s:%d][%s:%d] %s goto", KEYWORD,
-           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-    ret = -EBUSY;
+  if (fi->interval.numerator == 0 || fi->interval.denominator == 0) {
+    ret = -EINVAL;
     goto out;
   }
 
-  sensor->frame_interval = fi->interval;
-  sensor->fps = fi->interval.denominator;
+  fps = fi->interval.denominator / fi->interval.numerator;
 
-  if (debug)
+  if (fps < 1 || fps > 120) {
+    printk(KERN_CRIT "[%s:%d][%s:%d] %s invalid fps %u (valid: 1~120)",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           __FUNCTION__, fps);
+    ret = -EINVAL;
+    goto out;
+  }
+
+  sensor->frame_interval.numerator = 1;
+  sensor->frame_interval.denominator = fps;
+  sensor->fps = fps;
+
+  if (sensor->shared.sensor) {
+    sensor->shared.sensor->frame_interval = sensor->frame_interval;
+    sensor->shared.sensor->fps = fps;
+  }
+
+  //if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%u denominator:%u)", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            fi->interval.numerator, fi->interval.denominator);
@@ -2399,15 +2415,11 @@ static int max9296_fsync(void *data) {
         if (sensor->state.fsync != MAX9296_STATE_RUNNING)
           msleep_interruptible(1000);
 
-        if (low == 0) {
-          low = (1000000 / sensor->fps);
-          low -= high;
-        }
+        low = (1000000 / sensor->fps) - high;
 
         gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
         usleep_range(high, high + high / 10);
         gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
-        // usleep_range(33000, 33000);
         usleep_range(low, low + low / 10);
         sensor->state.fsync = MAX9296_STATE_RUNNING;
       } else {
@@ -2426,18 +2438,12 @@ static int max9296_fsync(void *data) {
           if (sensor->shared.sensor->state.fsync != MAX9296_STATE_RUNNING)
             msleep_interruptible(1000);
 
-          if (low == 0) {
-            low = (1000000 / sensor->fps);
-            low -= high;
-          }
+          low = (1000000 / sensor->fps) - high;
 
           pr_notice_once("[%s:%d][%s:%d] %s fps : %d, low : %d, high : "
                          "%d\n",
                          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
                          __LINE__, __FUNCTION__, sensor->fps, low, high);
-          // if(debug) printk(KERN_DEBUG "[%s:%d][%s:%d] fps : %d, low : %d,
-          // high : %d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
-          // __LINE__, sensor->fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
           usleep_range(high, high + high / 10);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
@@ -2473,18 +2479,12 @@ static int max9296_fsync(void *data) {
           if (*fsync_state != MAX9296_STATE_RUNNING)
             msleep_interruptible(1000);
 
-          if (low == 0) {
-            low = (1000000 / fps);
-            low -= high;
-          }
+          low = (1000000 / fps) - high;
 
           pr_notice_once("[%s:%d][%s:%d] %s fps : %d, low : %d, "
                          "high : %d\n",
                          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
                          __LINE__, __FUNCTION__, fps, low, high);
-          // if(debug) printk(KERN_DEBUG "[%s:%d][%s:%d] fps : %d, low : %d,
-          // high : %d", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
-          // __LINE__, fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
           usleep_range(high, high + high / 10);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
