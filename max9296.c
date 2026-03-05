@@ -65,6 +65,10 @@ static int debug;
 #define AP1302_REG_AWB_CTRL 0x5100
 #define AP1302_REG_LSC_CTRL 0x54a0
 
+/* AR0234CS sensor register (accessed via AP1302 SIPM pass-through) */
+#define AR0234_REG_LED_FLASH_CONTROL 0x3270
+#define AR0234_I2C_ADDR 0x10
+
 /* Image tuning (fixed-point) */
 #define AP1302_REG_BRIGHTNESS 0x7000
 #define AP1302_REG_CONTRAST 0x7002
@@ -109,6 +113,10 @@ static int debug;
 /* LSC strength per-channel (fixed12 u16) */
 #define V4L2_CID_LSC_CH0 (V4L2_CID_USER_BASE + 0x1016)
 #define V4L2_CID_LSC_CH1 (V4L2_CID_USER_BASE + 0x1017)
+
+/* LED Flash control per-channel (AR0234CS R0x3270 via AP1302 SIPM) */
+#define V4L2_CID_LED_FLASH_CH0 (V4L2_CID_USER_BASE + 0x1018)
+#define V4L2_CID_LED_FLASH_CH1 (V4L2_CID_USER_BASE + 0x1019)
 
 enum max9296_mode_id {
   MAX9296_MODE_2560x720 = 0,
@@ -194,6 +202,8 @@ struct max9296_ctrls {
   struct v4l2_ctrl *contrast_ch1;
   struct v4l2_ctrl *saturation_ch0;
   struct v4l2_ctrl *saturation_ch1;
+  struct v4l2_ctrl *led_flash_ch0;
+  struct v4l2_ctrl *led_flash_ch1;
 };
 
 /* Per-channel control settings */
@@ -209,6 +219,7 @@ struct max9296_channel_ctrl {
   int brightness; /* V4L2_CID_BRIGHTNESS_CHx (fixed12 u16) */
   int contrast;   /* V4L2_CID_CONTRAST_CHx (fixed12 u16) */
   int saturation; /* V4L2_CID_SATURATION_CHx (fixed12 u16) */
+  int led_flash;  /* V4L2_CID_LED_FLASH_CHx (AR0234 R0x3270, bit8=EN, bit7:0=DELAY) */
 };
 
 struct max9296_ctrl_cache {
@@ -309,6 +320,9 @@ static const struct reg_value max9296_init_setting_1080p_crop_720p_2ch_30fps[] =
         // auto link
         {0x00, 0x0010, 2, 0x31, 1, 200},
 
+	//MAX9295 SER MFP4 GPIO LOW
+	{0x40, 0x02ca, 2, 0x80, 1, 10},
+
         // CSI port B start video
         {0x40, 0x0311, 2, 0xf0, 1, 200},
         // CSI port A/B enable, portUZYZ B
@@ -333,6 +347,7 @@ static const struct reg_value max9296_init_setting_1080p_crop_720p_2ch_30fps[] =
 
         //
         {0x40, 0x0000, 2, 0xC0, 1, 10},
+
         {0x60, 0x0010, 2, 0x31, 1, 100},
 
         {0x60, 0x006b, 2, 0x12, 1, 10},
@@ -346,6 +361,9 @@ static const struct reg_value max9296_init_setting_1080p_crop_720p_2ch_30fps[] =
         {0x60, 0x008b, 2, 0x32, 1, 10},
 
         {0x00, 0x0010, 2, 0x23, 1, 100},
+
+        //MAX9295 SER(Link B) MFP4 GPIO LOW
+        {0x40, 0x02ca, 2, 0x80, 1, 10},
 
         //
         {0x40, 0x0318, 2, 0x5e, 1, 10},
@@ -407,6 +425,9 @@ static const struct reg_value max9296_init_setting_720p_30fps_L[] = {
     // step 1
     {0x00, 0x0010, 2, 0x22, 1, 300},
 
+    //MAX9295 SER MFP4 GPIO LOW
+    {0x40, 0x02ca, 2, 0x80, 1, 10},
+
     // step 2
     {0x40, 0x0010, 2, 0x22, 1, 310},
 
@@ -442,6 +463,9 @@ static const struct reg_value max9296_init_setting_720p_30fps_L[] = {
 static const struct reg_value max9296_init_setting_720p_30fps_R[] = {
     // step 1
     {0x00, 0x0010, 2, 0x21, 1, 300},
+
+    //MAX9295 SER MFP4 GPIO LOW
+    {0x40, 0x02ca, 2, 0x80, 1, 10},
 
     // step 2
     {0x40, 0x0010, 2, 0x21, 1, 310},
@@ -560,17 +584,19 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
 
   do {
     ret = i2c_transfer(client->adapter, &msg, 1);
-    if (ret < 0) {
-      printk(KERN_ERR "[%s:%d][%s:%d] retry:%d Error i2c write reg : [0x%x] "
-                      "reg=0x%x(%d byte), val=0x%x(%d byte)",
-             KEYWORD, client->adapter->nr, _FILE_, __LINE__, retry, slave_addr,
-             reg, reg_byte, val, val_byte);
-    } else
-      break;
+    if (ret >= 0) break;
+    msleep(1);
   } while (--retry);
 
   if ((retry == 0) && (ret < 0))
+  {
+    printk(KERN_ERR "[%s:%d][%s:%d] Error i2c write reg : [0x%x] "
+                    "reg=0x%x(%d byte), val=0x%x(%d byte)",
+           KEYWORD, client->adapter->nr, _FILE_, __LINE__, msg.addr,
+           reg, reg_byte, val, val_byte);
+
     return ret;
+  }
 
   /*
    * i2c_transfer() returns the number of messages transferred on success.
@@ -582,9 +608,9 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
   }
   if (1)
     printk(KERN_INFO "[%s:%d][%s:%d] Success!! i2c write reg : [0x%x] "
-                       "reg=0x%x(%d byte), val=0x%x(%d byte)(ret:%d)\n",
-           KEYWORD, client->adapter->nr, _FILE_, __LINE__, slave_addr, reg,
-           reg_byte, val, val_byte, ret);
+                       "reg=0x%x(%d byte), val=0x%x(%d byte)(ret:%d, retry:%d)\n",
+           KEYWORD, client->adapter->nr, _FILE_, __LINE__, msg.addr, reg,
+           reg_byte, val, val_byte, ret, 10-retry);
 
   return 0;
 }
@@ -655,6 +681,103 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
              (slave_addr == 0 ? client->addr : slave_addr), reg, reg_byte, *val,
              val_byte);
   }
+
+  return 0;
+}
+
+/*
+ * AP1302 SIPM: Write AR0234CS sensor register via AP1302 Advanced registers.
+ *
+ * SIPM registers are at 0x0029xxxx (Advanced space), accessed through
+ * the 4KB window at 0xE000-0xEFFF after setting ADVANCED_BASE (0xF038).
+ * Same pattern as start_fw_load() which accesses 0x6024/0x6034 directly.
+ *
+ * Steps: set ADVANCED_BASE → write CTL/ADR/DW through window → trigger GO
+ */
+static int max9296_sipm_read_led_flash(struct max9296_dev *sensor, u32 ap_addr,
+                                       u16 *val) {
+  unsigned int read_val = 0;
+  int ret;
+
+  /* Set ADVANCED_BASE to SIPM_0 page */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xf038, 0x00290000, 2, 4);
+  if (ret)
+    return ret;
+
+  /* CTL: AR0234 slave=0x10, read(1), 2-byte reg, 2-byte data */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe004,
+                            (AR0234_I2C_ADDR << 24) | (1 << 16) | (2 << 8) | 2,
+                            2, 4);
+  if (ret)
+    return ret;
+
+  /* ADR: AR0234 register 0x3270 */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe008,
+                            AR0234_REG_LED_FLASH_CONTROL, 2, 2);
+  if (ret)
+    return ret;
+
+  /* GO: trigger SIPM transaction */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe000, 1, 2, 1);
+  if (ret)
+    return ret;
+
+  msleep(10);
+
+  /* DR: read result from window 0xE010 (SIPM_0_DR = 0x00290010) */
+  ret = maxim_ops_i2c_read(sensor, ap_addr, 0xe010, 2, 2, &read_val);
+  if (ret)
+    return ret;
+
+  *val = (u16)read_val;
+  return 0;
+}
+
+static int max9296_sipm_write_led_flash(struct max9296_dev *sensor, u32 ap_addr,
+                                        u16 val) {
+  int ret;
+
+  /*
+   * SIPM_0 registers are at 0x00290000-0x00290014.
+   * Set ADVANCED_BASE to 0x00290000, then access offsets via 0xE000+.
+   *   SIPM_GO  = 0x00290000 → window 0xE000
+   *   SIPM_CTL = 0x00290004 → window 0xE004
+   *   SIPM_ADR = 0x00290008 → window 0xE008
+   *   SIPM_DW  = 0x0029000C → window 0xE00C
+   */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xf038, 0x00290000, 2, 4);
+  if (ret)
+    return ret;
+
+  /* CTL: AR0234 slave=0x10, write, 2-byte reg, 2-byte data */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe004,
+                            (AR0234_I2C_ADDR << 24) | (0 << 16) | (2 << 8) | 2,
+                            2, 4);
+  if (ret)
+    return ret;
+
+  /* ADR: AR0234 register 0x3270 */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe008, AR0234_REG_LED_FLASH_CONTROL,
+                            2, 2);
+  if (ret)
+    return ret;
+
+  /* DW: data to write */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe00c, val, 2, 2);
+  if (ret)
+    return ret;
+
+  /* GO: trigger SIPM transaction */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe000, 1, 2, 1);
+  if (ret)
+    return ret;
+
+  msleep(10);
+
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s SIPM LED flash: ap=0x%02x val=0x%04x "
+                     "ret=%d\n",
+         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+         __FUNCTION__, ap_addr, val, ret);
 
   return 0;
 }
@@ -1285,6 +1408,9 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
   case V4L2_CID_SATURATION_CH0:
     sensor->ctrl_cache.ch0.saturation = ctrl->val;
     break;
+  case V4L2_CID_LED_FLASH_CH0:
+    sensor->ctrl_cache.ch0.led_flash = ctrl->val;
+    break;
 
   /* Per-channel controls - channel 1 */
   case V4L2_CID_EXPOSURE_AUTO_CH1:
@@ -1319,6 +1445,9 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
     break;
   case V4L2_CID_SATURATION_CH1:
     sensor->ctrl_cache.ch1.saturation = ctrl->val;
+    break;
+  case V4L2_CID_LED_FLASH_CH1:
+    sensor->ctrl_cache.ch1.led_flash = ctrl->val;
     break;
 
   default:
@@ -1456,6 +1585,38 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
   sensor->ctrl_cache.pending = false;
   sensor->ctrl_cache.firmware_ready = true;
 
+  /* Read AR0234 LED_FLASH_CONTROL (0x3270) via SIPM after FW ready */
+  {
+    u16 led_val = 0;
+    int led_ret;
+
+    if (dual) {
+      led_ret = max9296_sipm_read_led_flash(sensor, AP1302_CH0_I2C_ADDR,
+                                            &led_val);
+      printk(KERN_NOTICE "[%s:%d][%s:%d] %s AR0234 LED_FLASH_CONTROL CH0: "
+                         "0x%04x (EN:%d DELAY:%d) ret:%d\n",
+             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+             __FUNCTION__, led_val, (led_val >> 8) & 1, led_val & 0xff,
+             led_ret);
+
+      led_val = 0;
+      led_ret = max9296_sipm_read_led_flash(sensor, AP1302_CH1_I2C_ADDR,
+                                            &led_val);
+      printk(KERN_NOTICE "[%s:%d][%s:%d] %s AR0234 LED_FLASH_CONTROL CH1: "
+                         "0x%04x (EN:%d DELAY:%d) ret:%d\n",
+             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+             __FUNCTION__, led_val, (led_val >> 8) & 1, led_val & 0xff,
+             led_ret);
+    } else {
+      led_ret = max9296_sipm_read_led_flash(sensor, AP1302_I2C_ADDR, &led_val);
+      printk(KERN_NOTICE "[%s:%d][%s:%d] %s AR0234 LED_FLASH_CONTROL: "
+                         "0x%04x (EN:%d DELAY:%d) ret:%d\n",
+             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+             __FUNCTION__, led_val, (led_val >> 8) & 1, led_val & 0xff,
+             led_ret);
+    }
+  }
+
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s cached controls applied (exp:%d)",
          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
          __FUNCTION__, sensor->ctrl_cache.exposure);
@@ -1577,6 +1738,9 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_SATURATION,
                               ctrl->val, 2, 2);
     break;
+  case V4L2_CID_LED_FLASH_CH0:
+    ret = max9296_sipm_write_led_flash(sensor, ch0_addr, (u16)ctrl->val);
+    break;
 
   /* Per-channel controls - Channel 1 */
   case V4L2_CID_EXPOSURE_AUTO_CH1: {
@@ -1638,6 +1802,9 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   case V4L2_CID_SATURATION_CH1:
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_SATURATION,
                               ctrl->val, 2, 2);
+    break;
+  case V4L2_CID_LED_FLASH_CH1:
+    ret = max9296_sipm_write_led_flash(sensor, ch1_addr, (u16)ctrl->val);
     break;
 
   default:
@@ -1717,6 +1884,9 @@ static const struct max9296_ctrl_desc max9296_per_ch_ctrls[] = {
     CTRL_DESC(V4L2_CID_SATURATION_CH0, V4L2_CID_SATURATION_CH1,
               V4L2_CTRL_TYPE_INTEGER, "Saturation", 0, 65535, 4096,
               saturation_ch0, saturation_ch1),
+    CTRL_DESC(V4L2_CID_LED_FLASH_CH0, V4L2_CID_LED_FLASH_CH1,
+              V4L2_CTRL_TYPE_INTEGER, "LED Flash", 0, 0x1ff, 0, led_flash_ch0,
+              led_flash_ch1),
 };
 
 static int max9296_init_controls(struct max9296_dev *sensor) {
@@ -1726,7 +1896,7 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
   int ret;
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  v4l2_ctrl_handler_init(hdl, 48);
+  v4l2_ctrl_handler_init(hdl, 50);
 
   /* we can use our own mutex for the ctrl lock */
   hdl->lock = &sensor->lock;
@@ -2754,7 +2924,7 @@ static int max9296_probe(struct i2c_client *client) {
   };
   int ret;
 
-  printk(KERN_ALERT "[%s:%d][%s:%d] max9296 version : %s", KEYWORD,
+  printk(KERN_NOTICE "[%s:%d][%s:%d] max9296 version : %s", KEYWORD,
          client->adapter->nr, _FILE_, __LINE__, SW_VERSION);
 
   sensor = devm_kzalloc(dev, sizeof(*sensor), GFP_KERNEL);
