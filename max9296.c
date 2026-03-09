@@ -118,6 +118,42 @@ static int debug;
 #define V4L2_CID_LED_FLASH_CH0 (V4L2_CID_USER_BASE + 0x1018)
 #define V4L2_CID_LED_FLASH_CH1 (V4L2_CID_USER_BASE + 0x1019)
 
+/* MCP4018 digital potentiometer wiper control (7-bit, 0x00~0x7F) */
+#define V4L2_CID_MCP4018_WIPER (V4L2_CID_USER_BASE + 0x101A)
+#define V4L2_CID_MCP4018_WIPER_CH1 (V4L2_CID_USER_BASE + 0x101B)
+
+/*
+ * MCP4018T-503E: 7-bit single I2C digital potentiometer (50kΩ, 128 steps)
+ * Connected to MAX9295 main I2C bus (I2C0, shared with AP1302 ISP)
+ * VCC controlled by MAX9295 MFP4 GPIO HIGH
+ *
+ * I2C protocol (no register address):
+ *   Write: [START][0x5E][wiper_value(0x00~0x7F)][STOP]
+ *   Read:  [START][0x5F][data][STOP]
+ * Power-on default: 0x3F (mid-scale, ~25kΩ)
+ */
+#define MCP4018_I2C_ADDR 0x2F
+/* Host-visible address for Port B (same as real addr) */
+#define MCP4018_HOST_ADDR MCP4018_I2C_ADDR
+/* Host-visible address for Port A (dual mode) */
+#define MCP4018_HOST_ADDR_CH1 MCP4018_I2C_ADDR
+/*
+ * Dual mode address remap: Port A MCP4018을 0x2E로 리맵하여
+ * Port B(0x2F)와 호스트 주소 충돌 방지.
+ * 듀얼 동시 사용 시 아래로 교체 필요:
+ * #define MCP4018_HOST_ADDR_CH1 0x2E
+ */
+#define MCP4018_WIPER_MAX 0x7F
+#define MCP4018_WIPER_DEFAULT 0x3F
+
+/*
+ * MAX9295 address translator B registers (unused pair, A is for AP1302)
+ * SRC_B (0x0044): host-visible address (bits [7:1] = 7-bit addr << 1)
+ * DST_B (0x0045): real device address on main I2C bus (I2C0)
+ */
+#define MAX9295_REG_I2C_SRC_B 0x0044
+#define MAX9295_REG_I2C_DST_B 0x0045
+
 enum max9296_mode_id {
   MAX9296_MODE_2560x720 = 0,
   MAX9296_MODE_1280x720,
@@ -204,6 +240,10 @@ struct max9296_ctrls {
   struct v4l2_ctrl *saturation_ch1;
   struct v4l2_ctrl *led_flash_ch0;
   struct v4l2_ctrl *led_flash_ch1;
+
+  /* MCP4018 digital potentiometer */
+  struct v4l2_ctrl *mcp4018_wiper;
+  struct v4l2_ctrl *mcp4018_wiper_ch1;
 };
 
 /* Per-channel control settings */
@@ -232,6 +272,10 @@ struct max9296_ctrl_cache {
 
   /* Shared setting value, applied to both channels when set */
   int exposure; /* V4L2_CID_EXP_TIME - exp_time (u32) */
+
+  /* MCP4018 digital potentiometer */
+  int mcp4018_wiper;      /* V4L2_CID_MCP4018_WIPER - Port B (0x00~0x7F) */
+  int mcp4018_wiper_ch1;  /* V4L2_CID_MCP4018_WIPER_CH1 - Port A (0x00~0x7F) */
 };
 
 struct max9296_dev {
@@ -320,8 +364,18 @@ static const struct reg_value max9296_init_setting_1080p_crop_720p_2ch_30fps[] =
         // auto link
         {0x00, 0x0010, 2, 0x31, 1, 200},
 
-	//MAX9295 SER MFP4 GPIO LOW
+	//MAX9295 SER MFP4 GPIO LOW (DISABLED - MFP4 must be HIGH for MCP4018 VCC)
 	{0x40, 0x02ca, 2, 0x80, 1, 10},
+
+        //MAX9295 SER MFP4 GPIO HIGH (ENABLED - MCP4018 VCC ON)
+        // Port A only - before address remap
+        //{0x40, 0x02ca, 2, 0x90, 1, 10},  // Port A MFP4 HIGH
+        // Configure MFP7/MFP8 for I2C SDA1/SCL1 mode
+        //{0x40, 0x02d0, 2, 0x81, 1, 10},  // GPIO7_A: Enable output, GPIO_TX_EN for SDA1
+        //{0x40, 0x02d3, 2, 0x81, 1, 10},  // GPIO7_A (mirror): Enable output
+        //{0x40, 0x02d6, 2, 0x82, 1, 10},  // GPIO8_A: Enable GPIO_TX_EN for SCL1
+        // Port B will be configured after address remap (see below)
+
 
         // CSI port B start video
         {0x40, 0x0311, 2, 0xf0, 1, 200},
@@ -362,14 +416,26 @@ static const struct reg_value max9296_init_setting_1080p_crop_720p_2ch_30fps[] =
 
         {0x00, 0x0010, 2, 0x23, 1, 100},
 
-        //MAX9295 SER(Link B) MFP4 GPIO LOW
+        //MAX9295 SER(Link B) MFP4 GPIO LOW (DISABLED - MFP4 must be HIGH for MCP4018 VCC)
         {0x40, 0x02ca, 2, 0x80, 1, 10},
+
+        //MAX9295 SER(Link B) MFP4 GPIO HIGH (ENABLED - MCP4018 VCC ON)
+        // After address remap: 0x40 = Port B, 0x60 = Port A
+        //{0x40, 0x02ca, 2, 0x90, 1, 10},  // Port B MFP4 HIGH (now 0x40 after remap)
+        // Configure Port B MFP7/MFP8 for I2C SDA1/SCL1 mode
+        //{0x40, 0x02d0, 2, 0x81, 1, 10},  // GPIO7_A: Enable output for Port B SDA1
+        //{0x40, 0x02d3, 2, 0x81, 1, 10},  // GPIO7_A (mirror): Enable output
+        //{0x40, 0x02d6, 2, 0x82, 1, 10},  // GPIO8_A: Enable GPIO_TX_EN for Port B SCL1
 
         //
         {0x40, 0x0318, 2, 0x5e, 1, 10},
         {0x40, 0x0002, 2, 0x43, 1, 10},
         {0x40, 0x0042, 2, 0x22, 1, 10},
         {0x40, 0x0043, 2, 0x78, 1, 10},
+        // MCP4018 addr translator B (Port B): not needed when SRC=DST (no remap)
+        // Enable only for dual mode with address remap (e.g., 0x2E→0x2F)
+        //{0x40, 0x0044, 2, (MCP4018_HOST_ADDR << 1), 1, 10},  // SRC_B
+        //{0x40, 0x0045, 2, (MCP4018_I2C_ADDR << 1), 1, 10},   // DST_B
 
         //
         {0x60, 0x0318, 2, 0x5e, 1, 10},
@@ -378,6 +444,14 @@ static const struct reg_value max9296_init_setting_1080p_crop_720p_2ch_30fps[] =
         {0x60, 0x005b, 2, 0x10, 1, 10},
         {0x60, 0x0042, 2, 0x24, 1, 10},
         {0x60, 0x0043, 2, 0x78, 1, 10},
+        // MCP4018 addr translator B (Port A): not needed when SRC=DST (no remap)
+        // Enable only for dual mode with address remap (e.g., 0x2E→0x2F)
+        //{0x60, 0x0044, 2, (MCP4018_HOST_ADDR_CH1 << 1), 1, 10},  // SRC_B
+        //{0x60, 0x0045, 2, (MCP4018_I2C_ADDR << 1), 1, 10},       // DST_B
+        /*
+         * 0x2E 리맵 시 위 SRC_B를 아래로 교체:
+         * {0x60, 0x0044, 2, (0x2E << 1), 1, 10},  // SRC_B (remapped to 0x2E)
+         */
         {0x60, 0x0010, 2, 0x21, 1, 100},
 
         //
@@ -401,8 +475,20 @@ static const struct reg_value max9296_init_setting_1080p_crop_720p_2ch_30fps[] =
         {0x00, 0x0317, 2, 0x0E, 1, 10},
 
 #ifdef SERDES_3GBPS // 3Gbps
-        {0x40, 0x0001, 2, 0x04, 1, 10},
-        {0x60, 0x0001, 2, 0x04, 1, 10},
+        {0x40, 0x0001, 2, 0x04, 1, 10}, // TX_RATE=3Gbps
+        {0x60, 0x0001, 2, 0x04, 1, 10}, // TX_RATE=3Gbps
+        //{0x40, 0x0001, 2, 0x44, 1, 10}, // IIC_1_EN=1, TX_RATE=3Gbps
+        //{0x60, 0x0001, 2, 0x44, 1, 10}, // IIC_1_EN=1, TX_RATE=3Gbps
+        // MFP7/MFP8 GPIO_C OVR_RES_CFG=1 for SDA1/SCL1 alternate function
+        //{0x40, 0x02d5, 2, 0x80, 1, 10}, // GPIO7_C: OVR_RES_CFG=1 (MFP7→SDA1)
+        //{0x60, 0x02d5, 2, 0x80, 1, 10}, // GPIO7_C: OVR_RES_CFG=1 (link B MFP7→SDA1)
+        //{0x40, 0x02d8, 2, 0x80, 1, 10}, // GPIO8_C: OVR_RES_CFG=1 (MFP8→SCL1)
+        //{0x60, 0x02d8, 2, 0x80, 1, 10}, // GPIO8_C: OVR_RES_CFG=1 (link B MFP8→SCL1)
+        // I2C pull-up enable for MFP7/MFP8
+        //{0x40, 0x001c, 2, 0x08, 1, 10}, // I2C_PT_0: MFP7 pull-up enable (Bit3=1)
+        //{0x60, 0x001c, 2, 0x08, 1, 10}, // I2C_PT_0: link B MFP7 pull-up enable
+        //{0x40, 0x001d, 2, 0x08, 1, 10}, // I2C_PT_1: MFP8 pull-up enable (Bit3=1)
+        //{0x60, 0x001d, 2, 0x08, 1, 10}, // I2C_PT_1: link B MFP8 pull-up enable
         {0x00, 0x0001, 2, 0x01, 1, 10},
 #endif
 
@@ -425,8 +511,18 @@ static const struct reg_value max9296_init_setting_720p_30fps_L[] = {
     // step 1
     {0x00, 0x0010, 2, 0x22, 1, 300},
 
-    //MAX9295 SER MFP4 GPIO LOW
+    //MAX9295 SER MFP4 GPIO LOW (DISABLED - MFP4 must be HIGH for MCP4018 VCC)
     {0x40, 0x02ca, 2, 0x80, 1, 10},
+
+    //MAX9295 SER MFP4 GPIO HIGH (ENABLED - MCP4018 VCC ON)
+    //{0x40, 0x02ca, 2, 0x90, 1, 10},
+    // Configure MFP7/MFP8 for I2C SDA1/SCL1 mode
+    //{0x40, 0x02d0, 2, 0x81, 1, 10},  // GPIO7_A: Enable output for SDA1
+    //{0x40, 0x02d3, 2, 0x81, 1, 10},  // GPIO7_A (mirror): Enable output
+    //{0x40, 0x02d6, 2, 0x82, 1, 10},  // GPIO8_A: Enable GPIO_TX_EN for SCL1
+    // MCP4018 addr translator B: not needed when SRC=DST (no remap)
+    //{0x40, 0x0044, 2, (MCP4018_HOST_ADDR << 1), 1, 10},  // SRC_B
+    //{0x40, 0x0045, 2, (MCP4018_I2C_ADDR << 1), 1, 10},   // DST_B
 
     // step 2
     {0x40, 0x0010, 2, 0x22, 1, 310},
@@ -444,7 +540,14 @@ static const struct reg_value max9296_init_setting_720p_30fps_L[] = {
     {0x00, 0x0320, 2, 0x24, 1, 10}, // mipi phy1 frequency
 
 #ifdef SERDES_3GBPS // 3Gbps
-    {0x40, 0x0001, 2, 0x04, 1, 10},
+    {0x40, 0x0001, 2, 0x04, 1, 10}, // TX_RATE=3Gbps
+    //{0x40, 0x0001, 2, 0x44, 1, 10}, // IIC_1_EN=1, TX_RATE=3Gbps
+    // MFP7/MFP8 GPIO_C OVR_RES_CFG=1 for SDA1/SCL1 alternate function
+    //{0x40, 0x02d5, 2, 0x80, 1, 10}, // GPIO7_C: OVR_RES_CFG=1 (MFP7→SDA1)
+    //{0x40, 0x02d8, 2, 0x80, 1, 10}, // GPIO8_C: OVR_RES_CFG=1 (MFP8→SCL1)
+    // I2C pull-up enable for MFP7/MFP8
+    //{0x40, 0x001c, 2, 0x08, 1, 10}, // I2C_PT_0: MFP7 pull-up enable (Bit3=1)
+    //{0x40, 0x001d, 2, 0x08, 1, 10}, // I2C_PT_1: MFP8 pull-up enable (Bit3=1)
     {0x00, 0x0001, 2, 0x01, 1, 10},
 #endif
 
@@ -464,8 +567,18 @@ static const struct reg_value max9296_init_setting_720p_30fps_R[] = {
     // step 1
     {0x00, 0x0010, 2, 0x21, 1, 300},
 
-    //MAX9295 SER MFP4 GPIO LOW
+    //MAX9295 SER MFP4 GPIO LOW (DISABLED - MFP4 must be HIGH for MCP4018 VCC)
     {0x40, 0x02ca, 2, 0x80, 1, 10},
+
+    //MAX9295 SER MFP4 GPIO HIGH (ENABLED - MCP4018 VCC ON)
+    //{0x40, 0x02ca, 2, 0x90, 1, 10},
+    // Configure MFP7/MFP8 for I2C SDA1/SCL1 mode
+    //{0x40, 0x02d0, 2, 0x81, 1, 10},  // GPIO7_A: Enable output for SDA1
+    //{0x40, 0x02d3, 2, 0x81, 1, 10},  // GPIO7_A (mirror): Enable output
+    //{0x40, 0x02d6, 2, 0x82, 1, 10},  // GPIO8_A: Enable GPIO_TX_EN for SCL1
+    // MCP4018 addr translator B: not needed when SRC=DST (no remap)
+    //{0x40, 0x0044, 2, (MCP4018_HOST_ADDR << 1), 1, 10},  // SRC_B
+    //{0x40, 0x0045, 2, (MCP4018_I2C_ADDR << 1), 1, 10},   // DST_B
 
     // step 2
     {0x40, 0x0010, 2, 0x21, 1, 310},
@@ -483,7 +596,14 @@ static const struct reg_value max9296_init_setting_720p_30fps_R[] = {
     {0x00, 0x0320, 2, 0x24, 1, 10}, // mipi phy1 frequency
 
 #ifdef SERDES_3GBPS // 3Gbps
-    {0x40, 0x0001, 2, 0x04, 1, 10},
+    {0x40, 0x0001, 2, 0x04, 1, 10}, // TX_RATE=3Gbps
+    //{0x40, 0x0001, 2, 0x44, 1, 10}, // IIC_1_EN=1, TX_RATE=3Gbps
+    // MFP7/MFP8 GPIO_C OVR_RES_CFG=1 for SDA1/SCL1 alternate function
+    //{0x40, 0x02d5, 2, 0x80, 1, 10}, // GPIO7_C: OVR_RES_CFG=1 (MFP7→SDA1)
+    //{0x40, 0x02d8, 2, 0x80, 1, 10}, // GPIO8_C: OVR_RES_CFG=1 (MFP8→SCL1)
+    // I2C pull-up enable for MFP7/MFP8
+    //{0x40, 0x001c, 2, 0x08, 1, 10}, // I2C_PT_0: MFP7 pull-up enable (Bit3=1)
+    //{0x40, 0x001d, 2, 0x08, 1, 10}, // I2C_PT_1: MFP8 pull-up enable (Bit3=1)
     {0x00, 0x0001, 2, 0x01, 1, 10},
 #endif
 
@@ -568,7 +688,7 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
   struct i2c_client *client = sensor->i2c_client;
   unsigned char buf[8];
   struct i2c_msg msg;
-  unsigned int retry = 10;
+  unsigned int retry = 5;
 
   msg.addr = (slave_addr == 0 ? client->addr : slave_addr);
   msg.flags = 0;
@@ -682,6 +802,86 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
              val_byte);
   }
 
+  return 0;
+}
+
+/*
+ * MCP4018 I2C: No register address, direct 1-byte read/write protocol.
+ * Write: [START][addr+W][wiper_value][STOP]
+ * Read:  [START][addr+R][data][STOP]
+ *
+ * @host_addr: host-visible I2C address routed through MAX9295 address translator B
+ *   - Port B: MCP4018_HOST_ADDR (0x2F)
+ *   - Port A: MCP4018_HOST_ADDR_CH1 (0x2F, or 0x2E when remapped)
+ */
+static int mcp4018_write_wiper(struct max9296_dev *sensor, u8 host_addr,
+                               u8 wiper_value) {
+  struct i2c_client *client = sensor->i2c_client;
+  struct i2c_msg msg;
+  unsigned int retry = 5;
+  int ret;
+
+  if (wiper_value > MCP4018_WIPER_MAX)
+    wiper_value = MCP4018_WIPER_MAX;
+
+  msg.addr = host_addr;
+  msg.flags = 0;
+  msg.len = 1;
+  msg.buf = &wiper_value;
+
+  do {
+    ret = i2c_transfer(client->adapter, &msg, 1);
+    if (ret >= 0) break;
+    msleep(1);
+  } while (--retry);
+
+  if ((retry == 0) && (ret < 0)) {
+    printk(KERN_ERR "[%s:%d][%s:%d] MCP4018(0x%02x) write failed: wiper=0x%02x ret=%d",
+           KEYWORD, client->adapter->nr, _FILE_, __LINE__,
+           host_addr, wiper_value, ret);
+    return ret;
+  }
+  if (ret != 1)
+    return -EIO;
+
+  printk(KERN_INFO "[%s:%d][%s:%d] MCP4018(0x%02x) wiper set to 0x%02x (%d/%d)",
+         KEYWORD, client->adapter->nr, _FILE_, __LINE__,
+         host_addr, wiper_value, wiper_value, MCP4018_WIPER_MAX);
+  return 0;
+}
+
+static int mcp4018_read_wiper(struct max9296_dev *sensor, u8 host_addr,
+                              u8 *wiper_value) {
+  struct i2c_client *client = sensor->i2c_client;
+  u8 buf = 0;
+  struct i2c_msg msg;
+  unsigned int retry = 5;
+  int ret;
+
+  msg.addr = host_addr;
+  msg.flags = I2C_M_RD;
+  msg.len = 1;
+  msg.buf = &buf;
+
+  do {
+    ret = i2c_transfer(client->adapter, &msg, 1);
+    if (ret >= 0) break;
+    msleep(1);
+  } while (--retry);
+
+  if ((retry == 0) && (ret < 0)) {
+    printk(KERN_ERR "[%s:%d][%s:%d] MCP4018(0x%02x) read failed: ret=%d",
+           KEYWORD, client->adapter->nr, _FILE_, __LINE__, host_addr, ret);
+    return ret;
+  }
+  if (ret != 1)
+    return -EIO;
+
+  *wiper_value = buf & MCP4018_WIPER_MAX;
+  if (debug)
+    printk(KERN_INFO "[%s:%d][%s:%d] MCP4018(0x%02x) wiper read: 0x%02x",
+           KEYWORD, client->adapter->nr, _FILE_, __LINE__,
+           host_addr, *wiper_value);
   return 0;
 }
 
@@ -1450,6 +1650,14 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
     sensor->ctrl_cache.ch1.led_flash = ctrl->val;
     break;
 
+  /* MCP4018 digital potentiometer */
+  case V4L2_CID_MCP4018_WIPER:
+    sensor->ctrl_cache.mcp4018_wiper = ctrl->val;
+    break;
+  case V4L2_CID_MCP4018_WIPER_CH1:
+    sensor->ctrl_cache.mcp4018_wiper_ch1 = ctrl->val;
+    break;
+
   default:
     break;
   }
@@ -1807,6 +2015,14 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     ret = max9296_sipm_write_led_flash(sensor, ch1_addr, (u16)ctrl->val);
     break;
 
+  /* MCP4018 digital potentiometer */
+  case V4L2_CID_MCP4018_WIPER:
+    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR, (u8)ctrl->val);
+    break;
+  case V4L2_CID_MCP4018_WIPER_CH1:
+    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR_CH1, (u8)ctrl->val);
+    break;
+
   default:
     printk(KERN_CRIT "[%s:%d][%s:%d] %s return", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
@@ -1962,6 +2178,34 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
         return -ENOMEM;
       *p1 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
     }
+  }
+
+  /* MCP4018 digital potentiometer wiper control */
+  {
+    static const struct v4l2_ctrl_config cfg_mcp4018 = {
+        .ops = &max9296_ctrl_ops,
+        .id = V4L2_CID_MCP4018_WIPER,
+        .type = V4L2_CTRL_TYPE_INTEGER,
+        .name = "MCP4018 Wiper",
+        .min = 0,
+        .max = MCP4018_WIPER_MAX,
+        .def = MCP4018_WIPER_DEFAULT,
+        .step = 1,
+    };
+    ctrls->mcp4018_wiper = v4l2_ctrl_new_custom(hdl, &cfg_mcp4018, NULL);
+  }
+  {
+    static const struct v4l2_ctrl_config cfg_mcp4018_ch1 = {
+        .ops = &max9296_ctrl_ops,
+        .id = V4L2_CID_MCP4018_WIPER_CH1,
+        .type = V4L2_CTRL_TYPE_INTEGER,
+        .name = "MCP4018 Wiper CH1",
+        .min = 0,
+        .max = MCP4018_WIPER_MAX,
+        .def = MCP4018_WIPER_DEFAULT,
+        .step = 1,
+    };
+    ctrls->mcp4018_wiper_ch1 = v4l2_ctrl_new_custom(hdl, &cfg_mcp4018_ch1, NULL);
   }
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s (pixel_rate:%d exp_time:%d)", KEYWORD,
@@ -2941,6 +3185,8 @@ static int max9296_probe(struct i2c_client *client) {
   sensor->stream_on = 0;
   sensor->ctrl_cache.firmware_ready = false;
   sensor->ctrl_cache.pending = false;
+  sensor->ctrl_cache.mcp4018_wiper = MCP4018_WIPER_DEFAULT;
+  sensor->ctrl_cache.mcp4018_wiper_ch1 = MCP4018_WIPER_DEFAULT;
   /* Per-channel cache defaults are set after max9296_init_controls() below */
 
   sensor->fps = DEFAULT_FRAMERATE_FPS;
