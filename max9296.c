@@ -301,6 +301,13 @@ struct max9296_dev {
     unsigned int power;
   } state;
 
+  // Per-channel disconnect bitmask (set during load_regs)
+  // bit layout matches cam_ch_bit: bit0=ch0, bit1=ch1, bit2=ch2, bit3=ch3
+  struct {
+      int disconnect;         // bitmask of disconnected channels, -1 = not checked
+      unsigned int ch_shift;  // bit shift for Link A (0 for adapter2, 2 for adapter1)
+  } link_status;
+
   // for firmware
   struct work_struct fw_work;
   wait_queue_head_t fw_wait;
@@ -1014,9 +1021,15 @@ static int max9296_load_regs(struct max9296_dev *sensor,
   const struct reg_value *regs = mode->reg_data;
   unsigned int i;
   int ret = 0;
+  int local_err = 0;
+  bool link_a_err = false;
+  bool link_b_err = false;
+  unsigned int shift = sensor->link_status.ch_shift;
   u32 slave_addr, reg_addr, reg_byte, val, val_byte, delay_ms;
+
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+
   for (i = 0; i < mode->reg_data_size; ++i, ++regs) {
     slave_addr = regs->slave_addr;
     reg_addr = regs->reg_addr;
@@ -1027,13 +1040,49 @@ static int max9296_load_regs(struct max9296_dev *sensor,
 
     ret = maxim_ops_i2c_write(sensor, slave_addr, reg_addr, val, reg_byte,
                               val_byte);
+    if (ret < 0) {
+      if (slave_addr == 0x40) {
+        /*
+         * In single-channel Right mode (enable==0x02), MAX9296 maps
+         * Link B serializer to address 0x40. In Left/Dual modes,
+         * 0x40 is always Link A.
+         */
+        if (sensor->enable == 0x02)
+          link_b_err = true;
+        else
+          link_a_err = true;
+      } else if (slave_addr == 0x60) {
+        link_b_err = true;
+      } else {
+        local_err = ret;
+      }
+    }
+
     if (delay_ms)
       usleep_range(1000 * delay_ms, 1000 * delay_ms + 1000 * delay_ms / 10);
   }
+
+  /* Build per-channel disconnect bitmask */
+  sensor->link_status.disconnect = 0;
+  if (link_a_err)
+    sensor->link_status.disconnect |= (1 << shift);       /* ch0 or ch2 */
+  if (link_b_err)
+    sensor->link_status.disconnect |= (1 << (shift + 1)); /* ch1 or ch3 */
+
+  if (sensor->link_status.disconnect) {
+    printk(KERN_WARNING "[%s:%d][%s:%d] disconnect bitmask=0x%x (ch%u=%s ch%u=%s)",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           sensor->link_status.disconnect,
+           shift, link_a_err ? "DISCONNECTED" : "OK",
+           shift + 1, link_b_err ? "DISCONNECTED" : "OK");
+  }
+
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  return ret;
+
+  /* MAX9296 local register failure is fatal; serializer failure is not */
+  return local_err;
 }
 
 static int max9296_set_autoexposure(struct max9296_dev *sensor, bool on) {
@@ -3158,6 +3207,16 @@ static ssize_t sysfs_enable_store(struct device *dev,
 }
 static DEVICE_ATTR(enable, 0664, sysfs_enable_show, sysfs_enable_store);
 //-------------------------------------------------------------------------
+static ssize_t sysfs_link_status_show(struct device *dev,
+                                      struct device_attribute *attr,
+                                      char *buf) {
+  struct v4l2_subdev *sd = i2c_get_clientdata(to_i2c_client(dev));
+  struct max9296_dev *sensor = to_max9296_dev(sd);
+
+  return snprintf(buf, PAGE_SIZE, "%d\n", sensor->link_status.disconnect);
+}
+static DEVICE_ATTR(link_status, 0444, sysfs_link_status_show, NULL);
+//-------------------------------------------------------------------------
 static int max9296_probe(struct i2c_client *client) {
   struct device *dev = &client->dev;
   struct fwnode_handle *endpoint;
@@ -3188,6 +3247,10 @@ static int max9296_probe(struct i2c_client *client) {
   sensor->ctrl_cache.mcp4018_wiper = MCP4018_WIPER_DEFAULT;
   sensor->ctrl_cache.mcp4018_wiper_ch1 = MCP4018_WIPER_DEFAULT;
   /* Per-channel cache defaults are set after max9296_init_controls() below */
+
+  sensor->link_status.disconnect = -1;  /* not checked yet */
+  /* adapter 2 → ch0(bit0)/ch1(bit1), adapter 1 → ch2(bit2)/ch3(bit3) */
+  sensor->link_status.ch_shift = (client->adapter->nr == 2) ? 0 : 2;
 
   sensor->fps = DEFAULT_FRAMERATE_FPS;
 
@@ -3421,6 +3484,12 @@ static int max9296_probe(struct i2c_client *client) {
     ret = (-EINVAL);
     goto free_ctrls;
   }
+  if (device_create_file(&client->dev, &dev_attr_link_status) != 0) {
+    printk(KERN_CRIT "[%s:%d][%s:%d] sysfs link_status entry failed", KEYWORD,
+           client->adapter->nr, _FILE_, __LINE__);
+    ret = (-EINVAL);
+    goto free_ctrls;
+  }
 
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
@@ -3498,6 +3567,7 @@ static int max9296_remove(struct i2c_client *client) {
   /* Phase 4: V4L2/media cleanup */
   device_remove_file(&client->dev, &dev_attr_rotate);
   device_remove_file(&client->dev, &dev_attr_enable);
+  device_remove_file(&client->dev, &dev_attr_link_status);
   v4l2_async_unregister_subdev(&sensor->sd);
   media_entity_cleanup(&sensor->sd.entity);
   v4l2_ctrl_handler_free(&sensor->ctrls.handler);
