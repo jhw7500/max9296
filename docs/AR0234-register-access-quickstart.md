@@ -4,6 +4,12 @@
 
 상세 배경은 `AR0234-register-access.md`를 본다.
 
+기본 인자 순서는 **channel -> register -> value** 다.
+
+- `ch0/ch1 -> i2c2`
+- `ch2/ch3 -> i2c1`
+- AP1302 주소는 `edgeconf_pim.json`을 우선 사용하고, 없으면 `i2cdetect`로 자동 결정한다.
+
 ---
 
 ## 1. 핵심 결론
@@ -45,7 +51,7 @@ value=0x0a56
 ### 현재 상태 읽기
 
 ```bash
-./cam_ar0234_led_flash_read.sh
+./cam_ar0234_led_flash_read.sh 0
 ```
 
 출력 예시:
@@ -57,13 +63,13 @@ raw=0x0103 masked=0x0103 enable=1 delay=3 extra=0x0000
 ### 끄기
 
 ```bash
-./cam_ar0234_led_flash_write.sh 0x0000
+./cam_ar0234_led_flash_write.sh 0 0x0000
 ```
 
 ### 켜기
 
 ```bash
-./cam_ar0234_led_flash_write.sh 0x0103
+./cam_ar0234_led_flash_write.sh 0 0x0103
 ```
 
 의미:
@@ -80,7 +86,7 @@ raw=0x0103 masked=0x0103 enable=1 delay=3 extra=0x0000
 ### 현재 값 dump
 
 ```bash
-./cam_ar0234_dma_clock_dump.sh
+./cam_ar0234_dma_clock_dump.sh 0
 ```
 
 현재 확인된 기본값:
@@ -99,11 +105,17 @@ raw=0x0103 masked=0x0103 enable=1 delay=3 extra=0x0000
 ### 안전하게 변경하고 복구
 
 ```bash
-./cam_ar0234_dma_clock_safe.sh backup
-./cam_ar0234_dma_clock_safe.sh set 0x3036 0x0008
-./cam_ar0234_dma_clock_dump.sh
-./cam_ar0234_dma_clock_safe.sh restore
+./cam_ar0234_dma_clock_safe.sh backup 0
+./cam_ar0234_dma_clock_safe.sh set 0 0x3036 0x0008
+./cam_ar0234_dma_clock_dump.sh 0
+./cam_ar0234_dma_clock_safe.sh restore 0
 ```
+
+명령 구조:
+
+- 읽기: `channel`, `register`
+- 쓰기: `channel`, `register`, `value`
+- clock safe: `backup <channel>`, `set <channel> <reg> <value>`, `restore <channel>`
 
 ## 5. 주의사항
 

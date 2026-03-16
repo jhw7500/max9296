@@ -50,24 +50,75 @@ V4L2 컨트롤은 기본적으로 정수값으로 노출된다. 드라이버는 
 
 드라이버 소스 기준: `projects/max9296/max9296.c`
 
-공통 컨트롤
-- `ext_time` -> `0x500c` (u32, 듀얼 모드에서는 양 채널에 동일 적용)
+### 3.1 공통 컨트롤
 
-커스텀 컨트롤(채널별)
+- `ext_time` -> `0x500c` (u32, 듀얼 모드에서는 양 채널에 동일 적용)
+- `hue` -> Hue (0~359)
+- `power_line_frequency` -> 전원 주파수 필터 (0~3, 기본 1=50Hz)
+
+### 3.2 Per-Channel ISP 컨트롤
+
 - `/dev/v4l-subdev2`: `*_ch0`, `*_ch1`
 - `/dev/v4l-subdev3`: `*_ch2`, `*_ch3`
 
-예:
-- `gain_chX` -> `0x5006` (u16, ufixed8)
-- `ext_time_chX` -> `0x500c` (u32)
-- `ae_on_chX` -> `0x5002` (1=auto, 0=manual)
-- `auto_white_balance_chX` -> `0x5100` (0/1)
-- `auto_gain_chX` -> `0x5002` (0/1, 현재 드라이버는 AE 모드에서 암묵 처리)
-- `hflip_chX` / `vflip_chX` -> `0x100c`
-- `brightness_chX` -> `0x7000` (u16, fixed12)
-- `contrast_chX` -> `0x7002` (u16, fixed12)
-- `saturation_chX` -> `0x7006` (u16, fixed12)
-- `lsc_chX` -> `0x54a0` (u16, fixed12)
+| 컨트롤 | AP1302 레지스터 | 타입 | 설명 |
+|---------|-----------------|------|------|
+| `ae_on_chX` | `0x5002` | bool | AE 자동/수동 (1=auto, 0=manual) |
+| `auto_white_balance_chX` | `0x5100` | bool | AWB on/off |
+| `auto_gain_chX` | `0x5002` | bool | Auto Gain (AE 모드에서 암묵 처리) |
+| `gain_chX` | `0x5006` | u16, ufixed8 | 수동 Gain (256=1.0x) |
+| `exp_time_chX` | `0x500c` | u32 | 수동 Exposure Time (μs) |
+| `hflip_chX` / `vflip_chX` | `0x100c` | bool | 수평/수직 반전 |
+| `brightness_chX` | `0x7000` | u16, fixed12 | 밝기 (4096=1.0) |
+| `contrast_chX` | `0x7002` | u16, fixed12 | 대비 (4096=1.0) |
+| `saturation_chX` | `0x7006` | u16, fixed12 | 채도 (4096=1.0) |
+| `lsc_chX` | `0x54a0` | u16, fixed12 | LSC 보정 강도 |
+| `led_flash_chX` | AR0234 `0x3270` | u16 | LED Flash (bit8=EN, bit7:0=DELAY) |
+
+### 3.3 MCP4018 디지털 가변저항
+
+MCP4018T-503E (50kΩ, 128단계). MAX9295 MFP4 GPIO가 HIGH일 때만 동작한다 (VCC 공급).
+
+| 디바이스 | 컨트롤 | 범위 | 기본값 | 설명 |
+|----------|--------|------|--------|------|
+| subdev2 | `mcp4018_wiper_ch0` | 0~127 | 63 | Port B 가변저항 |
+| subdev2 | `mcp4018_wiper_ch1` | 0~127 | 63 | Port A 가변저항 |
+| subdev3 | `mcp4018_wiper_ch2` | 0~127 | 63 | Port B 가변저항 |
+| subdev3 | `mcp4018_wiper_ch3` | 0~127 | 63 | Port A 가변저항 |
+
+### 3.4 DMA 센서 레지스터 접근
+
+AP1302 DMA를 통해 AR0234 센서 레지스터를 직접 읽기/쓰기할 수 있다.
+
+| 디바이스 | 컨트롤 | 플래그 | 설명 |
+|----------|--------|--------|------|
+| subdev2 | `dma_reg_write_ch0` | - | CH0 센서 레지스터 쓰기 |
+| subdev2 | `dma_reg_write_ch1` | - | CH1 센서 레지스터 쓰기 |
+| subdev2 | `dma_reg_read_ch0` | volatile, execute-on-write | CH0 센서 레지스터 읽기 |
+| subdev2 | `dma_reg_read_ch1` | volatile, execute-on-write | CH1 센서 레지스터 읽기 |
+| subdev3 | `dma_reg_write_ch2` | - | CH2 센서 레지스터 쓰기 |
+| subdev3 | `dma_reg_write_ch3` | - | CH3 센서 레지스터 쓰기 |
+| subdev3 | `dma_reg_read_ch2` | volatile, execute-on-write | CH2 센서 레지스터 읽기 |
+| subdev3 | `dma_reg_read_ch3` | volatile, execute-on-write | CH3 센서 레지스터 읽기 |
+
+값 인코딩 (32-bit): `[31:16] = 레지스터 주소, [15:0] = 데이터`
+
+DMA 읽기 절차:
+1. 읽을 주소를 상위 16비트에 넣어 `-c` (set)로 전달
+2. 결과를 `-C` (get)로 읽기 — 상위 16비트=주소, 하위 16비트=값
+
+```bash
+# 직접 사용 예 (chip ID 읽기)
+v4l2-ctl -d /dev/v4l-subdev2 -c dma_reg_read_ch0=$((0x3000 << 16))
+v4l2-ctl -d /dev/v4l-subdev2 -C dma_reg_read_ch0
+# 출력: dma_reg_read_ch0: 805309014 (= 0x30000A56 → val=0x0A56)
+```
+
+DMA 쓰기 절차:
+```bash
+# test pattern 켜기 (reg=0x3070, val=0x0001)
+v4l2-ctl -d /dev/v4l-subdev2 -c dma_reg_write_ch0=$((0x30700001))
+```
 
 ## 3.5) FPS 제어 (Frame Sync)
 
@@ -278,7 +329,97 @@ sudo /opt/pim/bin/init_cam.sh
 
 따라서 “V4L2로 대체” 관점에서는, 앞으로 운영 경로에서 위 스크립트 호출을 줄이거나, 문서/런북에서 사용 금지(또는 디버그 전용)로 명시하는 것이 안전하다.
 
-## 7) 아직 미대체(갭)
+## 7) LED Flash 제어
+
+AR0234 센서의 LED Flash는 V4L2 컨트롤 또는 DMA를 통해 제어한다.
+
+```bash
+# V4L2 컨트롤로 제어 (led_flash_chX)
+# 켜기: bit8=1(enable), bit7:0=delay → 0x0103 = 259
+v4l2-ctl -d /dev/v4l-subdev2 -c led_flash_ch0=259
+
+# 끄기
+v4l2-ctl -d /dev/v4l-subdev2 -c led_flash_ch0=0
+
+# DMA로 직접 제어 (레지스터 0x3270)
+./cam_dma_write.sh 0 0x3270 0x0103   # 켜기
+./cam_dma_read.sh 0 0x3270           # 확인
+./cam_dma_write.sh 0 0x3270 0x0000   # 끄기
+```
+
+주의: LED Flash 레지스터(0x3270)는 상태 비트가 추가로 반영될 수 있다. 검증 시 `mask=0x01ff` 기준으로 비교한다.
+
+## 8) DMA 센서 레지스터 접근 (셸 스크립트)
+
+V4L2 DMA 컨트롤을 편리하게 사용하기 위한 헬퍼 스크립트가 제공된다.
+
+| 스크립트 | 위치 | 용도 |
+|----------|------|------|
+| `cam_dma_read.sh` | `/opt/pim/bin/` | V4L2 DMA 레지스터 읽기 |
+| `cam_dma_write.sh` | `/opt/pim/bin/` | V4L2 DMA 레지스터 쓰기 |
+| `cam_ap1302_dma_verify.sh` | `/opt/pim/bin/` | I2C 직접 DMA read/write (교차 검증용) |
+| `cam_ar0234_led_flash_read.sh` | `/opt/pim/bin/` | I2C 직접 LED flash 읽기 |
+| `cam_ar0234_led_flash_write.sh` | `/opt/pim/bin/` | I2C 직접 LED flash 쓰기 |
+
+### 8.1 DMA 읽기
+
+```bash
+# 사용법
+cam_dma_read.sh <channel> <reg_hex>
+
+# 채널 매핑: 0/1→subdev2, 2/3→subdev3 (자동)
+cam_dma_read.sh 0 0x3000     # ch0 chip ID → val=0x0a56
+cam_dma_read.sh 1 0x3000     # ch1 chip ID
+cam_dma_read.sh 2 0x3000     # ch2 chip ID
+cam_dma_read.sh 3 0x3000     # ch3 chip ID
+```
+
+### 8.2 DMA 쓰기
+
+```bash
+# 사용법
+cam_dma_write.sh <channel> <reg_hex> <val_hex>
+
+# test pattern 켜기/끄기
+cam_dma_write.sh 0 0x3070 0x0001   # test pattern on
+cam_dma_read.sh 0 0x3070           # readback 확인 → val=0x0001
+cam_dma_write.sh 0 0x3070 0x0000   # 원복
+```
+
+### 8.3 DMA 검증 절차
+
+```bash
+# 1) chip ID 확인 (전 채널)
+cam_dma_read.sh 0 0x3000   # 기대값: val=0x0a56
+cam_dma_read.sh 1 0x3000
+cam_dma_read.sh 2 0x3000
+cam_dma_read.sh 3 0x3000
+
+# 2) write/readback 검증
+cam_dma_write.sh 0 0x3070 0x0001
+cam_dma_read.sh 0 0x3070           # val=0x0001 → PASS
+cam_dma_write.sh 0 0x3070 0x0000   # 원복
+cam_dma_read.sh 0 0x3070           # val=0x0000 → PASS
+```
+
+주의사항:
+- DMA 읽기/쓰기는 카메라 스트리밍 중에도 사용할 수 있다
+- DMA 접근은 AP1302 ISP 동작에 영향을 주지 않는다
+
+## 9) MCP4018 가변저항
+
+```bash
+# 최소 저항 (0Ω)
+v4l2-ctl -d /dev/v4l-subdev2 -c mcp4018_wiper_ch0=0
+
+# 최대 저항 (50kΩ)
+v4l2-ctl -d /dev/v4l-subdev2 -c mcp4018_wiper_ch0=127
+
+# 중간값 (기본, ~25kΩ)
+v4l2-ctl -d /dev/v4l-subdev2 -c mcp4018_wiper_ch0=63
+```
+
+## 10) 아직 미대체(갭)
 
 - `cam_manual_iso.sh`는 `0x5008`을 직접 write한다.
   - 이 레지스터의 의미/스케일이 확정되면 V4L2 컨트롤로 추가할 수 있다.

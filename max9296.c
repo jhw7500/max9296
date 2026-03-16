@@ -65,9 +65,16 @@ static int debug;
 #define AP1302_REG_AWB_CTRL 0x5100
 #define AP1302_REG_LSC_CTRL 0x54a0
 
-/* AR0234CS sensor register (accessed via AP1302 SIPM pass-through) */
+/* AR0234CS sensor register (accessed via AP1302 DMA) */
 #define AR0234_REG_LED_FLASH_CONTROL 0x3270
 #define AR0234_I2C_ADDR 0x10
+
+/* AP1302 DMA-based sensor access registers (Basic address space) */
+#define AP1302_REG_DMA_SRC 0x60a0
+#define AP1302_REG_DMA_DST 0x60a4
+#define AP1302_REG_DMA_SIZE 0x60a8
+#define AP1302_REG_DMA_CTRL 0x60ac
+#define AP1302_REG_SENSOR_SIP 0x604a
 
 /* Image tuning (fixed-point) */
 #define AP1302_REG_BRIGHTNESS 0x7000
@@ -114,13 +121,23 @@ static int debug;
 #define V4L2_CID_LSC_CH0 (V4L2_CID_USER_BASE + 0x1016)
 #define V4L2_CID_LSC_CH1 (V4L2_CID_USER_BASE + 0x1017)
 
-/* LED Flash control per-channel (AR0234CS R0x3270 via AP1302 SIPM) */
+/* LED Flash control per-channel (AR0234CS R0x3270 via AP1302 DMA) */
 #define V4L2_CID_LED_FLASH_CH0 (V4L2_CID_USER_BASE + 0x1018)
 #define V4L2_CID_LED_FLASH_CH1 (V4L2_CID_USER_BASE + 0x1019)
 
 /* MCP4018 digital potentiometer wiper control (7-bit, 0x00~0x7F) */
 #define V4L2_CID_MCP4018_WIPER (V4L2_CID_USER_BASE + 0x101A)
 #define V4L2_CID_MCP4018_WIPER_CH1 (V4L2_CID_USER_BASE + 0x101B)
+
+/* Generic AR0234 sensor register access via AP1302 DMA
+ * Value format (32-bit): [31:16] = register address, [15:0] = data
+ * Write: set ctrl value → DMA write to AR0234
+ * Read:  set ctrl value with reg addr in [31:16] → get ctrl returns data in [15:0]
+ */
+#define V4L2_CID_DMA_REG_WRITE_CH0 (V4L2_CID_USER_BASE + 0x101C)
+#define V4L2_CID_DMA_REG_WRITE_CH1 (V4L2_CID_USER_BASE + 0x101D)
+#define V4L2_CID_DMA_REG_READ_CH0 (V4L2_CID_USER_BASE + 0x101E)
+#define V4L2_CID_DMA_REG_READ_CH1 (V4L2_CID_USER_BASE + 0x101F)
 
 /*
  * MCP4018T-503E: 7-bit single I2C digital potentiometer (50kΩ, 128 steps)
@@ -244,6 +261,12 @@ struct max9296_ctrls {
   /* MCP4018 digital potentiometer */
   struct v4l2_ctrl *mcp4018_wiper;
   struct v4l2_ctrl *mcp4018_wiper_ch1;
+
+  /* Generic AR0234 DMA register access */
+  struct v4l2_ctrl *dma_reg_write_ch0;
+  struct v4l2_ctrl *dma_reg_write_ch1;
+  struct v4l2_ctrl *dma_reg_read_ch0;
+  struct v4l2_ctrl *dma_reg_read_ch1;
 };
 
 /* Per-channel control settings */
@@ -276,6 +299,10 @@ struct max9296_ctrl_cache {
   /* MCP4018 digital potentiometer */
   int mcp4018_wiper;      /* V4L2_CID_MCP4018_WIPER - Port B (0x00~0x7F) */
   int mcp4018_wiper_ch1;  /* V4L2_CID_MCP4018_WIPER_CH1 - Port A (0x00~0x7F) */
+
+  /* DMA register access: last read address per channel */
+  u16 dma_read_addr_ch0;  /* AR0234 reg addr for CH0 read */
+  u16 dma_read_addr_ch1;  /* AR0234 reg addr for CH1 read */
 };
 
 struct max9296_dev {
@@ -695,7 +722,7 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
   struct i2c_client *client = sensor->i2c_client;
   unsigned char buf[8];
   struct i2c_msg msg;
-  unsigned int retry = 5;
+  unsigned int attempt, max_attempts = 5;
 
   msg.addr = (slave_addr == 0 ? client->addr : slave_addr);
   msg.flags = 0;
@@ -709,14 +736,14 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
   for (i = 0; i < val_byte; ++i)
     buf[index + i] = (val >> ((val_byte - i - 1) << 3)) & 0xff;
 
-  do {
+  for (attempt = 0; attempt < max_attempts; attempt++) {
     ret = i2c_transfer(client->adapter, &msg, 1);
-    if (ret >= 0) break;
+    if (ret >= 0)
+      break;
     msleep(1);
-  } while (--retry);
+  }
 
-  if ((retry == 0) && (ret < 0))
-  {
+  if ((attempt >= max_attempts) && (ret < 0)) {
     printk(KERN_ERR "[%s:%d][%s:%d] Error i2c write reg : [0x%x] "
                     "reg=0x%x(%d byte), val=0x%x(%d byte)",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__, msg.addr,
@@ -737,7 +764,7 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
     printk(KERN_INFO "[%s:%d][%s:%d] Success!! i2c write reg : [0x%x] "
                        "reg=0x%x(%d byte), val=0x%x(%d byte)(ret:%d, retry:%d)\n",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__, msg.addr, reg,
-           reg_byte, val, val_byte, ret, 10-retry);
+           reg_byte, val, val_byte, ret, attempt);
 
   return 0;
 }
@@ -759,7 +786,7 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
   struct i2c_msg msg[2] = {
       0,
   };
-  unsigned int retry = 10;
+  unsigned int attempt, max_attempts = 10;
 
   if (val)
     *val = 0;
@@ -777,19 +804,18 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
   msg[1].len = val_byte;
   msg[1].buf = r_buf;
 
-  do {
+  for (attempt = 0; attempt < max_attempts; attempt++) {
     ret = i2c_transfer(client->adapter, msg, 2);
-    if (ret < 0) {
-      printk(KERN_ERR "[%s:%d][%s:%d] Error i2c read reg : [0x%x] "
-                      "reg=0x%x(%d byte),(read %d byte)",
-             KEYWORD, client->adapter->nr, _FILE_, __LINE__,
-             (slave_addr == 0 ? client->addr : slave_addr), reg, reg_byte,
-             val_byte);
-    } else
+    if (ret >= 0)
       break;
-  } while (--retry);
+    printk(KERN_ERR "[%s:%d][%s:%d] Error i2c read reg : [0x%x] "
+                    "reg=0x%x(%d byte),(read %d byte) attempt:%d",
+           KEYWORD, client->adapter->nr, _FILE_, __LINE__,
+           (slave_addr == 0 ? client->addr : slave_addr), reg, reg_byte,
+           val_byte, attempt);
+  }
 
-  if ((retry == 0) && (ret < 0)) {
+  if ((attempt >= max_attempts) && (ret < 0)) {
     printk(KERN_ERR "[%s:%d][%s:%d] Error i2c read - slave: 0x%x, reg: "
                     "0x%x(%d byte, %d data byte",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__,
@@ -893,98 +919,162 @@ static int mcp4018_read_wiper(struct max9296_dev *sensor, u8 host_addr,
 }
 
 /*
- * AP1302 SIPM: Write AR0234CS sensor register via AP1302 Advanced registers.
+ * AP1302 DMA-based AR0234 sensor register access.
  *
- * SIPM registers are at 0x0029xxxx (Advanced space), accessed through
- * the 4KB window at 0xE000-0xEFFF after setting ADVANCED_BASE (0xF038).
- * Same pattern as start_fw_load() which accesses 0x6024/0x6034 directly.
+ * Uses AP1302 DMA registers (Basic address space 0x60A0-0x60AC) to
+ * read/write downstream AR0234 sensor registers. This approach is
+ * stable unlike SIPM which suffers from AP1302 FW ADR contention.
  *
- * Steps: set ADVANCED_BASE → write CTL/ADR/DW through window → trigger GO
+ * SENSOR_SIP (0x604A) provides sensor_id, addr_16, data_16 flags.
+ * DMA_SRC/DST encode port, sensor flags, and register address.
+ * DMA_CTRL triggers the transaction; poll (ctrl & 0x7) == 0 for completion.
  */
-static int max9296_sipm_read_led_flash(struct max9296_dev *sensor, u32 ap_addr,
-                                       u16 *val) {
-  unsigned int read_val = 0;
+
+static int max9296_dma_wait_idle(struct max9296_dev *sensor, u32 ap_addr) {
+  unsigned int ctrl;
+  int poll;
+
+  for (poll = 0; poll < 20; poll++) {
+    ctrl = 0xFFFFFFFF;
+    maxim_ops_i2c_read(sensor, ap_addr, AP1302_REG_DMA_CTRL, 2, 2, &ctrl);
+    if ((ctrl & 0x7) == 0)
+      return 0;
+    usleep_range(5000, 6000);
+  }
+
+  printk(KERN_WARNING "[%s:%d][%s:%d] %s DMA not idle: ap=0x%02x ctrl=0x%04x\n",
+         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+         __FUNCTION__, ap_addr, ctrl);
+  return -ETIMEDOUT;
+}
+
+static int max9296_dma_load_sip(struct max9296_dev *sensor, u32 ap_addr,
+                                u32 *sensor_id, u32 *addr_16, u32 *data_16) {
+  unsigned int sip_raw = 0;
   int ret;
 
-  /* Set ADVANCED_BASE to SIPM_0 page */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xf038, 0x00290000, 2, 4);
+  ret = maxim_ops_i2c_read(sensor, ap_addr, AP1302_REG_SENSOR_SIP, 2, 2,
+                           &sip_raw);
   if (ret)
     return ret;
 
-  /* CTL: AR0234 slave=0x10, read(1), 2-byte reg, 2-byte data */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe004,
-                            (AR0234_I2C_ADDR << 24) | (1 << 16) | (2 << 8) | 2,
-                            2, 4);
-  if (ret)
-    return ret;
-
-  /* ADR: AR0234 register 0x3270 */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe008,
-                            AR0234_REG_LED_FLASH_CONTROL, 2, 2);
-  if (ret)
-    return ret;
-
-  /* GO: trigger SIPM transaction */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe000, 1, 2, 1);
-  if (ret)
-    return ret;
-
-  msleep(10);
-
-  /* DR: read result from window 0xE010 (SIPM_0_DR = 0x00290010) */
-  ret = maxim_ops_i2c_read(sensor, ap_addr, 0xe010, 2, 2, &read_val);
-  if (ret)
-    return ret;
-
-  *val = (u16)read_val;
+  *sensor_id = (sip_raw >> 1) & 0x3f;
+  *addr_16 = (sip_raw & 0x0100) ? 1 : 0;
+  *data_16 = (sip_raw & 0x0200) ? 1 : 0;
   return 0;
 }
 
-static int max9296_sipm_write_led_flash(struct max9296_dev *sensor, u32 ap_addr,
-                                        u16 val) {
+static int max9296_dma_read_reg(struct max9296_dev *sensor, u32 ap_addr,
+                                u16 reg_addr, u16 *val) {
+  u32 sensor_id, addr_16, data_16, data_size;
+  u32 dma_src;
+  unsigned int dma_dst_raw = 0;
   int ret;
 
-  /*
-   * SIPM_0 registers are at 0x00290000-0x00290014.
-   * Set ADVANCED_BASE to 0x00290000, then access offsets via 0xE000+.
-   *   SIPM_GO  = 0x00290000 → window 0xE000
-   *   SIPM_CTL = 0x00290004 → window 0xE004
-   *   SIPM_ADR = 0x00290008 → window 0xE008
-   *   SIPM_DW  = 0x0029000C → window 0xE00C
-   */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xf038, 0x00290000, 2, 4);
+  ret = max9296_dma_load_sip(sensor, ap_addr, &sensor_id, &addr_16, &data_16);
   if (ret)
     return ret;
 
-  /* CTL: AR0234 slave=0x10, write, 2-byte reg, 2-byte data */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe004,
-                            (AR0234_I2C_ADDR << 24) | (0 << 16) | (2 << 8) | 2,
-                            2, 4);
+  data_size = data_16 ? 2 : 1;
+
+  ret = max9296_dma_wait_idle(sensor, ap_addr);
   if (ret)
     return ret;
 
-  /* ADR: AR0234 register 0x3270 */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe008, AR0234_REG_LED_FLASH_CONTROL,
-                            2, 2);
+  /* DMA_SIZE = data bytes to transfer */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SIZE,
+                            data_size, 2, 4);
   if (ret)
     return ret;
 
-  /* DW: data to write */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe00c, val, 2, 2);
+  /* DMA_SRC = (port<<26)|(data_16<<25)|(addr_16<<24)|(sensor_id<<17)|reg_addr */
+  dma_src = (data_16 << 25) | (addr_16 << 24) | (sensor_id << 17) |
+            (reg_addr & 0xffff);
+  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SRC, dma_src, 2, 4);
   if (ret)
     return ret;
 
-  /* GO: trigger SIPM transaction */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, 0xe000, 1, 2, 1);
+  /* DMA_DST = internal AP1302 address to store result */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_DST,
+                            0x000060a4, 2, 4);
   if (ret)
     return ret;
 
-  msleep(10);
+  /* DMA_CTRL = 0x0032 triggers sensor-to-AP1302 read */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_CTRL,
+                            0x0032, 2, 2);
+  if (ret)
+    return ret;
 
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s SIPM LED flash: ap=0x%02x val=0x%04x "
-                     "ret=%d\n",
+  ret = max9296_dma_wait_idle(sensor, ap_addr);
+  if (ret)
+    return ret;
+
+  /* Read result from DMA_DST — data is in upper bits of 32-bit value */
+  ret = maxim_ops_i2c_read(sensor, ap_addr, AP1302_REG_DMA_DST, 2, 4,
+                           &dma_dst_raw);
+  if (ret)
+    return ret;
+
+  *val = (u16)(dma_dst_raw >> (32 - data_size * 8));
+
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s DMA read: ap=0x%02x "
+                     "reg=0x%04x val=0x%04x\n",
          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-         __FUNCTION__, ap_addr, val, ret);
+         __FUNCTION__, ap_addr, reg_addr, *val);
+
+  return 0;
+}
+
+static int max9296_dma_write_reg(struct max9296_dev *sensor, u32 ap_addr,
+                                 u16 reg_addr, u16 val) {
+  u32 sensor_id, addr_16, data_16, data_size;
+  u32 dma_src, dma_dst;
+  int ret;
+
+  ret = max9296_dma_load_sip(sensor, ap_addr, &sensor_id, &addr_16, &data_16);
+  if (ret)
+    return ret;
+
+  data_size = data_16 ? 2 : 1;
+
+  ret = max9296_dma_wait_idle(sensor, ap_addr);
+  if (ret)
+    return ret;
+
+  /* DMA_SIZE = data bytes to transfer */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SIZE,
+                            data_size, 2, 4);
+  if (ret)
+    return ret;
+
+  /* DMA_SRC = (value << 16) | 0x000060a0 — data in upper 16 bits */
+  dma_src = ((u32)(val & 0xffff) << 16) | 0x000060a0;
+  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SRC, dma_src, 2, 4);
+  if (ret)
+    return ret;
+
+  /* DMA_DST = (port<<26)|(data_16<<25)|(addr_16<<24)|(sensor_id<<17)|reg_addr */
+  dma_dst = (data_16 << 25) | (addr_16 << 24) | (sensor_id << 17) |
+            (reg_addr & 0xffff);
+  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_DST, dma_dst, 2, 4);
+  if (ret)
+    return ret;
+
+  /* DMA_CTRL = 0x0302 triggers AP1302-to-sensor write */
+  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_CTRL,
+                            0x0302, 2, 2);
+  if (ret)
+    return ret;
+
+  ret = max9296_dma_wait_idle(sensor, ap_addr);
+  if (ret)
+    return ret;
+
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s DMA write: ap=0x%02x "
+                     "reg=0x%04x val=0x%04x\n",
+         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+         __FUNCTION__, ap_addr, reg_addr, val);
 
   return 0;
 }
@@ -1600,14 +1690,45 @@ static int max9296_set_ctrl_pixelrate(struct max9296_dev *sensor, int value) {
 static int max9296_g_volatile_ctrl(struct v4l2_ctrl *ctrl) {
   struct v4l2_subdev *sd = ctrl_to_sd(ctrl);
   struct max9296_dev *sensor = to_max9296_dev(sd);
-  if (debug)
-    printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
-           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  /*
-   * Do not override cached V4L2 control values from volatile reads.
-   * The legacy get_* helpers return 0 and would clobber defaults
-   * (gain/exposure).
-   */
+  bool dual = (sensor->current_mode->id == MAX9296_MODE_2560x720 ||
+               sensor->current_mode->id == MAX9296_MODE_3840x1080);
+  u32 ch0_addr = dual ? AP1302_CH0_I2C_ADDR : AP1302_I2C_ADDR;
+  u32 ch1_addr = dual ? AP1302_CH1_I2C_ADDR : AP1302_I2C_ADDR;
+
+  switch (ctrl->id) {
+  case V4L2_CID_DMA_REG_READ_CH0: {
+    u16 reg_addr = sensor->ctrl_cache.dma_read_addr_ch0;
+    u16 read_val = 0;
+    int ret;
+
+    if (sensor->power_count == 0 || !sensor->ctrl_cache.firmware_ready)
+      return 0;
+
+    ret = max9296_dma_read_reg(sensor, ch0_addr, reg_addr, &read_val);
+    if (ret)
+      return ret;
+
+    ctrl->val = (reg_addr << 16) | read_val;
+    break;
+  }
+  case V4L2_CID_DMA_REG_READ_CH1: {
+    u16 reg_addr = sensor->ctrl_cache.dma_read_addr_ch1;
+    u16 read_val = 0;
+    int ret;
+
+    if (sensor->power_count == 0 || !sensor->ctrl_cache.firmware_ready)
+      return 0;
+
+    ret = max9296_dma_read_reg(sensor, ch1_addr, reg_addr, &read_val);
+    if (ret)
+      return ret;
+
+    ctrl->val = (reg_addr << 16) | read_val;
+    break;
+  }
+  default:
+    break;
+  }
   return 0;
 }
 
@@ -1705,6 +1826,18 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
     break;
   case V4L2_CID_MCP4018_WIPER_CH1:
     sensor->ctrl_cache.mcp4018_wiper_ch1 = ctrl->val;
+    break;
+
+  /* DMA register access - cache read address */
+  case V4L2_CID_DMA_REG_READ_CH0:
+    sensor->ctrl_cache.dma_read_addr_ch0 = (u16)(ctrl->val >> 16);
+    break;
+  case V4L2_CID_DMA_REG_READ_CH1:
+    sensor->ctrl_cache.dma_read_addr_ch1 = (u16)(ctrl->val >> 16);
+    break;
+  case V4L2_CID_DMA_REG_WRITE_CH0:
+  case V4L2_CID_DMA_REG_WRITE_CH1:
+    /* Write-only: no persistent cache needed */
     break;
 
   default:
@@ -1842,38 +1975,6 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
   sensor->ctrl_cache.pending = false;
   sensor->ctrl_cache.firmware_ready = true;
 
-  /* Read AR0234 LED_FLASH_CONTROL (0x3270) via SIPM after FW ready */
-  {
-    u16 led_val = 0;
-    int led_ret;
-
-    if (dual) {
-      led_ret = max9296_sipm_read_led_flash(sensor, AP1302_CH0_I2C_ADDR,
-                                            &led_val);
-      printk(KERN_NOTICE "[%s:%d][%s:%d] %s AR0234 LED_FLASH_CONTROL CH0: "
-                         "0x%04x (EN:%d DELAY:%d) ret:%d\n",
-             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-             __FUNCTION__, led_val, (led_val >> 8) & 1, led_val & 0xff,
-             led_ret);
-
-      led_val = 0;
-      led_ret = max9296_sipm_read_led_flash(sensor, AP1302_CH1_I2C_ADDR,
-                                            &led_val);
-      printk(KERN_NOTICE "[%s:%d][%s:%d] %s AR0234 LED_FLASH_CONTROL CH1: "
-                         "0x%04x (EN:%d DELAY:%d) ret:%d\n",
-             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-             __FUNCTION__, led_val, (led_val >> 8) & 1, led_val & 0xff,
-             led_ret);
-    } else {
-      led_ret = max9296_sipm_read_led_flash(sensor, AP1302_I2C_ADDR, &led_val);
-      printk(KERN_NOTICE "[%s:%d][%s:%d] %s AR0234 LED_FLASH_CONTROL: "
-                         "0x%04x (EN:%d DELAY:%d) ret:%d\n",
-             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-             __FUNCTION__, led_val, (led_val >> 8) & 1, led_val & 0xff,
-             led_ret);
-    }
-  }
-
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s cached controls applied (exp:%d)",
          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
          __FUNCTION__, sensor->ctrl_cache.exposure);
@@ -1996,7 +2097,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
                               ctrl->val, 2, 2);
     break;
   case V4L2_CID_LED_FLASH_CH0:
-    ret = max9296_sipm_write_led_flash(sensor, ch0_addr, (u16)ctrl->val);
+    ret = max9296_dma_write_reg(sensor, ch0_addr, AR0234_REG_LED_FLASH_CONTROL, (u16)ctrl->val);
     break;
 
   /* Per-channel controls - Channel 1 */
@@ -2061,7 +2162,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
                               ctrl->val, 2, 2);
     break;
   case V4L2_CID_LED_FLASH_CH1:
-    ret = max9296_sipm_write_led_flash(sensor, ch1_addr, (u16)ctrl->val);
+    ret = max9296_dma_write_reg(sensor, ch1_addr, AR0234_REG_LED_FLASH_CONTROL, (u16)ctrl->val);
     break;
 
   /* MCP4018 digital potentiometer */
@@ -2070,6 +2171,26 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     break;
   case V4L2_CID_MCP4018_WIPER_CH1:
     ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR_CH1, (u8)ctrl->val);
+    break;
+
+  /* Generic DMA register write: [31:16]=reg_addr, [15:0]=data */
+  case V4L2_CID_DMA_REG_WRITE_CH0: {
+    u16 reg_addr = (u16)(ctrl->val >> 16);
+    u16 reg_data = (u16)(ctrl->val & 0xFFFF);
+    ret = max9296_dma_write_reg(sensor, ch0_addr, reg_addr, reg_data);
+    break;
+  }
+  case V4L2_CID_DMA_REG_WRITE_CH1: {
+    u16 reg_addr = (u16)(ctrl->val >> 16);
+    u16 reg_data = (u16)(ctrl->val & 0xFFFF);
+    ret = max9296_dma_write_reg(sensor, ch1_addr, reg_addr, reg_data);
+    break;
+  }
+
+  /* DMA register read: address cached, actual read in g_volatile_ctrl */
+  case V4L2_CID_DMA_REG_READ_CH0:
+  case V4L2_CID_DMA_REG_READ_CH1:
+    ret = 0;
     break;
 
   default:
@@ -2161,7 +2282,7 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
   int ret;
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  v4l2_ctrl_handler_init(hdl, 50);
+  v4l2_ctrl_handler_init(hdl, 54);
 
   /* we can use our own mutex for the ctrl lock */
   hdl->lock = &sensor->lock;
@@ -2231,30 +2352,108 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
 
   /* MCP4018 digital potentiometer wiper control */
   {
-    static const struct v4l2_ctrl_config cfg_mcp4018 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_MCP4018_WIPER,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "MCP4018 Wiper",
-        .min = 0,
-        .max = MCP4018_WIPER_MAX,
-        .def = MCP4018_WIPER_DEFAULT,
-        .step = 1,
-    };
-    ctrls->mcp4018_wiper = v4l2_ctrl_new_custom(hdl, &cfg_mcp4018, NULL);
+    bool second = (sensor->i2c_client->adapter->nr == 1);
+    int ch0_num = second ? 2 : 0;
+    int ch1_num = second ? 3 : 1;
+
+    {
+      struct v4l2_ctrl_config cfg = {
+          .ops = &max9296_ctrl_ops,
+          .id = V4L2_CID_MCP4018_WIPER,
+          .type = V4L2_CTRL_TYPE_INTEGER,
+          .min = 0,
+          .max = MCP4018_WIPER_MAX,
+          .def = MCP4018_WIPER_DEFAULT,
+          .step = 1,
+      };
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "MCP4018 Wiper CH%d", ch0_num);
+      ctrls->mcp4018_wiper = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
+    }
+    {
+      struct v4l2_ctrl_config cfg = {
+          .ops = &max9296_ctrl_ops,
+          .id = V4L2_CID_MCP4018_WIPER_CH1,
+          .type = V4L2_CTRL_TYPE_INTEGER,
+          .min = 0,
+          .max = MCP4018_WIPER_MAX,
+          .def = MCP4018_WIPER_DEFAULT,
+          .step = 1,
+      };
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "MCP4018 Wiper CH%d", ch1_num);
+      ctrls->mcp4018_wiper_ch1 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
+    }
   }
+
+  /* Generic AR0234 DMA register access controls */
   {
-    static const struct v4l2_ctrl_config cfg_mcp4018_ch1 = {
-        .ops = &max9296_ctrl_ops,
-        .id = V4L2_CID_MCP4018_WIPER_CH1,
-        .type = V4L2_CTRL_TYPE_INTEGER,
-        .name = "MCP4018 Wiper CH1",
-        .min = 0,
-        .max = MCP4018_WIPER_MAX,
-        .def = MCP4018_WIPER_DEFAULT,
-        .step = 1,
-    };
-    ctrls->mcp4018_wiper_ch1 = v4l2_ctrl_new_custom(hdl, &cfg_mcp4018_ch1, NULL);
+    bool second = (sensor->i2c_client->adapter->nr == 1);
+    int ch0_num = second ? 2 : 0;
+    int ch1_num = second ? 3 : 1;
+
+    /* DMA Write CH0 */
+    {
+      struct v4l2_ctrl_config cfg = {
+          .ops = &max9296_ctrl_ops,
+          .id = V4L2_CID_DMA_REG_WRITE_CH0,
+          .type = V4L2_CTRL_TYPE_INTEGER,
+          .min = 0,
+          .max = 0x7FFFFFFF,
+          .def = 0,
+          .step = 1,
+      };
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "DMA Reg Write CH%d", ch0_num);
+      ctrls->dma_reg_write_ch0 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
+    }
+    /* DMA Write CH1 */
+    {
+      struct v4l2_ctrl_config cfg = {
+          .ops = &max9296_ctrl_ops,
+          .id = V4L2_CID_DMA_REG_WRITE_CH1,
+          .type = V4L2_CTRL_TYPE_INTEGER,
+          .min = 0,
+          .max = 0x7FFFFFFF,
+          .def = 0,
+          .step = 1,
+      };
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "DMA Reg Write CH%d", ch1_num);
+      ctrls->dma_reg_write_ch1 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
+    }
+    /* DMA Read CH0 (volatile - reads HW on get) */
+    {
+      struct v4l2_ctrl_config cfg = {
+          .ops = &max9296_ctrl_ops,
+          .id = V4L2_CID_DMA_REG_READ_CH0,
+          .type = V4L2_CTRL_TYPE_INTEGER,
+          .flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+          .min = 0,
+          .max = 0x7FFFFFFF,
+          .def = 0,
+          .step = 1,
+      };
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "DMA Reg Read CH%d", ch0_num);
+      ctrls->dma_reg_read_ch0 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
+    }
+    /* DMA Read CH1 (volatile - reads HW on get) */
+    {
+      struct v4l2_ctrl_config cfg = {
+          .ops = &max9296_ctrl_ops,
+          .id = V4L2_CID_DMA_REG_READ_CH1,
+          .type = V4L2_CTRL_TYPE_INTEGER,
+          .flags = V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+          .min = 0,
+          .max = 0x7FFFFFFF,
+          .def = 0,
+          .step = 1,
+      };
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "DMA Reg Read CH%d", ch1_num);
+      ctrls->dma_reg_read_ch1 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
+    }
   }
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s (pixel_rate:%d exp_time:%d)", KEYWORD,

@@ -90,9 +90,9 @@ i.MX8MP -> I2C -> AP1302 -> DMA-based sensor access -> AR0234
 ### 3.4 LED Flash Control
 
 ```bash
-./cam_ar0234_led_flash_read.sh
-./cam_ar0234_led_flash_write.sh 0x0000
-./cam_ar0234_led_flash_write.sh 0x0103
+./cam_ar0234_led_flash_read.sh 0
+./cam_ar0234_led_flash_write.sh 0 0x0000
+./cam_ar0234_led_flash_write.sh 0 0x0103
 ```
 
 검증 결과:
@@ -110,6 +110,18 @@ i.MX8MP -> I2C -> AP1302 -> DMA-based sensor access -> AR0234
 #### 범용 DMA read/write
 
 - `projects/pim-package-org/dist/pim/opt/pim/bin/cam_ap1302_dma_verify.sh`
+
+기본 인자 순서:
+
+- `channel`
+- `register`
+- `value`
+
+채널 해석 규칙:
+
+- `ch0/ch1 -> i2c2`
+- `ch2/ch3 -> i2c1`
+- AP1302 주소는 `edgeconf_pim.json`을 우선 사용하고, 없으면 `i2cdetect`로 single/dual을 판정해 `0x3c/0x11/0x12` 중에서 자동 결정
 
 예시:
 
@@ -129,9 +141,9 @@ i.MX8MP -> I2C -> AP1302 -> DMA-based sensor access -> AR0234
 예시:
 
 ```bash
-./cam_ar0234_led_flash_read.sh
-./cam_ar0234_led_flash_write.sh 0x0103
-./cam_ar0234_led_flash_write.sh 0x0000
+./cam_ar0234_led_flash_read.sh 0
+./cam_ar0234_led_flash_write.sh 0 0x0103
+./cam_ar0234_led_flash_write.sh 0 0x0000
 ```
 
 ### 4.2 Clock 관련 dump/backup/restore
@@ -139,13 +151,20 @@ i.MX8MP -> I2C -> AP1302 -> DMA-based sensor access -> AR0234
 - `cam_ar0234_dma_clock_dump.sh`
 - `cam_ar0234_dma_clock_safe.sh`
 
+인자 순서:
+
+- `cam_ar0234_dma_clock_dump.sh <channel>`
+- `cam_ar0234_dma_clock_safe.sh backup <channel>`
+- `cam_ar0234_dma_clock_safe.sh set <channel> <reg> <value>`
+- `cam_ar0234_dma_clock_safe.sh restore <channel>`
+
 예시:
 
 ```bash
-./cam_ar0234_dma_clock_safe.sh backup
-./cam_ar0234_dma_clock_safe.sh set 0x3036 0x0008
-./cam_ar0234_dma_clock_dump.sh
-./cam_ar0234_dma_clock_safe.sh restore
+./cam_ar0234_dma_clock_safe.sh backup 0
+./cam_ar0234_dma_clock_safe.sh set 0 0x3036 0x0008
+./cam_ar0234_dma_clock_dump.sh 0
+./cam_ar0234_dma_clock_safe.sh restore 0
 ```
 
 ---
@@ -218,18 +237,18 @@ AR0234_REG_SERIAL_FORMAT = (0x0200 | num_data_lanes)
 ### 7.2 LED Flash 확인
 
 ```bash
-./cam_ar0234_led_flash_read.sh
-./cam_ar0234_led_flash_write.sh 0x0000
-./cam_ar0234_led_flash_write.sh 0x0103
+./cam_ar0234_led_flash_read.sh 0
+./cam_ar0234_led_flash_write.sh 0 0x0000
+./cam_ar0234_led_flash_write.sh 0 0x0103
 ```
 
 ### 7.3 Clock Divider 확인
 
 ```bash
-./cam_ar0234_dma_clock_safe.sh backup
-./cam_ar0234_dma_clock_safe.sh set 0x3036 0x0008
-./cam_ar0234_dma_clock_dump.sh
-./cam_ar0234_dma_clock_safe.sh restore
+./cam_ar0234_dma_clock_safe.sh backup 0
+./cam_ar0234_dma_clock_safe.sh set 0 0x3036 0x0008
+./cam_ar0234_dma_clock_dump.sh 0
+./cam_ar0234_dma_clock_safe.sh restore 0
 ```
 
 ---

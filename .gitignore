@@ -10,3 +10,4 @@ Module.symvers
 
 # Kernel build directory
 .tmp_versions/
+.tmp/
