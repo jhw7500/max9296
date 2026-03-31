@@ -1875,8 +1875,8 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
       ch_ctrl->exposure
           ? ch_ctrl->exposure
           : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure : 10000);
-  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_EXP_TIME, exp_seed, 2,
-                            4);
+  ret = maxim_ops_i2c_write(sensor, AP1302_I2C_ADDR, AP1302_REG_EXP_TIME,
+                            exp_seed, 2, 4);
   if (ret)
     err = ret;
   msleep(100);
@@ -2018,9 +2018,14 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   /* Firmware ready: apply immediately to hardware */
   switch (ctrl->id) {
   case V4L2_CID_EXP_TIME:
-    /* Shared exposure time */
-    ret =
-        max9296_write_per_channel(sensor, AP1302_REG_EXP_TIME, ctrl->val, 2, 4);
+    /* Shared exposure time: always write to global 0x3c (applies to both channels) */
+    printk(KERN_NOTICE "[%s:%d][%s:%d] %s EXP_TIME ctrl->val:%d cache.exp:%d "
+                       "ch0.exp:%d ch1.exp:%d",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           __FUNCTION__, ctrl->val, sensor->ctrl_cache.exposure,
+           sensor->ctrl_cache.ch0.exposure, sensor->ctrl_cache.ch1.exposure);
+    ret = maxim_ops_i2c_write(sensor, AP1302_I2C_ADDR, AP1302_REG_EXP_TIME,
+                              ctrl->val, 2, 4);
     break;
   case V4L2_CID_HUE:
     ret = max9296_set_ctrl_hue(sensor, ctrl->val);
@@ -2070,12 +2075,8 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
                               2, 2);
     break;
   case V4L2_CID_EXPOSURE_CH0:
-    if (!sensor->ctrl_cache.ch0.ae_on) {
-      ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_EXP_TIME,
-                                ctrl->val, 2, 4);
-    } else {
-      ret = 0;
-    }
+    ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_EXP_TIME,
+                              ctrl->val, 2, 4);
     break;
   case V4L2_CID_HFLIP_CH0:
   case V4L2_CID_VFLIP_CH0: {
@@ -2135,12 +2136,8 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
                               2, 2);
     break;
   case V4L2_CID_EXPOSURE_CH1:
-    if (!sensor->ctrl_cache.ch1.ae_on) {
-      ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_EXP_TIME,
-                                ctrl->val, 2, 4);
-    } else {
-      ret = 0;
-    }
+    ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_EXP_TIME,
+                              ctrl->val, 2, 4);
     break;
   case V4L2_CID_HFLIP_CH1:
   case V4L2_CID_VFLIP_CH1: {
@@ -3061,13 +3058,13 @@ static int max9296_fsync(void *data) {
 
     if (sensor->restart == 1) {
       restart_cnt = 1;
-      msleep_interruptible(300);
+      usleep_range(300000, 300000);
       continue;
     }
 
     if (restart_cnt > 0) {
       --restart_cnt;
-      msleep_interruptible(1000);
+      usleep_range(1000000, 1000000);
       continue;
     }
 
@@ -3075,14 +3072,17 @@ static int max9296_fsync(void *data) {
     if (sensor->shared.sensor == NULL) {
       if (sensor->state.enable == MAX9296_STATE_DONE) {
         if (sensor->state.fsync != MAX9296_STATE_RUNNING)
-          msleep_interruptible(1000);
+          usleep_range(1000000, 1000000);
 
-        low = (1000000 / sensor->fps) - high;
+        if (low == 0) {
+          low = (1000000 / sensor->fps);
+          low -= high;
+        }
 
         gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
-        usleep_range(high, high + high / 10);
+        usleep_range(high, high);
         gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
-        usleep_range(low, low + low / 10);
+        usleep_range(low, low);
         sensor->state.fsync = MAX9296_STATE_RUNNING;
       } else {
         usleep_range(10000, 11000);
@@ -3095,21 +3095,24 @@ static int max9296_fsync(void *data) {
         if ((sensor->state.enable == MAX9296_STATE_DONE) &&
             (sensor->shared.sensor->state.enable == MAX9296_STATE_DONE)) {
           if (sensor->state.fsync != MAX9296_STATE_RUNNING)
-            msleep_interruptible(1000);
+            usleep_range(1000000, 1000000);
 
           if (sensor->shared.sensor->state.fsync != MAX9296_STATE_RUNNING)
-            msleep_interruptible(1000);
+            usleep_range(1000000, 1000000);
 
-          low = (1000000 / sensor->fps) - high;
+          if (low == 0) {
+            low = (1000000 / sensor->fps);
+            low -= high;
+          }
 
           pr_notice_once("[%s:%d][%s:%d] %s fps : %d, low : %d, high : "
                          "%d\n",
                          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
                          __LINE__, __FUNCTION__, sensor->fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
-          usleep_range(high, high + high / 10);
+          usleep_range(high, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
-          usleep_range(low, low + low / 10);
+          usleep_range(low, low);
           sensor->shared.sensor->state.fsync = sensor->state.fsync =
               MAX9296_STATE_RUNNING;
         } else {
@@ -3139,18 +3142,21 @@ static int max9296_fsync(void *data) {
 
         if (start) {
           if (*fsync_state != MAX9296_STATE_RUNNING)
-            msleep_interruptible(1000);
+            usleep_range(1000000, 1000000);
 
-          low = (1000000 / fps) - high;
+          if (low == 0) {
+            low = (1000000 / fps);
+            low -= high;
+          }
 
           pr_notice_once("[%s:%d][%s:%d] %s fps : %d, low : %d, "
                          "high : %d\n",
                          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
                          __LINE__, __FUNCTION__, fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
-          usleep_range(high, high + high / 10);
+          usleep_range(high, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
-          usleep_range(low, low + low / 10);
+          usleep_range(low, low);
           *fsync_state = MAX9296_STATE_RUNNING;
         }
       }
@@ -3200,26 +3206,24 @@ static int max9296_enable(void *data) {
               usleep_range(10000, 11000);
             }
 
-            // ae - per-channel (init to manual first)
-            max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
-                                      AP1302_AE_CTRL_MANUAL, 2, 2);
-            max9296_write_per_channel(sensor->shared.sensor, AP1302_REG_AE_CTRL,
-                                      AP1302_AE_CTRL_MANUAL, 2, 2);
-            msleep_interruptible(100);
-
-            // awb - per-channel
-            max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
-                                      AP1302_AWB_CTRL_AUTO, 2, 2);
-            max9296_write_per_channel(sensor->shared.sensor,
-                                      AP1302_REG_AWB_CTRL, AP1302_AWB_CTRL_AUTO,
-                                      2, 2);
-            msleep_interruptible(100);
-
-            // lsc - per-channel
-            max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2,
-                                      2);
-            max9296_write_per_channel(sensor->shared.sensor,
-                                      AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
+            // ae
+            maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2);
+            maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5002, 0x0290, 2,
+                                2);
+            usleep_range(100000, 101000);
+            maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2);
+            maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5002, 0x0299, 2,
+                                2);
+            // awb
+            usleep_range(100000, 101000);
+            maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2);
+            maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5100, 0x115f, 2,
+                                2);
+            // lsc
+            usleep_range(100000, 101000);
+            maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
+            maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x54a0, 0x3fff, 2,
+                                2);
           }
         } else {
           if (sensor->current_mode->id == MAX9296_MODE_1280x720) {
@@ -3230,21 +3234,16 @@ static int max9296_enable(void *data) {
             usleep_range(10000, 11000);
           }
 
-          // ae - per-channel (init to manual first, then auto)
-          max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
-                                    AP1302_AE_CTRL_MANUAL, 2, 2);
-          msleep_interruptible(100);
-          max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
-                                    AP1302_AE_CTRL_AUTO, 2, 2);
-          msleep_interruptible(100);
-
-          // awb - per-channel
-          max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
-                                    AP1302_AWB_CTRL_AUTO, 2, 2);
-          msleep_interruptible(100);
-
-          // lsc - per-channel
-          max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
+          // ae
+          maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2);
+          usleep_range(100000, 101000);
+          maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2);
+          // awb
+          usleep_range(100000, 101000);
+          maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2);
+          // lsc
+          usleep_range(100000, 101000);
+          maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
         }
       } else {
         if (sensor->current_mode->id == MAX9296_MODE_1280x720) {
@@ -3255,21 +3254,16 @@ static int max9296_enable(void *data) {
           usleep_range(10000, 11000);
         }
 
-        // ae - per-channel (init to manual first, then auto)
-        max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
-                                  AP1302_AE_CTRL_MANUAL, 2, 2);
-        msleep_interruptible(100);
-        max9296_write_per_channel(sensor, AP1302_REG_AE_CTRL,
-                                  AP1302_AE_CTRL_AUTO, 2, 2);
-        msleep_interruptible(100);
-
-        // awb - per-channel
-        max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
-                                  AP1302_AWB_CTRL_AUTO, 2, 2);
-        msleep_interruptible(100);
-
-        // lsc - per-channel
-        max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, 0x3fff, 2, 2);
+        // ae
+        maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2);
+        usleep_range(100000, 101000);
+        maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2);
+        // awb
+        usleep_range(100000, 101000);
+        maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2);
+        // lsc
+        usleep_range(100000, 101000);
+        maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
       }
       sensor->stream_on = 0;
 
