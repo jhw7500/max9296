@@ -1,56 +1,56 @@
 # GitHub Actions Workflow Configuration
 #
-# This file controls enable/disable toggles for automatic workflows.
-# Workflows should default to enabled if this file is missing.
+# This file controls enable/disable toggles for shared workflows.
+# Workflows default to enabled if this file is missing.
+#
+# - enabled: workflow 자체 활성화 (false면 수동 트리거도 비활성)
+# - auto: PR 생성 시 자동 실행 여부 (없으면 해당 없음, 수동 트리거는 enabled만 체크)
 
 # Shared workflow version pin for jhw7500/automation.
-#
-# NOTE: GitHub Actions does not allow dynamic refs in `uses: ...@ref`, so this value
-# is used by a repo automation workflow that opens a PR updating all `uses:` refs.
-automation_ref: v1.23
+automation_ref: v1.28
 
-# Global review behavior.
-# - manual triggers (e.g. @gemini-cli /review, @claude) should keep working regardless.
-# - set review.auto=false to disable automatic PR reviews.
-review:
-  auto: false
-
-# Per-workflow toggles.
-# Comment-driven workflows should be explicitly controllable even in internal repos.
 workflows:
-  # Repo-specific CI workflows
-  build-test:
-    enabled: true  # Enabled: Using Ubuntu 20.04 Docker container with Linux 5.10 headers
+  # Repo-specific
   shellcheck:
     enabled: true
+    description: "Shell script static analysis"
 
-  # Repo automation helpers
-  bump-automation-ref:
+  build-test:
     enabled: true
+    description: "Build and test the package"
 
-  # Shared automation workflow wrappers
-  auto-rereview-request:
-    enabled: false  # Disabled: Workflow has git checkout issue
-  claude-code-review:
-    enabled: true
-  gemini-auto-review:
-    enabled: true
+  # Shared Gemini workflows
   gemini-dispatch:
     enabled: true
+    description: "Central dispatcher for Gemini commands"
+
   gemini-invoke:
     enabled: true
+    description: "General Gemini CLI invocation"
+
   gemini-review:
     enabled: true
-  gemini-scheduled-triage:
-    enabled: false  # Disabled: 자동 스케줄 비활성화
+    description: "PR code review with Gemini (manual: @gemini-cli /review)"
+
   gemini-triage:
     enabled: true
+    description: "Issue triage and labeling"
 
-  opencode:
+  gemini-auto-review:
     enabled: true
-  opencode-auto-review:
-    enabled: true
-  gemini-chat:
-    enabled: true
+    auto: true
+    description: "Automatic PR review with Gemini"
+
+  gemini-scheduled-triage:
+    enabled: false
+    description: "Scheduled issue triage (disabled to avoid hourly runs)"
+
+  # Shared Claude workflows
   claude:
     enabled: true
+    description: "Claude AI integration (manual: @claude)"
+
+  claude-code-review:
+    enabled: true
+    auto: true
+    description: "Claude automatic PR review"
