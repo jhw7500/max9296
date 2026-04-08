@@ -11,3 +11,11 @@ Module.symvers
 # Kernel build directory
 .tmp_versions/
 .tmp/
+
+# Tool/temp directories
+.context/
+tmp/
+.bkit/
+.omc/
+.serena/
+.vscode/
