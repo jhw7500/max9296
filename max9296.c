@@ -1246,8 +1246,7 @@ static u64 max9296_calc_pixel_rate(struct max9296_dev *sensor) {
 
   rate = sensor->current_mode->width * sensor->current_mode->height;
   rate *= sensor->fps;
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s (rate:%llu)", KEYWORD,
-         sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, rate);
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s (rate:%llu)", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, rate);
   return rate;
 }
 
@@ -2277,8 +2276,8 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
   struct max9296_ctrls *ctrls = &sensor->ctrls;
   struct v4l2_ctrl_handler *hdl = &ctrls->handler;
   int ret;
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
-         sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+  //printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+
   v4l2_ctrl_handler_init(hdl, 54);
 
   /* we can use our own mutex for the ctrl lock */

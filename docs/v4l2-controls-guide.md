@@ -225,3 +225,37 @@ v4l2-ctl -d $DEV -c mcp4018_wiper_ch0=63
 - LED Flash 레지스터(0x3270)는 상태 비트가 추가로 반영될 수 있다. 검증 시 `mask=0x01ff` 기준으로 비교한다.
 - MCP4018 가변저항은 MAX9295 MFP4 GPIO가 HIGH일 때만 동작한다 (VCC 공급).
 - 기존 SIPM 방식은 제거되었다. AR0234 센서 레지스터 접근은 DMA만 사용한다.
+
+---
+
+## 7. 초기화 로그 해석
+
+`max9296_init_controls()` (max9296.c:2459~2468)는 V4L2 컨트롤 등록 직후 **디폴트 값**을 커널 로그에 남긴다. 이 로그는 사용자 공간에서 아직 값을 쓰지 않은 "갓 초기화된" 상태를 나타낸다.
+
+### 7.1 로그 예시
+
+```
+max9296_init_controls (gain_ch0:256 awb_ch0:1 sat_ch0:4096 hue:0 con_ch0:0 hflip_ch0:0 vflip_ch0:0 light_freq:1)
+```
+
+### 7.2 필드별 의미
+
+| 필드 | 값 | V4L2 CID | 범위 (min~max, def) | 의미 |
+|------|----|----------|---------------------|------|
+| `gain_ch0` | 256 | `V4L2_CID_GAIN_CH0` | 0~65535, def=256 | CH0 수동 Gain (Q8 고정소수점, 256 = 1.0x) |
+| `awb_ch0` | 1 | `V4L2_CID_AUTO_WHITE_BALANCE_CH0` | 0~1, def=1 | CH0 Auto White Balance **ON** |
+| `sat_ch0` | 4096 | `V4L2_CID_SATURATION_CH0` | 0~65535, def=4096 | CH0 채도 (fixed12, 4096 = 1.0 중립) |
+| `hue` | 0 | `V4L2_CID_HUE` | 0~359, def=0 | 색상 회전 0° (채널 공용) |
+| `con_ch0` | 0 | `V4L2_CID_CONTRAST_CH0` | 0~65535, def=0 | CH0 대비 (보정 없음) |
+| `hflip_ch0` | 0 | `V4L2_CID_HFLIP_CH0` | 0~1, def=0 | 수평 뒤집기 OFF |
+| `vflip_ch0` | 0 | `V4L2_CID_VFLIP_CH0` | 0~1, def=0 | 수직 뒤집기 OFF |
+| `light_freq` | 1 | `V4L2_CID_POWER_LINE_FREQUENCY` | 메뉴, def=1 | 플리커 억제 **50Hz** (국내 전원, 채널 공용) |
+
+### 7.3 해석 포인트
+
+- **모두 디폴트 값** — 로그 시점에 사용자 공간이 어떤 컨트롤에도 값을 쓰지 않았음을 의미. `v4l2-ctl --set-ctrl=...`이 먼저 호출되지 않은 fresh 상태.
+- **실동작 설정**은 `awb_ch0=1` (AWB ON)과 `light_freq=50Hz` 두 개뿐. 나머지는 중립/OFF.
+- **고정소수점 주의**: `gain`은 Q8 (256=1.0x), `sat`/`con`/`lsc`/`brightness`는 fixed12 (4096=1.0). 배율 오해로 잘못된 값을 쓰지 않도록 주의.
+- `hue`/`light_freq`는 **채널 공용 컨트롤**이므로 `_ch0`/`_ch1` 접미사가 없다.
+- `con_ch0=0`과 `sat_ch0=4096`은 둘 다 "보정 없음"이지만 디폴트 숫자가 다르다 — 컨트롤 테이블(max9296.c:2261-2269)의 def 값을 그대로 반영한 것.
+- 같은 라인이 CH1도 동일하게 찍혀야 정상. 한쪽만 로그에 없다면 해당 채널 v4l2_ctrl 등록 실패 가능성.
