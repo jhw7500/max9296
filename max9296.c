@@ -83,7 +83,32 @@ static int debug;
 
 #define AP1302_AE_CTRL_AUTO 0x0299
 #define AP1302_AE_CTRL_MANUAL 0x0290
-#define AP1302_AWB_CTRL_AUTO 0x115f
+
+/*
+ * AWB_CTRL (0x5100) layout:
+ *   [12]=POSTGAIN, [10:8]=undocumented, [7:6]=FACE, [4]=IMM1, [3:0]=MODE
+ * AP1302_AWB_CTRL_BASE keeps the tuning flags this driver has always
+ * used (POSTGAIN=1, bit8 = firmware-internal flag carried over from the
+ * original 0x115f AUTO constant, FACE=ignore, IMM1=1). The caller ORs
+ * the desired MODE value (0x0~0xf) into the lower nibble.
+ * BASE | AUTO(0xf) == 0x115f preserves byte-for-byte compatibility with
+ * the pre-change AP1302_AWB_CTRL_AUTO value.
+ */
+#define AP1302_AWB_CTRL_BASE    0x1150
+#define AP1302_AWB_MODE_OFF     0x0  /* manual via AWB_MANUAL_QX/QY */
+#define AP1302_AWB_MODE_HORIZON 0x1
+#define AP1302_AWB_MODE_A       0x2
+#define AP1302_AWB_MODE_CWF     0x3
+#define AP1302_AWB_MODE_D50     0x4
+#define AP1302_AWB_MODE_D65     0x5
+#define AP1302_AWB_MODE_D75     0x6
+#define AP1302_AWB_MODE_TEMP    0x7  /* user AWB_MANUAL_TEMP */
+#define AP1302_AWB_MODE_MEASURE 0x8  /* one-shot */
+#define AP1302_AWB_MODE_AUTO    0xf
+#define AP1302_AWB_MODE_MASK    0xf
+#define AP1302_AWB_CTRL_AUTO    (AP1302_AWB_CTRL_BASE | AP1302_AWB_MODE_AUTO)
+#define AP1302_AWB_CTRL_FROM_MODE(m) \
+  ((u16)(AP1302_AWB_CTRL_BASE | ((m) & AP1302_AWB_MODE_MASK)))
 
 /* Custom V4L2 controls for per-channel settings in dual-channel mode */
 #define V4L2_CID_EXPOSURE_AUTO_CH0 (V4L2_CID_USER_BASE + 0x1000)
@@ -1603,19 +1628,30 @@ static int max9296_set_ctrl_lsc(struct max9296_dev *sensor, int value) {
   return max9296_write_per_channel(sensor, AP1302_REG_LSC_CTRL, value, 2, 2);
 }
 
+static const char *awb_mode_name(int mode) {
+  switch (mode & AP1302_AWB_MODE_MASK) {
+    case AP1302_AWB_MODE_OFF:     return "off";
+    case AP1302_AWB_MODE_HORIZON: return "horizon";
+    case AP1302_AWB_MODE_A:       return "a";
+    case AP1302_AWB_MODE_CWF:     return "cwf";
+    case AP1302_AWB_MODE_D50:     return "d50";
+    case AP1302_AWB_MODE_D65:     return "d65";
+    case AP1302_AWB_MODE_D75:     return "d75";
+    case AP1302_AWB_MODE_TEMP:    return "temp";
+    case AP1302_AWB_MODE_MEASURE: return "measure";
+    case AP1302_AWB_MODE_AUTO:    return "auto";
+    default:                      return "?";
+  }
+}
+
 static int max9296_set_ctrl_white_balance(struct max9296_dev *sensor, int awb) {
-  int ret;
+  u16 awb_val = AP1302_AWB_CTRL_FROM_MODE(awb);
 
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s awb:%d", KEYWORD,
-         sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, awb);
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s awb:%s(0x%04x)", KEYWORD,
+         sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
+         awb_mode_name(awb), awb_val);
 
-  if (awb)
-    ret = max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL,
-                                    AP1302_AWB_CTRL_AUTO, 2, 2);
-  else
-    ret = max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL, 0x0000, 2, 2);
-
-  return ret;
+  return max9296_write_per_channel(sensor, AP1302_REG_AWB_CTRL, awb_val, 2, 2);
 }
 
 static int
@@ -1888,8 +1924,8 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
   if (ch_ctrl->ae_on)
     msleep(100);
 
-  /* AWB (auto/manual) */
-  awb_val = ch_ctrl->awb ? AP1302_AWB_CTRL_AUTO : 0x0000;
+  /* AWB: ch_ctrl->awb holds AWB_CTRL MODE (0x0~0xf). */
+  awb_val = AP1302_AWB_CTRL_FROM_MODE(ch_ctrl->awb);
   ret =
       maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2, 2);
   if (ret)
@@ -1926,11 +1962,11 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
   if (ret)
     err = ret;
 
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied (i2c:0x%02x ae:%s awb:%d "
-                     "gain:%d exp_seed:%u rot:0x%02x) ret:%d\n",
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied (i2c:0x%02x ae:%s "
+                     "awb:%s(0x%04x) gain:%d exp_seed:%u rot:0x%02x) ret:%d\n",
          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
          __FUNCTION__, ch_name, i2c_addr, ch_ctrl->ae_on ? "auto" : "manual",
-         ch_ctrl->awb, gain_seed, exp_seed, rot, err);
+         awb_mode_name(ch_ctrl->awb), awb_val, gain_seed, exp_seed, rot, err);
 }
 
 static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
@@ -1966,9 +2002,17 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
     max9296_apply_channel_controls(sensor, AP1302_CH1_I2C_ADDR,
                                    &sensor->ctrl_cache.ch1, ch1_name);
   } else {
-    /* Single-channel mode: apply ch0 settings to global address */
+    /* Single-channel mode: apply ch0 cache slot to global address.
+     * sensor->enable bitmask identifies the active local channel
+     * (0x01 = local ch0, 0x02 = local ch1); add link_status.ch_shift
+     * to get the global channel number (csi0 base=0, csi1 base=2).
+     */
+    char single_name[16];
+    unsigned int local_ch = (sensor->enable == 0x02) ? 1 : 0;
+    unsigned int global_ch = sensor->link_status.ch_shift + local_ch;
+    snprintf(single_name, sizeof(single_name), "ch%u-single", global_ch);
     max9296_apply_channel_controls(sensor, AP1302_I2C_ADDR,
-                                   &sensor->ctrl_cache.ch0, "single");
+                                   &sensor->ctrl_cache.ch0, single_name);
   }
 
   sensor->ctrl_cache.pending = false;
@@ -2056,7 +2100,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     break;
   }
   case V4L2_CID_AUTO_WHITE_BALANCE_CH0: {
-    u16 awb_val = ctrl->val ? AP1302_AWB_CTRL_AUTO : 0x0000;
+    u16 awb_val = AP1302_AWB_CTRL_FROM_MODE(ctrl->val);
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_AWB_CTRL, awb_val, 2,
                               2);
     break;
@@ -2117,7 +2161,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     break;
   }
   case V4L2_CID_AUTO_WHITE_BALANCE_CH1: {
-    u16 awb_val = ctrl->val ? AP1302_AWB_CTRL_AUTO : 0x0000;
+    u16 awb_val = AP1302_AWB_CTRL_FROM_MODE(ctrl->val);
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_AWB_CTRL, awb_val, 2,
                               2);
     break;
@@ -2241,8 +2285,8 @@ static const struct max9296_ctrl_desc max9296_per_ch_ctrls[] = {
               V4L2_CTRL_TYPE_BOOLEAN, "AE On", 0, 1, 1, auto_exp_ch0,
               auto_exp_ch1),
     CTRL_DESC(V4L2_CID_AUTO_WHITE_BALANCE_CH0, V4L2_CID_AUTO_WHITE_BALANCE_CH1,
-              V4L2_CTRL_TYPE_BOOLEAN, "Auto White Balance", 0, 1, 1,
-              auto_wb_ch0, auto_wb_ch1),
+              V4L2_CTRL_TYPE_INTEGER, "AWB Mode", 0, AP1302_AWB_MODE_MASK,
+              AP1302_AWB_MODE_AUTO, auto_wb_ch0, auto_wb_ch1),
     CTRL_DESC(V4L2_CID_AUTOGAIN_CH0, V4L2_CID_AUTOGAIN_CH1,
               V4L2_CTRL_TYPE_BOOLEAN, "Auto Gain", 0, 1, 1, auto_gain_ch0,
               auto_gain_ch1),
@@ -3578,7 +3622,8 @@ static int max9296_probe(struct i2c_client *client) {
                                      ? (sensor->ctrls.auto_exp_ch0->val ? 1 : 0)
                                      : 1;
   sensor->ctrl_cache.ch0.awb =
-      sensor->ctrls.auto_wb_ch0 ? sensor->ctrls.auto_wb_ch0->val : 1;
+      sensor->ctrls.auto_wb_ch0 ? sensor->ctrls.auto_wb_ch0->val
+                                : AP1302_AWB_MODE_AUTO;
   sensor->ctrl_cache.ch0.gain_auto =
       sensor->ctrls.auto_gain_ch0 ? sensor->ctrls.auto_gain_ch0->val : 1;
   sensor->ctrl_cache.ch0.gain =
@@ -3602,7 +3647,8 @@ static int max9296_probe(struct i2c_client *client) {
                                      ? (sensor->ctrls.auto_exp_ch1->val ? 1 : 0)
                                      : 1;
   sensor->ctrl_cache.ch1.awb =
-      sensor->ctrls.auto_wb_ch1 ? sensor->ctrls.auto_wb_ch1->val : 1;
+      sensor->ctrls.auto_wb_ch1 ? sensor->ctrls.auto_wb_ch1->val
+                                : AP1302_AWB_MODE_AUTO;
   sensor->ctrl_cache.ch1.gain_auto =
       sensor->ctrls.auto_gain_ch1 ? sensor->ctrls.auto_gain_ch1->val : 1;
   sensor->ctrl_cache.ch1.gain =
