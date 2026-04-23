@@ -39,7 +39,7 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-#define SW_VERSION "2.0"
+#define SW_VERSION "2.1"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
@@ -164,10 +164,27 @@ static int debug;
 #define V4L2_CID_DMA_REG_READ_CH0 (V4L2_CID_USER_BASE + 0x101E)
 #define V4L2_CID_DMA_REG_READ_CH1 (V4L2_CID_USER_BASE + 0x101F)
 
+/* MCP4018 VCC power control via MAX9295 MFP4 GPIO (bool) */
+#define V4L2_CID_MCP4018_POWER_CH0 (V4L2_CID_USER_BASE + 0x1020)
+#define V4L2_CID_MCP4018_POWER_CH1 (V4L2_CID_USER_BASE + 0x1021)
+
+/* MAX9295 serializer addresses per link (matches mcp4018_ctrl.sh channel table) */
+#define MAX9295_SER_ADDR_CH0   0x40  /* Link A: ch0 (bus2) / ch2 (bus1) */
+#define MAX9295_SER_ADDR_CH1   0x60  /* Link B: ch1 (bus2) / ch3 (bus1) */
+#define MAX9295_REG_MFP4_CTRL  0x02ca
+#define MAX9295_MFP4_POWER_ON  0x90
+#define MAX9295_MFP4_POWER_OFF 0x80
+
 /*
  * MCP4018T-503E: 7-bit single I2C digital potentiometer (50kΩ, 128 steps)
  * Connected to MAX9295 main I2C bus (I2C0, shared with AP1302 ISP)
- * VCC controlled by MAX9295 MFP4 GPIO HIGH
+ * MAX9295 MFP4 GPIO is the MCP4018 I2C-bus gate (HIGH=connected, LOW=isolated);
+ * the wiper value is retained by the pot after the I2C gate closes.
+ *
+ * Port A and Port B MCP4018 share host-visible addr 0x2F without remap, so
+ * userspace must enforce mutual exclusion during wiper write: open one
+ * channel's MFP4 → write wiper → close it → next channel. See gstApp
+ * apply_led_flash_v4l2() for the transient-gate pattern.
  *
  * I2C protocol (no register address):
  *   Write: [START][0x5E][wiper_value(0x00~0x7F)][STOP]
@@ -286,6 +303,8 @@ struct max9296_ctrls {
   /* MCP4018 digital potentiometer */
   struct v4l2_ctrl *mcp4018_wiper;
   struct v4l2_ctrl *mcp4018_wiper_ch1;
+  struct v4l2_ctrl *mcp4018_power;
+  struct v4l2_ctrl *mcp4018_power_ch1;
 
   /* Generic AR0234 DMA register access */
   struct v4l2_ctrl *dma_reg_write_ch0;
@@ -324,6 +343,8 @@ struct max9296_ctrl_cache {
   /* MCP4018 digital potentiometer */
   int mcp4018_wiper;      /* V4L2_CID_MCP4018_WIPER - Port B (0x00~0x7F) */
   int mcp4018_wiper_ch1;  /* V4L2_CID_MCP4018_WIPER_CH1 - Port A (0x00~0x7F) */
+  int mcp4018_power;      /* V4L2_CID_MCP4018_POWER_CH0 - MFP4 HIGH/LOW (bool) */
+  int mcp4018_power_ch1;  /* V4L2_CID_MCP4018_POWER_CH1 - MFP4 HIGH/LOW (bool) */
 
   /* DMA register access: last read address per channel */
   u16 dma_read_addr_ch0;  /* AR0234 reg addr for CH0 read */
@@ -861,6 +882,18 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
   }
 
   return 0;
+}
+
+/*
+ * MAX9295 MFP4 GPIO toggle — gates MCP4018 VCC.
+ * Equivalent to the commented-out reg_value entries in link init tables:
+ *   {ser_addr, 0x02ca, 2, 0x90 (ON) / 0x80 (OFF), 1, 10}
+ */
+static int max9295_mfp4_set(struct max9296_dev *sensor, u8 ser_addr, bool on) {
+  return maxim_ops_i2c_write(sensor, ser_addr, MAX9295_REG_MFP4_CTRL,
+                             on ? MAX9295_MFP4_POWER_ON
+                                : MAX9295_MFP4_POWER_OFF,
+                             2, 1);
 }
 
 /*
@@ -1862,6 +1895,12 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
   case V4L2_CID_MCP4018_WIPER_CH1:
     sensor->ctrl_cache.mcp4018_wiper_ch1 = ctrl->val;
     break;
+  case V4L2_CID_MCP4018_POWER_CH0:
+    sensor->ctrl_cache.mcp4018_power = ctrl->val ? 1 : 0;
+    break;
+  case V4L2_CID_MCP4018_POWER_CH1:
+    sensor->ctrl_cache.mcp4018_power_ch1 = ctrl->val ? 1 : 0;
+    break;
 
   /* DMA register access - cache read address */
   case V4L2_CID_DMA_REG_READ_CH0:
@@ -1889,7 +1928,12 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
 static void max9296_apply_channel_controls(struct max9296_dev *sensor,
                                            u32 i2c_addr,
                                            struct max9296_channel_ctrl *ch_ctrl,
-                                           const char *ch_name) {
+                                           u8 ser_addr, u8 mcp4018_host,
+                                           u8 mcp4018_wiper,
+                                           const char *ch_name,
+                                           const char *mode_name) {
+  bool mcp_active = (ch_ctrl->led_flash & (1 << 8));
+  u8 flash_delay = (u8)(ch_ctrl->led_flash & 0xff);
   u16 ae_val, awb_val, rot;
   u32 exp_seed;
   u16 gain_seed;
@@ -1962,11 +2006,30 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
   if (ret)
     err = ret;
 
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied (i2c:0x%02x ae:%s "
-                     "awb:%s(0x%04x) gain:%d exp_seed:%u rot:0x%02x) ret:%d\n",
+  /* LED flash (AR0234 R0x3270 via AP1302 DMA). Firmware routes to the
+   * correct physical sensor in both dual and single modes. */
+  ret = max9296_dma_write_reg(sensor, i2c_addr, AR0234_REG_LED_FLASH_CONTROL,
+                              (u16)ch_ctrl->led_flash);
+  if (ret)
+    err = ret;
+
+  /* MCP4018 wiper — atomic open/write/close. Gated on flash enable bit:
+   * when the flash is disabled the LED/MCP4018 chain may be unpopulated. */
+  if (mcp_active) {
+    max9295_mfp4_set(sensor, ser_addr, true);
+    ret = mcp4018_write_wiper(sensor, mcp4018_host, mcp4018_wiper);
+    max9295_mfp4_set(sensor, ser_addr, false);
+    if (ret)
+      err = ret;
+  }
+
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s %s applied %s(addr:0x%02x ae:%s "
+         "awb:%s(0x%04x) gain:%d exp:%u rot:0x%02x mcp:%s wiper:0x%02x delay:0x%02x) ret:%d\n",
          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-         __FUNCTION__, ch_name, i2c_addr, ch_ctrl->ae_on ? "auto" : "manual",
-         awb_mode_name(ch_ctrl->awb), awb_val, gain_seed, exp_seed, rot, err);
+         __FUNCTION__, ch_name, mode_name, err ? "FAIL" : "ok",
+         i2c_addr, ch_ctrl->ae_on ? "on" : "off",
+         awb_mode_name(ch_ctrl->awb), awb_val, gain_seed, exp_seed, rot,
+         mcp_active ? "on" : "off", mcp4018_wiper, flash_delay, err);
 }
 
 static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
@@ -1996,31 +2059,40 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
   /* Shared tuning values */
 
   if (dual) {
-    /* Dual-channel mode: apply each channel's settings separately */
+    /* Dual-channel mode: apply each channel's settings separately.
+     * MCP4018 per-port wiper is inlined via max9296_apply_channel_controls. */
     max9296_apply_channel_controls(sensor, AP1302_CH0_I2C_ADDR,
-                                   &sensor->ctrl_cache.ch0, ch0_name);
+                                   &sensor->ctrl_cache.ch0,
+                                   MAX9295_SER_ADDR_CH0, MCP4018_HOST_ADDR,
+                                   (u8)sensor->ctrl_cache.mcp4018_wiper,
+                                   ch0_name, "dual");
     max9296_apply_channel_controls(sensor, AP1302_CH1_I2C_ADDR,
-                                   &sensor->ctrl_cache.ch1, ch1_name);
+                                   &sensor->ctrl_cache.ch1,
+                                   MAX9295_SER_ADDR_CH1, MCP4018_HOST_ADDR_CH1,
+                                   (u8)sensor->ctrl_cache.mcp4018_wiper_ch1,
+                                   ch1_name, "dual");
   } else {
     /* Single-channel mode: apply ch0 cache slot to global address.
      * sensor->enable bitmask identifies the active local channel
-     * (0x01 = local ch0, 0x02 = local ch1); add link_status.ch_shift
-     * to get the global channel number (csi0 base=0, csi1 base=2).
+     * (0x01 = local ch0 / Port A, 0x02 = local ch1 / Port B);
+     * add link_status.ch_shift to get the global channel number.
+     * MCP4018 is hardware-direct: pick the port matching the active local ch.
      */
-    char single_name[16];
+    char single_name[8];
     unsigned int local_ch = (sensor->enable == 0x02) ? 1 : 0;
     unsigned int global_ch = sensor->link_status.ch_shift + local_ch;
-    snprintf(single_name, sizeof(single_name), "ch%u-single", global_ch);
+    u8 ser   = local_ch ? MAX9295_SER_ADDR_CH1 : MAX9295_SER_ADDR_CH0;
+    u8 host  = local_ch ? MCP4018_HOST_ADDR_CH1 : MCP4018_HOST_ADDR;
+    u8 wiper = local_ch ? (u8)sensor->ctrl_cache.mcp4018_wiper_ch1
+                        : (u8)sensor->ctrl_cache.mcp4018_wiper;
+    snprintf(single_name, sizeof(single_name), "ch%u", global_ch);
     max9296_apply_channel_controls(sensor, AP1302_I2C_ADDR,
-                                   &sensor->ctrl_cache.ch0, single_name);
+                                   &sensor->ctrl_cache.ch0,
+                                   ser, host, wiper, single_name, "single");
   }
 
   sensor->ctrl_cache.pending = false;
   sensor->ctrl_cache.firmware_ready = true;
-
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s cached controls applied (exp:%d)",
-         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-         __FUNCTION__, sensor->ctrl_cache.exposure);
 }
 
 static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
@@ -2205,12 +2277,27 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     ret = max9296_dma_write_reg(sensor, ch1_addr, AR0234_REG_LED_FLASH_CONTROL, (u16)ctrl->val);
     break;
 
-  /* MCP4018 digital potentiometer */
+  /* MCP4018 digital potentiometer (atomic: open I2C gate -> write -> close).
+   * Collision-safe vs the shared host addr 0x2F between Port A (local CH0) and
+   * Port B (local CH1). Works in both adapters — on adapter 1 the "CH0/CH1"
+   * slots physically drive global ch2/ch3.
+   */
   case V4L2_CID_MCP4018_WIPER:
+    max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH0, true);
     ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR, (u8)ctrl->val);
+    max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH0, false);
     break;
   case V4L2_CID_MCP4018_WIPER_CH1:
+    max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH1, true);
     ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR_CH1, (u8)ctrl->val);
+    max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH1, false);
+    break;
+  /* Standalone power toggle retained as diagnostic handle (not used by gstApp) */
+  case V4L2_CID_MCP4018_POWER_CH0:
+    ret = max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH0, !!ctrl->val);
+    break;
+  case V4L2_CID_MCP4018_POWER_CH1:
+    ret = max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH1, !!ctrl->val);
     break;
 
   /* Generic DMA register write: [31:16]=reg_addr, [15:0]=data */
@@ -2322,7 +2409,7 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
   int ret;
   //printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
-  v4l2_ctrl_handler_init(hdl, 54);
+  v4l2_ctrl_handler_init(hdl, 56);
 
   /* we can use our own mutex for the ctrl lock */
   hdl->lock = &sensor->lock;
@@ -2423,6 +2510,46 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
       cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
                                 "MCP4018 Wiper CH%d", ch1_num);
       ctrls->mcp4018_wiper_ch1 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
+    }
+  }
+
+  /* MCP4018 VCC power (MAX9295 MFP4 GPIO) */
+  {
+    bool second = (sensor->i2c_client->adapter->nr == 1);
+    int ch0_num = second ? 2 : 0;
+    int ch1_num = second ? 3 : 1;
+
+    {
+      struct v4l2_ctrl_config cfg = {
+          .ops = &max9296_ctrl_ops,
+          .id = V4L2_CID_MCP4018_POWER_CH0,
+          .type = V4L2_CTRL_TYPE_BOOLEAN,
+          .min = 0,
+          .max = 1,
+          .def = 0,
+          .step = 1,
+      };
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "MCP4018 Power CH%d", ch0_num);
+      if (!cfg.name)
+        return -ENOMEM;
+      ctrls->mcp4018_power = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
+    }
+    {
+      struct v4l2_ctrl_config cfg = {
+          .ops = &max9296_ctrl_ops,
+          .id = V4L2_CID_MCP4018_POWER_CH1,
+          .type = V4L2_CTRL_TYPE_BOOLEAN,
+          .min = 0,
+          .max = 1,
+          .def = 0,
+          .step = 1,
+      };
+      cfg.name = devm_kasprintf(&sensor->i2c_client->dev, GFP_KERNEL,
+                                "MCP4018 Power CH%d", ch1_num);
+      if (!cfg.name)
+        return -ENOMEM;
+      ctrls->mcp4018_power_ch1 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
     }
   }
 
@@ -3482,6 +3609,8 @@ static int max9296_probe(struct i2c_client *client) {
   sensor->ctrl_cache.pending = false;
   sensor->ctrl_cache.mcp4018_wiper = MCP4018_WIPER_DEFAULT;
   sensor->ctrl_cache.mcp4018_wiper_ch1 = MCP4018_WIPER_DEFAULT;
+  sensor->ctrl_cache.mcp4018_power = 0;      /* OFF (MFP4 LOW) */
+  sensor->ctrl_cache.mcp4018_power_ch1 = 0;  /* OFF (MFP4 LOW) */
   /* Per-channel cache defaults are set after max9296_init_controls() below */
 
   sensor->link_status.disconnect = -1;  /* not checked yet */
