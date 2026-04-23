@@ -909,8 +909,9 @@ static int mcp4018_write_wiper(struct max9296_dev *sensor, u8 host_addr,
                                u8 wiper_value) {
   struct i2c_client *client = sensor->i2c_client;
   struct i2c_msg msg;
-  unsigned int retry = 5;
-  int ret;
+  const unsigned int max_retry = 5;
+  unsigned int attempt;
+  int ret = -EIO;
 
   if (wiper_value > MCP4018_WIPER_MAX)
     wiper_value = MCP4018_WIPER_MAX;
@@ -920,24 +921,29 @@ static int mcp4018_write_wiper(struct max9296_dev *sensor, u8 host_addr,
   msg.len = 1;
   msg.buf = &wiper_value;
 
-  do {
+  for (attempt = 1; attempt <= max_retry; attempt++) {
     ret = i2c_transfer(client->adapter, &msg, 1);
-    if (ret >= 0) break;
-    msleep(1);
-  } while (--retry);
+    if (ret >= 0)
+      break;
+    if (attempt < max_retry)
+      msleep(1);
+  }
 
-  if ((retry == 0) && (ret < 0)) {
-    printk(KERN_ERR "[%s:%d][%s:%d] MCP4018(0x%02x) write failed: wiper=0x%02x ret=%d",
+  if (ret < 0) {
+    printk(KERN_ERR "[%s:%d][%s:%d] MCP4018(0x%02x) write fail: wiper=0x%02x "
+                    "gave up after %u/%u attempts ret=%d",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__,
-           host_addr, wiper_value, ret);
+           host_addr, wiper_value, max_retry, max_retry, ret);
     return ret;
   }
   if (ret != 1)
     return -EIO;
 
-  printk(KERN_INFO "[%s:%d][%s:%d] MCP4018(0x%02x) wiper set to 0x%02x (%d/%d)",
+  printk(KERN_INFO "[%s:%d][%s:%d] MCP4018(0x%02x) write success: wiper=0x%02x "
+                   "(%d/%d) attempt=%u/%u",
          KEYWORD, client->adapter->nr, _FILE_, __LINE__,
-         host_addr, wiper_value, wiper_value, MCP4018_WIPER_MAX);
+         host_addr, wiper_value, wiper_value, MCP4018_WIPER_MAX,
+         attempt, max_retry);
   return 0;
 }
 
@@ -1086,55 +1092,72 @@ static int max9296_dma_read_reg(struct max9296_dev *sensor, u32 ap_addr,
 
 static int max9296_dma_write_reg(struct max9296_dev *sensor, u32 ap_addr,
                                  u16 reg_addr, u16 val) {
+  const unsigned int max_retry = 3;
   u32 sensor_id, addr_16, data_16, data_size;
   u32 dma_src, dma_dst;
-  int ret;
+  unsigned int attempt;
+  int ret = -EIO;
 
-  ret = max9296_dma_load_sip(sensor, ap_addr, &sensor_id, &addr_16, &data_16);
-  if (ret)
-    return ret;
+  for (attempt = 1; attempt <= max_retry; attempt++) {
+    ret = max9296_dma_load_sip(sensor, ap_addr, &sensor_id, &addr_16, &data_16);
+    if (ret)
+      goto retry_step;
 
-  data_size = data_16 ? 2 : 1;
+    data_size = data_16 ? 2 : 1;
 
-  ret = max9296_dma_wait_idle(sensor, ap_addr);
-  if (ret)
-    return ret;
+    ret = max9296_dma_wait_idle(sensor, ap_addr);
+    if (ret)
+      goto retry_step;
 
-  /* DMA_SIZE = data bytes to transfer */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SIZE,
-                            data_size, 2, 4);
-  if (ret)
-    return ret;
+    /* DMA_SIZE = data bytes to transfer */
+    ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SIZE,
+                              data_size, 2, 4);
+    if (ret)
+      goto retry_step;
 
-  /* DMA_SRC = (value << 16) | 0x000060a0 — data in upper 16 bits */
-  dma_src = ((u32)(val & 0xffff) << 16) | 0x000060a0;
-  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SRC, dma_src, 2, 4);
-  if (ret)
-    return ret;
+    /* DMA_SRC = (value << 16) | 0x000060a0 — data in upper 16 bits */
+    dma_src = ((u32)(val & 0xffff) << 16) | 0x000060a0;
+    ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SRC, dma_src, 2, 4);
+    if (ret)
+      goto retry_step;
 
-  /* DMA_DST = (port<<26)|(data_16<<25)|(addr_16<<24)|(sensor_id<<17)|reg_addr */
-  dma_dst = (data_16 << 25) | (addr_16 << 24) | (sensor_id << 17) |
-            (reg_addr & 0xffff);
-  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_DST, dma_dst, 2, 4);
-  if (ret)
-    return ret;
+    /* DMA_DST = (port<<26)|(data_16<<25)|(addr_16<<24)|(sensor_id<<17)|reg_addr */
+    dma_dst = (data_16 << 25) | (addr_16 << 24) | (sensor_id << 17) |
+              (reg_addr & 0xffff);
+    ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_DST, dma_dst, 2, 4);
+    if (ret)
+      goto retry_step;
 
-  /* DMA_CTRL = 0x0302 triggers AP1302-to-sensor write */
-  ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_CTRL,
-                            0x0302, 2, 2);
-  if (ret)
-    return ret;
+    /* DMA_CTRL = 0x0302 triggers AP1302-to-sensor write */
+    ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_CTRL,
+                              0x0302, 2, 2);
+    if (ret)
+      goto retry_step;
 
-  ret = max9296_dma_wait_idle(sensor, ap_addr);
-  if (ret)
-    return ret;
+    ret = max9296_dma_wait_idle(sensor, ap_addr);
+    if (ret)
+      goto retry_step;
 
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s DMA write: ap=0x%02x "
-                     "reg=0x%04x val=0x%04x\n",
+    printk(KERN_NOTICE "[%s:%d][%s:%d] DMA write success: ap=0x%02x "
+                       "reg=0x%04x val=0x%04x attempt=%u/%u\n",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           ap_addr, reg_addr, val, attempt, max_retry);
+    return 0;
+
+retry_step:
+    printk(KERN_WARNING "[%s:%d][%s:%d] DMA write attempt %u/%u fail: ap=0x%02x "
+                        "reg=0x%04x val=0x%04x ret=%d\n",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           attempt, max_retry, ap_addr, reg_addr, val, ret);
+    if (attempt < max_retry)
+      msleep(1);
+  }
+
+  printk(KERN_ERR "[%s:%d][%s:%d] DMA write fail: ap=0x%02x reg=0x%04x val=0x%04x "
+                  "gave up after %u attempts ret=%d\n",
          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-         __FUNCTION__, ap_addr, reg_addr, val);
-
-  return 0;
+         ap_addr, reg_addr, val, max_retry, ret);
+  return ret;
 }
 
 static int max9296_check_valid_mode(struct max9296_dev *sensor,
@@ -1932,12 +1955,31 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
                                            u8 mcp4018_wiper,
                                            const char *ch_name,
                                            const char *mode_name) {
-  bool mcp_active = (ch_ctrl->led_flash & (1 << 8));
-  u8 flash_delay = (u8)(ch_ctrl->led_flash & 0xff);
-  u16 ae_val, awb_val, rot;
-  u32 exp_seed;
-  u16 gain_seed;
-  int ret, err = 0;
+  /* Pre-compute all values so entry log shows the full plan. */
+  bool mcp_active  = (ch_ctrl->led_flash & (1 << 8));
+  u8   flash_delay = (u8)(ch_ctrl->led_flash & 0xff);
+  u16  ae_val      = ch_ctrl->ae_on ? AP1302_AE_CTRL_AUTO
+                                    : AP1302_AE_CTRL_MANUAL;
+  u16  awb_val     = AP1302_AWB_CTRL_FROM_MODE(ch_ctrl->awb);
+  u16  gain_seed   = ch_ctrl->gain ? ch_ctrl->gain : 256;
+  u16  rot         = (ch_ctrl->hflip ? 0x01 : 0x00) |
+                     (ch_ctrl->vflip ? 0x02 : 0x00);
+  u32  exp_seed    = ch_ctrl->exposure
+                         ? ch_ctrl->exposure
+                         : (sensor->ctrl_cache.exposure
+                                ? sensor->ctrl_cache.exposure
+                                : 10000);
+  int  ret, err = 0;
+
+  /* Entry log — what is about to be applied. */
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s apply (addr:0x%02x ae:%s "
+                     "awb:%s(0x%04x) gain:%d exp:%u rot:0x%02x mcp:%s "
+                     "wiper:0x%02x delay:0x%02x)",
+         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+         ch_name, mode_name,
+         i2c_addr, ch_ctrl->ae_on ? "on" : "off",
+         awb_mode_name(ch_ctrl->awb), awb_val, gain_seed, exp_seed, rot,
+         mcp_active ? "on" : "off", mcp4018_wiper, flash_delay);
 
   /* STEP 1: Initialize AE to manual mode first */
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL,
@@ -1946,14 +1988,8 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
     err = ret;
   msleep(100);
 
-  /*
-   * Seed exposure time while in manual mode.
-   * Some FW revisions need a non-zero seed before switching to AE auto.
-   */
-  exp_seed =
-      ch_ctrl->exposure
-          ? ch_ctrl->exposure
-          : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure : 10000);
+  /* Seed exposure time while in manual mode. Some FW revisions need a
+   * non-zero seed before switching to AE auto. */
   ret = maxim_ops_i2c_write(sensor, AP1302_I2C_ADDR, AP1302_REG_EXP_TIME,
                             exp_seed, 2, 4);
   if (ret)
@@ -1961,7 +1997,6 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
   msleep(100);
 
   /* STEP 2: Apply configured AE mode (auto/manual) */
-  ae_val = ch_ctrl->ae_on ? AP1302_AE_CTRL_AUTO : AP1302_AE_CTRL_MANUAL;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2);
   if (ret)
     err = ret;
@@ -1969,28 +2004,23 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
     msleep(100);
 
   /* AWB: ch_ctrl->awb holds AWB_CTRL MODE (0x0~0xf). */
-  awb_val = AP1302_AWB_CTRL_FROM_MODE(ch_ctrl->awb);
-  ret =
-      maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2, 2);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2, 2);
   if (ret)
     err = ret;
 
   /* Gain value (always set, used when switching to manual) */
-  gain_seed = ch_ctrl->gain ? ch_ctrl->gain : 256;
-  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_GAIN, gain_seed, 2,
-                            2);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_GAIN, gain_seed, 2, 2);
   if (ret)
     err = ret;
 
   /* Rotation (hflip + vflip combined) */
-  rot = (ch_ctrl->hflip ? 0x01 : 0x00) | (ch_ctrl->vflip ? 0x02 : 0x00);
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_ROTATION, rot, 2, 2);
   if (ret)
     err = ret;
 
   /* Per-channel tuning values */
-  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_LSC_CTRL, ch_ctrl->lsc,
-                            2, 2);
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_LSC_CTRL,
+                            ch_ctrl->lsc, 2, 2);
   if (ret)
     err = ret;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_BRIGHTNESS,
@@ -2023,13 +2053,15 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
       err = ret;
   }
 
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s %s applied %s(addr:0x%02x ae:%s "
-         "awb:%s(0x%04x) gain:%d exp:%u rot:0x%02x mcp:%s wiper:0x%02x delay:0x%02x) ret:%d\n",
-         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-         __FUNCTION__, ch_name, mode_name, err ? "FAIL" : "ok",
-         i2c_addr, ch_ctrl->ae_on ? "on" : "off",
-         awb_mode_name(ch_ctrl->awb), awb_val, gain_seed, exp_seed, rot,
-         mcp_active ? "on" : "off", mcp4018_wiper, flash_delay, err);
+  /* Exit log — high-level result. Details are in the per-step logs above. */
+  if (err)
+    printk(KERN_ERR "[%s:%d][%s:%d] %s %s applied fail (ret=%d)",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           ch_name, mode_name, err);
+  else
+    printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied success",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           ch_name, mode_name);
 }
 
 static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
