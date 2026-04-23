@@ -760,6 +760,38 @@ static const struct max9296_mode_info max9296_mode_data_FHD_R = {
     MAX9296_30_FPS,
 };
 //-------------------------------------------------------------------------
+/* Best-effort slave-addr -> global channel number for logging.
+ *   adapter 2 : base 0 (local CH0 = global ch0, local CH1 = global ch1)
+ *   adapter 1 : base 2 (local CH0 = global ch2, local CH1 = global ch3)
+ * Returns -1 if not channel-specific (e.g., MAX9296 self at 0x00).
+ */
+static int max9296_slave_to_global_ch(struct max9296_dev *sensor,
+                                      unsigned int slave_addr) {
+  int base = sensor->link_status.ch_shift;
+  switch (slave_addr) {
+  case AP1302_CH0_I2C_ADDR:
+  case MAX9295_SER_ADDR_CH0:
+    return base + 0;
+  case AP1302_CH1_I2C_ADDR:
+  case MAX9295_SER_ADDR_CH1:
+    return base + 1;
+  case AP1302_I2C_ADDR:
+    return base + ((sensor->enable == 0x02) ? 1 : 0);
+  default:
+    return -1;
+  }
+}
+
+static void max9296_fmt_ch(char *buf, size_t len,
+                           struct max9296_dev *sensor,
+                           unsigned int slave_addr) {
+  int gch = max9296_slave_to_global_ch(sensor, slave_addr);
+  if (gch >= 0)
+    scnprintf(buf, len, "ch%d", gch);
+  else
+    scnprintf(buf, len, "ch?");
+}
+
 static int maxim_ops_i2c_write(struct max9296_dev *sensor,
                                unsigned int slave_addr, unsigned int reg,
                                unsigned int val, unsigned int reg_byte,
@@ -789,28 +821,32 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
     msleep(1);
   }
 
-  if ((attempt >= max_attempts) && (ret < 0)) {
-    printk(KERN_ERR "[%s:%d][%s:%d] Error i2c write reg : [0x%x] "
-                    "reg=0x%x(%d byte), val=0x%x(%d byte)",
-           KEYWORD, client->adapter->nr, _FILE_, __LINE__, msg.addr,
-           reg, reg_byte, val, val_byte);
+  {
+    char ch_buf[8];
+    max9296_fmt_ch(ch_buf, sizeof(ch_buf), sensor, msg.addr);
 
-    return ret;
-  }
+    if ((attempt >= max_attempts) && (ret < 0)) {
+      printk(KERN_ERR "[%s:%d][%s:%d] %s Error i2c write reg : [0x%x] "
+                      "reg=0x%x(%d byte), val=0x%x(%d byte)",
+             KEYWORD, client->adapter->nr, _FILE_, __LINE__, ch_buf, msg.addr,
+             reg, reg_byte, val, val_byte);
 
-  /*
-   * i2c_transfer() returns the number of messages transferred on success.
-   * For this single-message write path, success is ret == 1.
-   * V4L2 ctrl callbacks must return 0 on success, so normalize here.
-   */
-  if (ret != 1) {
-    return -EIO;
-  }
-  if (1)
-    printk(KERN_INFO "[%s:%d][%s:%d] Success!! i2c write reg : [0x%x] "
-                       "reg=0x%x(%d byte), val=0x%x(%d byte)(ret:%d, retry:%d)\n",
-           KEYWORD, client->adapter->nr, _FILE_, __LINE__, msg.addr, reg,
+      return ret;
+    }
+
+    /*
+     * i2c_transfer() returns the number of messages transferred on success.
+     * For this single-message write path, success is ret == 1.
+     * V4L2 ctrl callbacks must return 0 on success, so normalize here.
+     */
+    if (ret != 1) {
+      return -EIO;
+    }
+    printk(KERN_INFO "[%s:%d][%s:%d] %s Success!! i2c write reg : [0x%x] "
+                     "reg=0x%x(%d byte), val=0x%x(%d byte)(ret:%d, retry:%d)\n",
+           KEYWORD, client->adapter->nr, _FILE_, __LINE__, ch_buf, msg.addr, reg,
            reg_byte, val, val_byte, ret, attempt);
+  }
 
   return 0;
 }
@@ -906,12 +942,15 @@ static int max9295_mfp4_set(struct max9296_dev *sensor, u8 ser_addr, bool on) {
  *   - Port A: MCP4018_HOST_ADDR_CH1 (0x2F, or 0x2E when remapped)
  */
 static int mcp4018_write_wiper(struct max9296_dev *sensor, u8 host_addr,
-                               u8 wiper_value) {
+                               u8 wiper_value, u8 ser_addr) {
   struct i2c_client *client = sensor->i2c_client;
   struct i2c_msg msg;
   const unsigned int max_retry = 5;
   unsigned int attempt;
   int ret = -EIO;
+  char ch_buf[8];
+
+  max9296_fmt_ch(ch_buf, sizeof(ch_buf), sensor, ser_addr);
 
   if (wiper_value > MCP4018_WIPER_MAX)
     wiper_value = MCP4018_WIPER_MAX;
@@ -930,19 +969,19 @@ static int mcp4018_write_wiper(struct max9296_dev *sensor, u8 host_addr,
   }
 
   if (ret < 0) {
-    printk(KERN_ERR "[%s:%d][%s:%d] MCP4018(0x%02x) write fail: wiper=0x%02x "
+    printk(KERN_ERR "[%s:%d][%s:%d] %s MCP4018(0x%02x) write fail: wiper=0x%02x "
                     "gave up after %u/%u attempts ret=%d",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__,
-           host_addr, wiper_value, max_retry, max_retry, ret);
+           ch_buf, host_addr, wiper_value, max_retry, max_retry, ret);
     return ret;
   }
   if (ret != 1)
     return -EIO;
 
-  printk(KERN_INFO "[%s:%d][%s:%d] MCP4018(0x%02x) write success: wiper=0x%02x "
+  printk(KERN_INFO "[%s:%d][%s:%d] %s MCP4018(0x%02x) write success: wiper=0x%02x "
                    "(%d/%d) attempt=%u/%u",
          KEYWORD, client->adapter->nr, _FILE_, __LINE__,
-         host_addr, wiper_value, wiper_value, MCP4018_WIPER_MAX,
+         ch_buf, host_addr, wiper_value, wiper_value, MCP4018_WIPER_MAX,
          attempt, max_retry);
   return 0;
 }
@@ -1097,6 +1136,9 @@ static int max9296_dma_write_reg(struct max9296_dev *sensor, u32 ap_addr,
   u32 dma_src, dma_dst;
   unsigned int attempt;
   int ret = -EIO;
+  char ch_buf[8];
+
+  max9296_fmt_ch(ch_buf, sizeof(ch_buf), sensor, ap_addr);
 
   for (attempt = 1; attempt <= max_retry; attempt++) {
     ret = max9296_dma_load_sip(sensor, ap_addr, &sensor_id, &addr_16, &data_16);
@@ -1138,25 +1180,25 @@ static int max9296_dma_write_reg(struct max9296_dev *sensor, u32 ap_addr,
     if (ret)
       goto retry_step;
 
-    printk(KERN_NOTICE "[%s:%d][%s:%d] DMA write success: ap=0x%02x "
+    printk(KERN_NOTICE "[%s:%d][%s:%d] %s DMA write success: ap=0x%02x "
                        "reg=0x%04x val=0x%04x attempt=%u/%u\n",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-           ap_addr, reg_addr, val, attempt, max_retry);
+           ch_buf, ap_addr, reg_addr, val, attempt, max_retry);
     return 0;
 
 retry_step:
-    printk(KERN_WARNING "[%s:%d][%s:%d] DMA write attempt %u/%u fail: ap=0x%02x "
+    printk(KERN_WARNING "[%s:%d][%s:%d] %s DMA write attempt %u/%u fail: ap=0x%02x "
                         "reg=0x%04x val=0x%04x ret=%d\n",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-           attempt, max_retry, ap_addr, reg_addr, val, ret);
+           ch_buf, attempt, max_retry, ap_addr, reg_addr, val, ret);
     if (attempt < max_retry)
       msleep(1);
   }
 
-  printk(KERN_ERR "[%s:%d][%s:%d] DMA write fail: ap=0x%02x reg=0x%04x val=0x%04x "
+  printk(KERN_ERR "[%s:%d][%s:%d] %s DMA write fail: ap=0x%02x reg=0x%04x val=0x%04x "
                   "gave up after %u attempts ret=%d\n",
          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-         ap_addr, reg_addr, val, max_retry, ret);
+         ch_buf, ap_addr, reg_addr, val, max_retry, ret);
   return ret;
 }
 
@@ -2047,7 +2089,7 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
    * when the flash is disabled the LED/MCP4018 chain may be unpopulated. */
   if (mcp_active) {
     max9295_mfp4_set(sensor, ser_addr, true);
-    ret = mcp4018_write_wiper(sensor, mcp4018_host, mcp4018_wiper);
+    ret = mcp4018_write_wiper(sensor, mcp4018_host, mcp4018_wiper, ser_addr);
     max9295_mfp4_set(sensor, ser_addr, false);
     if (ret)
       err = ret;
@@ -2316,12 +2358,14 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
    */
   case V4L2_CID_MCP4018_WIPER:
     max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH0, true);
-    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR, (u8)ctrl->val);
+    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR, (u8)ctrl->val,
+                              MAX9295_SER_ADDR_CH0);
     max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH0, false);
     break;
   case V4L2_CID_MCP4018_WIPER_CH1:
     max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH1, true);
-    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR_CH1, (u8)ctrl->val);
+    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR_CH1, (u8)ctrl->val,
+                              MAX9295_SER_ADDR_CH1);
     max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH1, false);
     break;
   /* Standalone power toggle retained as diagnostic handle (not used by gstApp) */
