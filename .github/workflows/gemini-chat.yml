@@ -45,5 +45,5 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: jhw7500/automation/.github/workflows/gemini-chat.yml@v1.23
+    uses: jhw7500/automation/.github/workflows/gemini-chat.yml@v1.29
     secrets: inherit
