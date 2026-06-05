@@ -19,3 +19,6 @@ tmp/
 .omc/
 .serena/
 .vscode/
+
+# Compound Engineering (local agent tooling — not committed to driver repo)
+.compound-engineering/
