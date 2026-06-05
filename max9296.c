@@ -840,6 +840,11 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
      * V4L2 ctrl callbacks must return 0 on success, so normalize here.
      */
     if (ret != 1) {
+      printk_ratelimited(KERN_ERR
+             "[%s:%d][%s:%d] %s i2c write short xfer (ret=%d) : [0x%x] "
+             "reg=0x%x(%d byte), val=0x%x(%d byte)\n",
+             KEYWORD, client->adapter->nr, _FILE_, __LINE__, ch_buf, ret,
+             msg.addr, reg, reg_byte, val, val_byte);
       return -EIO;
     }
     printk(KERN_INFO "[%s:%d][%s:%d] %s Success!! i2c write reg : [0x%x] "
@@ -1073,60 +1078,70 @@ static int max9296_dma_read_reg(struct max9296_dev *sensor, u32 ap_addr,
   u32 dma_src;
   unsigned int dma_dst_raw = 0;
   int ret;
+  char ch_buf[8];
+
+  max9296_fmt_ch(ch_buf, sizeof(ch_buf), sensor, ap_addr);
 
   ret = max9296_dma_load_sip(sensor, ap_addr, &sensor_id, &addr_16, &data_16);
   if (ret)
-    return ret;
+    goto fail;
 
   data_size = data_16 ? 2 : 1;
 
   ret = max9296_dma_wait_idle(sensor, ap_addr);
   if (ret)
-    return ret;
+    goto fail;
 
   /* DMA_SIZE = data bytes to transfer */
   ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SIZE,
                             data_size, 2, 4);
   if (ret)
-    return ret;
+    goto fail;
 
   /* DMA_SRC = (port<<26)|(data_16<<25)|(addr_16<<24)|(sensor_id<<17)|reg_addr */
   dma_src = (data_16 << 25) | (addr_16 << 24) | (sensor_id << 17) |
             (reg_addr & 0xffff);
   ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_SRC, dma_src, 2, 4);
   if (ret)
-    return ret;
+    goto fail;
 
   /* DMA_DST = internal AP1302 address to store result */
   ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_DST,
                             0x000060a4, 2, 4);
   if (ret)
-    return ret;
+    goto fail;
 
   /* DMA_CTRL = 0x0032 triggers sensor-to-AP1302 read */
   ret = maxim_ops_i2c_write(sensor, ap_addr, AP1302_REG_DMA_CTRL,
                             0x0032, 2, 2);
   if (ret)
-    return ret;
+    goto fail;
 
   ret = max9296_dma_wait_idle(sensor, ap_addr);
   if (ret)
-    return ret;
+    goto fail;
 
   /* Read result from DMA_DST — data is in upper bits of 32-bit value */
   ret = maxim_ops_i2c_read(sensor, ap_addr, AP1302_REG_DMA_DST, 2, 4,
                            &dma_dst_raw);
   if (ret)
-    return ret;
+    goto fail;
 
   *val = (u16)(dma_dst_raw >> (32 - data_size * 8));
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s DMA read: ap=0x%02x "
                      "reg=0x%04x val=0x%04x\n",
          KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-         __FUNCTION__, ap_addr, reg_addr, *val);
+         ch_buf, ap_addr, reg_addr, *val);
 
   return 0;
+
+fail:
+  printk_ratelimited(KERN_ERR
+         "[%s:%d][%s:%d] %s DMA read fail: ap=0x%02x reg=0x%04x (ret=%d)\n",
+         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+         ch_buf, ap_addr, reg_addr, ret);
+  return ret;
 }
 
 static int max9296_dma_write_reg(struct max9296_dev *sensor, u32 ap_addr,
