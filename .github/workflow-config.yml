@@ -16,7 +16,10 @@ workflows:
     description: "Shell script static analysis"
 
   build-test:
-    enabled: true
+    enabled: false
+    # 비활성: arm64 i.MX8 NXP BSP 커널(5.10.35)이 필요한 크로스빌드라 stock GitHub
+    # 러너에서 재현 불가(x86 + 없는 패키지 linux-headers-5.10.0-generic).
+    # 빌드는 로컬 make-for-imx8(Yocto SDK)로 검증한다.
     description: "Build and test the package"
 
   # Shared Gemini workflows
