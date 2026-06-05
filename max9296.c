@@ -827,7 +827,7 @@ static int maxim_ops_i2c_write(struct max9296_dev *sensor,
 
     if ((attempt >= max_attempts) && (ret < 0)) {
       printk(KERN_ERR "[%s:%d][%s:%d] %s Error i2c write reg : [0x%x] "
-                      "reg=0x%x(%d byte), val=0x%x(%d byte)",
+                      "reg=0x%x(%d byte), val=0x%x(%d byte)\n",
              KEYWORD, client->adapter->nr, _FILE_, __LINE__, ch_buf, msg.addr,
              reg, reg_byte, val, val_byte);
 
@@ -896,7 +896,7 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
     if (ret >= 0)
       break;
     printk(KERN_ERR "[%s:%d][%s:%d] Error i2c read reg : [0x%x] "
-                    "reg=0x%x(%d byte),(read %d byte) attempt:%d",
+                    "reg=0x%x(%d byte),(read %d byte) attempt:%d\n",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__,
            (slave_addr == 0 ? client->addr : slave_addr), reg, reg_byte,
            val_byte, attempt);
@@ -904,7 +904,7 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
 
   if ((attempt >= max_attempts) && (ret < 0)) {
     printk(KERN_ERR "[%s:%d][%s:%d] Error i2c read - slave: 0x%x, reg: "
-                    "0x%x(%d byte, %d data byte",
+                    "0x%x(%d byte, %d data byte)\n",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__,
            (slave_addr == 0 ? client->addr : slave_addr), reg, reg_byte,
            val_byte);
@@ -975,7 +975,7 @@ static int mcp4018_write_wiper(struct max9296_dev *sensor, u8 host_addr,
 
   if (ret < 0) {
     printk(KERN_ERR "[%s:%d][%s:%d] %s MCP4018(0x%02x) write fail: wiper=0x%02x "
-                    "gave up after %u/%u attempts ret=%d",
+                    "gave up after %u/%u attempts ret=%d\n",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__,
            ch_buf, host_addr, wiper_value, max_retry, max_retry, ret);
     return ret;
@@ -984,7 +984,7 @@ static int mcp4018_write_wiper(struct max9296_dev *sensor, u8 host_addr,
     return -EIO;
 
   printk(KERN_INFO "[%s:%d][%s:%d] %s MCP4018(0x%02x) write success: wiper=0x%02x "
-                   "(%d/%d) attempt=%u/%u",
+                   "(%d/%d) attempt=%u/%u\n",
          KEYWORD, client->adapter->nr, _FILE_, __LINE__,
          ch_buf, host_addr, wiper_value, wiper_value, MCP4018_WIPER_MAX,
          attempt, max_retry);
@@ -1011,7 +1011,7 @@ static int mcp4018_read_wiper(struct max9296_dev *sensor, u8 host_addr,
   } while (--retry);
 
   if ((retry == 0) && (ret < 0)) {
-    printk(KERN_ERR "[%s:%d][%s:%d] MCP4018(0x%02x) read failed: ret=%d",
+    printk(KERN_ERR "[%s:%d][%s:%d] MCP4018(0x%02x) read failed: ret=%d\n",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__, host_addr, ret);
     return ret;
   }
