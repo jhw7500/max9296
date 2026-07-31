@@ -760,6 +760,38 @@ static const struct max9296_mode_info max9296_mode_data_FHD_R = {
     MAX9296_30_FPS,
 };
 //-------------------------------------------------------------------------
+/* True when the active mode drives both cameras through one deserializer. */
+static bool max9296_mode_is_dual(const struct max9296_dev *sensor) {
+  const struct max9296_mode_info *mode = sensor->current_mode;
+
+  return mode && (mode->id == MAX9296_MODE_2560x720 ||
+                  mode->id == MAX9296_MODE_3840x1080);
+}
+
+/* MAX9295 I2C address for a local channel (0 or 1).
+ *
+ * 0x60 is NOT a hardware property of ch1 - it exists only as a side effect of
+ * {0x40, 0x0000, 2, 0xC0} inside max9296_init_setting_1080p_crop_720p_2ch_30fps,
+ * the only serializer self-address write in this driver. The single-channel
+ * tables (max9296_init_setting_720p_30fps_L/_R) carry no such remap and address
+ * the serializer exclusively at 0x40 - including MAX9295_REG_MFP4_CTRL itself.
+ * max9296_load_regs() also runs at most once per probe lifetime (gated on
+ * sensor->restart), so the dual remap and a single-channel table can never both
+ * execute. In single-channel mode the one serializer therefore always answers at
+ * its power-on default 0x40, whichever local channel is active.
+ *
+ * Confirmed on the bench (ch1 single-channel unit):
+ *   i2ctransfer -f -y -a 2 w3@0x60 0x02 0xca 0x90   -> NAK
+ *   i2ctransfer -f -y -a 2 w3@0x40 0x02 0xca 0x90   -> ACK
+ */
+static u8 max9296_ser_addr(const struct max9296_dev *sensor,
+                           unsigned int local_ch) {
+  if (!max9296_mode_is_dual(sensor))
+    return MAX9295_SER_ADDR_CH0;
+
+  return local_ch ? MAX9295_SER_ADDR_CH1 : MAX9295_SER_ADDR_CH0;
+}
+
 /* Best-effort slave-addr -> global channel number for logging.
  *   adapter 2 : base 0 (local CH0 = global ch0, local CH1 = global ch1)
  *   adapter 1 : base 2 (local CH0 = global ch2, local CH1 = global ch3)
@@ -770,7 +802,14 @@ static int max9296_slave_to_global_ch(struct max9296_dev *sensor,
   int base = sensor->link_status.ch_shift;
   switch (slave_addr) {
   case AP1302_CH0_I2C_ADDR:
+    return base + 0;
   case MAX9295_SER_ADDR_CH0:
+    /* In single-channel mode 0x40 is the only serializer whichever local
+     * channel is active, so it carries no channel information on its own -
+     * fall back to the enable bitmask. Labelling it "ch0" unconditionally made
+     * a ch1 serializer error read as a ch0 one. */
+    if (!max9296_mode_is_dual(sensor))
+      return base + ((sensor->enable == 0x02) ? 1 : 0);
     return base + 0;
   case AP1302_CH1_I2C_ADDR:
   case MAX9295_SER_ADDR_CH1:
@@ -2170,7 +2209,7 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
     char single_name[8];
     unsigned int local_ch = (sensor->enable == 0x02) ? 1 : 0;
     unsigned int global_ch = sensor->link_status.ch_shift + local_ch;
-    u8 ser   = local_ch ? MAX9295_SER_ADDR_CH1 : MAX9295_SER_ADDR_CH0;
+    u8 ser   = max9296_ser_addr(sensor, local_ch);
     u8 host  = local_ch ? MCP4018_HOST_ADDR_CH1 : MCP4018_HOST_ADDR;
     u8 wiper = local_ch ? (u8)sensor->ctrl_cache.mcp4018_wiper_ch1
                         : (u8)sensor->ctrl_cache.mcp4018_wiper;
@@ -2371,24 +2410,28 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
    * Port B (local CH1). Works in both adapters — on adapter 1 the "CH0/CH1"
    * slots physically drive global ch2/ch3.
    */
-  case V4L2_CID_MCP4018_WIPER:
-    max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH0, true);
-    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR, (u8)ctrl->val,
-                              MAX9295_SER_ADDR_CH0);
-    max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH0, false);
+  case V4L2_CID_MCP4018_WIPER: {
+    u8 ser = max9296_ser_addr(sensor, 0);
+
+    max9295_mfp4_set(sensor, ser, true);
+    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR, (u8)ctrl->val, ser);
+    max9295_mfp4_set(sensor, ser, false);
     break;
-  case V4L2_CID_MCP4018_WIPER_CH1:
-    max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH1, true);
-    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR_CH1, (u8)ctrl->val,
-                              MAX9295_SER_ADDR_CH1);
-    max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH1, false);
+  }
+  case V4L2_CID_MCP4018_WIPER_CH1: {
+    u8 ser = max9296_ser_addr(sensor, 1);
+
+    max9295_mfp4_set(sensor, ser, true);
+    ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR_CH1, (u8)ctrl->val, ser);
+    max9295_mfp4_set(sensor, ser, false);
     break;
+  }
   /* Standalone power toggle retained as diagnostic handle (not used by gstApp) */
   case V4L2_CID_MCP4018_POWER_CH0:
-    ret = max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH0, !!ctrl->val);
+    ret = max9295_mfp4_set(sensor, max9296_ser_addr(sensor, 0), !!ctrl->val);
     break;
   case V4L2_CID_MCP4018_POWER_CH1:
-    ret = max9295_mfp4_set(sensor, MAX9295_SER_ADDR_CH1, !!ctrl->val);
+    ret = max9295_mfp4_set(sensor, max9296_ser_addr(sensor, 1), !!ctrl->val);
     break;
 
   /* Generic DMA register write: [31:16]=reg_addr, [15:0]=data */
