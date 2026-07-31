@@ -760,9 +760,19 @@ static const struct max9296_mode_info max9296_mode_data_FHD_R = {
     MAX9296_30_FPS,
 };
 //-------------------------------------------------------------------------
-/* True when the active mode drives both cameras through one deserializer. */
-static bool max9296_mode_is_dual(const struct max9296_dev *sensor) {
-  const struct max9296_mode_info *mode = sensor->current_mode;
+/* True when the hardware is currently programmed for both cameras.
+ *
+ * Deliberately reads last_mode, not current_mode. current_mode is the requested
+ * format and max9296_set_fmt() moves it with no gate, while the register tables
+ * are loaded at most once per probe lifetime (max9296_load_regs is gated on
+ * sensor->restart). last_mode is assigned in max9296_set_mode() right before
+ * load_regs, so it alone says which table the hardware actually received - and
+ * the serializer address is a property of that, not of the pending format.
+ * A dual stream followed by stream-off and an S_FMT to a single mode leaves a
+ * serializer physically at 0x60 while current_mode already reads single.
+ */
+static bool max9296_hw_is_dual(const struct max9296_dev *sensor) {
+  const struct max9296_mode_info *mode = sensor->last_mode;
 
   return mode && (mode->id == MAX9296_MODE_2560x720 ||
                   mode->id == MAX9296_MODE_3840x1080);
@@ -786,10 +796,28 @@ static bool max9296_mode_is_dual(const struct max9296_dev *sensor) {
  */
 static u8 max9296_ser_addr(const struct max9296_dev *sensor,
                            unsigned int local_ch) {
-  if (!max9296_mode_is_dual(sensor))
+  if (!max9296_hw_is_dual(sensor))
     return MAX9295_SER_ADDR_CH0;
 
   return local_ch ? MAX9295_SER_ADDR_CH1 : MAX9295_SER_ADDR_CH0;
+}
+
+/* Whether a per-channel MCP4018 control addresses hardware that exists.
+ *
+ * In single-channel mode there is one serializer at 0x40 and one pot, and both
+ * MCP4018_HOST_ADDR and MCP4018_HOST_ADDR_CH1 are 0x2F - so a CH1 control would
+ * be byte-identical to the CH0 one and silently retune the active channel.
+ * Before the serializer address was corrected this was masked by the 0x60 write
+ * simply NAKing. Gate it on the active local channel instead.
+ */
+static bool max9296_ch_ctrl_applies(const struct max9296_dev *sensor,
+                                    unsigned int local_ch) {
+  if (max9296_hw_is_dual(sensor))
+    return true;
+
+  /* Single: the CH0 slot is the documented control path (see CHANGELOG), so it
+   * stays live regardless of enable; only CH1 needs the active-channel gate. */
+  return local_ch == 0 || sensor->enable == 0x02;
 }
 
 /* Best-effort slave-addr -> global channel number for logging.
@@ -808,7 +836,7 @@ static int max9296_slave_to_global_ch(struct max9296_dev *sensor,
      * channel is active, so it carries no channel information on its own -
      * fall back to the enable bitmask. Labelling it "ch0" unconditionally made
      * a ch1 serializer error read as a ch0 one. */
-    if (!max9296_mode_is_dual(sensor))
+    if (!max9296_hw_is_dual(sensor))
       return base + ((sensor->enable == 0x02) ? 1 : 0);
     return base + 0;
   case AP1302_CH1_I2C_ADDR:
@@ -2419,8 +2447,13 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     break;
   }
   case V4L2_CID_MCP4018_WIPER_CH1: {
-    u8 ser = max9296_ser_addr(sensor, 1);
+    u8 ser;
 
+    if (!max9296_ch_ctrl_applies(sensor, 1)) {
+      ret = 0;
+      break;
+    }
+    ser = max9296_ser_addr(sensor, 1);
     max9295_mfp4_set(sensor, ser, true);
     ret = mcp4018_write_wiper(sensor, MCP4018_HOST_ADDR_CH1, (u8)ctrl->val, ser);
     max9295_mfp4_set(sensor, ser, false);
@@ -2431,6 +2464,10 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     ret = max9295_mfp4_set(sensor, max9296_ser_addr(sensor, 0), !!ctrl->val);
     break;
   case V4L2_CID_MCP4018_POWER_CH1:
+    if (!max9296_ch_ctrl_applies(sensor, 1)) {
+      ret = 0;
+      break;
+    }
     ret = max9295_mfp4_set(sensor, max9296_ser_addr(sensor, 1), !!ctrl->val);
     break;
 
