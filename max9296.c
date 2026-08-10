@@ -168,9 +168,22 @@ static int debug;
 #define V4L2_CID_MCP4018_POWER_CH0 (V4L2_CID_USER_BASE + 0x1020)
 #define V4L2_CID_MCP4018_POWER_CH1 (V4L2_CID_USER_BASE + 0x1021)
 
-/* MAX9295 serializer addresses per link (matches mcp4018_ctrl.sh channel table) */
-#define MAX9295_SER_ADDR_CH0   0x40  /* Link A: ch0 (bus2) / ch2 (bus1) */
-#define MAX9295_SER_ADDR_CH1   0x60  /* Link B: ch1 (bus2) / ch3 (bus1) */
+/*
+ * MAX9295 serializer addresses (matches mcp4018_ctrl.sh channel table).
+ *
+ * DUAL ONLY. 0x40 is the serializer's power-on default; the 2ch init table
+ * remaps one of them to 0x60 because both would otherwise collide, and that
+ * remap is the sole reason 0x60 exists. In dual mode the mapping is
+ * ch0 = 0x40 (PHY A) and ch1 = 0x60 (PHY B), bus1 likewise ch2/ch3.
+ *
+ * In SINGLE-channel mode there is no remap, so the one serializer answers at
+ * 0x40 whichever channel it is - use max9296_ser_addr(), never these names.
+ * The "PHY A/B" half does not carry over either: which PHY a single-channel
+ * unit comes up on is a wiring property, not a channel number. Measured on a
+ * ch1 unit: CTRL3(0x13) = 0xda -> LINK_MODE 01 = PHY A.
+ */
+#define MAX9295_SER_ADDR_CH0   0x40  /* dual: ch0 (bus2) / ch2 (bus1) */
+#define MAX9295_SER_ADDR_CH1   0x60  /* dual: ch1 (bus2) / ch3 (bus1) */
 #define MAX9295_REG_MFP4_CTRL  0x02ca
 #define MAX9295_MFP4_POWER_ON  0x90
 #define MAX9295_MFP4_POWER_OFF 0x80
@@ -365,11 +378,18 @@ struct max9296_dev {
   struct task_struct *thread_fw_init;
 
   // state
+  /*
+   * No 'setup' member here on purpose. It was written at max9296_set_fmt()'s
+   * out: label - unconditionally, TRY and error paths included - and never
+   * cleared, so it only ever meant "set_fmt was called at least once since
+   * probe". Read as "this channel is configured" it silently wedged the FSYNC
+   * gate and the enable thread's peer test; init+enable are the live signals.
+   * Do not reintroduce it.
+   */
   struct {
     unsigned int init;
     unsigned int firmware;
     unsigned int enable;
-    unsigned int setup;
     unsigned int fsync;
     unsigned int power;
   } state;
@@ -1317,6 +1337,17 @@ static int max9296_load_regs(struct max9296_dev *sensor,
   unsigned int i;
   int ret = 0;
   int local_err = 0;
+  /*
+   * Despite the names these are CHANNEL-position flags, not GMSL PHY flags:
+   * link_a_err -> the even channel (ch0/ch2), link_b_err -> the odd one
+   * (ch1/ch3), per the shift applied when the bitmask is built below.
+   *
+   * The two only coincide in dual mode, where PHY A == 0x40 == even channel
+   * and PHY B == 0x60 == odd channel. In single-channel mode there is one
+   * serializer at 0x40 whichever PHY carries it, and the active PHY does not
+   * track the channel number at all - a ch1 unit measured LINK_MODE = PHY A.
+   * Read them as "even/odd channel", never as "which link".
+   */
   bool link_a_err = false;
   bool link_b_err = false;
   unsigned int shift = sensor->link_status.ch_shift;
@@ -1338,9 +1369,18 @@ static int max9296_load_regs(struct max9296_dev *sensor,
     if (ret < 0) {
       if (slave_addr == 0x40) {
         /*
-         * In single-channel Right mode (enable==0x02), MAX9296 maps
-         * Link B serializer to address 0x40. In Left/Dual modes,
-         * 0x40 is always Link A.
+         * 0x40 does NOT imply a GMSL PHY here - see the note on the err flags
+         * above. In single-channel mode it is the only serializer whichever
+         * PHY carries it, so the channel has to come from sensor->enable:
+         * 0x02 selects the odd channel, anything else the even one.
+         *
+         * Measured on a single ch1 unit (i2c3, enable==0x02, _R table):
+         *   CTRL3 0x13 = 0xda -> LINK_MODE 01 = PHY A, LOCKED, CMU_LOCKED
+         *   RX3   0x2f = 0x06 -> SYNC_LOCKED_A | WBLOCK_A
+         * i.e. the active PHY was A even though the unit is channel 1. An
+         * earlier version of this comment claimed Right mode puts the "Link B
+         * serializer" at 0x40 - that is wrong about the PHY, though the
+         * channel attribution below has always been right.
          */
         if (sensor->enable == 0x02)
           link_b_err = true;
@@ -1397,8 +1437,8 @@ static int max9296_set_autogain(struct max9296_dev *sensor, bool on) {
 
 static int max9296_set_stream_mipi(struct max9296_dev *sensor, bool on) {
   int ret;
-  if (debug)
-    printk(KERN_INFO "[%s:%d][%s:%d] %s (%s)", KEYWORD,
+  if (1)
+    printk(KERN_NOTICE "[%s:%d][%s:%d] %s (%s)", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            on ? "on" : "off");
   if (on) {
@@ -1549,52 +1589,70 @@ static void max9296_set_power_off(struct max9296_dev *sensor) {
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 }
 
+/*
+ * Board power is a global resource, not a per-deserializer one: a single RESET
+ * net feeds every deserializer and camera module, and max9296_power() always
+ * drives both PWDN lines together. The sequence must therefore run exactly once
+ * for the first user and once for the last, whichever video node opens first.
+ *
+ * The previous handshake gated on the peer's state.power, but max9296_s_power()
+ * cleared both channels' state.power to IDLE on every close - including the
+ * closes where the sequence had been skipped precisely because the peer was
+ * still up. Reopening that channel then saw the peer as IDLE and re-ran the
+ * whole power-on: global RESET asserted ~2 s and both PWDN pulled for ~4 s,
+ * killing a peer that was mid-stream. A plain refcount removes the state
+ * handshake entirely.
+ *
+ * max9296_power_lock also serializes the sequence itself, so a concurrent open
+ * on the other channel waits for it instead of racing a second reset onto the
+ * same pins.
+ */
+static DEFINE_MUTEX(max9296_power_lock);
+static int max9296_power_users;
+
 static int max9296_set_power(struct max9296_dev *sensor, bool on) {
   int ret = 0;
-  int shared_power_ctl = 0;
+  bool run;
+
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", "RST",
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  if (sensor->shared.sensor != NULL) {
-    while (sensor->shared.sensor->state.power == MAX9296_STATE_RUNNING) {
-      shared_power_ctl = 1;
-      msleep(100);
-    }
 
-    if ((sensor->shared.sensor->state.power != MAX9296_STATE_DONE) &&
-        (shared_power_ctl == 0)) {
-      sensor->state.power = MAX9296_STATE_RUNNING;
-      sensor->shared.sensor->state.power = MAX9296_STATE_RUNNING;
+  mutex_lock(&max9296_power_lock);
 
-      if (on) {
-        ret = max9296_set_power_on(sensor);
-        if (ret)
-          return ret;
-      }
-
-      if (!on)
-        max9296_set_power_off(sensor);
-
-      sensor->state.power = MAX9296_STATE_DONE;
-      sensor->shared.sensor->state.power = MAX9296_STATE_DONE;
-    }
+  if (on) {
+    run = (max9296_power_users++ == 0);
   } else {
+    if (WARN_ON(max9296_power_users == 0)) {
+      mutex_unlock(&max9296_power_lock);
+      return 0;
+    }
+    run = (--max9296_power_users == 0);
+  }
+
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s (%s users:%d %s)", "RST",
+         sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
+         on ? "on" : "off", max9296_power_users, run ? "run" : "skip");
+
+  if (run) {
     sensor->state.power = MAX9296_STATE_RUNNING;
 
-    if (on) {
+    if (on)
       ret = max9296_set_power_on(sensor);
-      if (ret)
-        return ret;
-    }
-
-    if (!on)
+    else
       max9296_set_power_off(sensor);
 
-    sensor->state.power = MAX9296_STATE_DONE;
+    sensor->state.power = on ? MAX9296_STATE_DONE : MAX9296_STATE_IDLE;
+
+    if (!on)
+      ssleep(5); /* settle before any subsequent global power-on */
   }
+
+  mutex_unlock(&max9296_power_lock);
+
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  return 0;
+  return ret;
 }
 
 /* --------------- Subdev Operations --------------- */
@@ -1607,23 +1665,24 @@ static int max9296_s_power(struct v4l2_subdev *sd, int on) {
 
   mutex_lock(&sensor->lock);
 
-  /* Update the power count. */
-  if ((sensor->power_count == 0) && on) {
-    // on
-    ret = max9296_set_power(sensor, 1);
-  }
+  /*
+   * Update the power count. The global refcount inside max9296_set_power()
+   * decides whether the hardware sequence actually runs, so this function must
+   * not touch state.power - and above all must never write the peer's, which
+   * used to erase the marker protecting a still-streaming channel.
+   */
+  if (on) {
+    if (sensor->power_count == 0)
+      ret = max9296_set_power(sensor, 1);
 
-  sensor->power_count += on ? 1 : -1;
+    sensor->power_count++;
+  } else {
+    sensor->power_count--;
 
-  WARN_ON(sensor->power_count < 0);
+    WARN_ON(sensor->power_count < 0);
 
-  if (sensor->power_count == 0) {
-    // off
-    ret = max9296_set_power(sensor, 0);
-    sensor->state.power = MAX9296_STATE_IDLE;
-    if (sensor->shared.sensor != NULL)
-      sensor->shared.sensor->state.power = MAX9296_STATE_IDLE;
-    ssleep(5);
+    if (sensor->power_count == 0)
+      ret = max9296_set_power(sensor, 0);
   }
 
   mutex_unlock(&sensor->lock);
@@ -1762,7 +1821,6 @@ static int max9296_set_fmt(struct v4l2_subdev *sd,
     sensor->fmt = *mbus_fmt;
 out:
 
-  sensor->state.setup = MAX9296_STATE_DONE;
   mutex_unlock(&sensor->lock);
   return ret;
 }
@@ -3330,6 +3388,16 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
 
     sensor->restart = 1;
 
+    /*
+     * stream_on is a one-shot request to max9296_enable(), and only that thread
+     * cleared it - at best a few seconds after STREAMON, once FSYNC is running.
+     * A stream shorter than that (failed negotiation, single-frame probe, quick
+     * source switch) used to leave it set, and the thread would later act on the
+     * stale request and turn the CSI output back on for a deserializer nobody is
+     * streaming. Cancel the request here instead.
+     */
+    sensor->stream_on = 0;
+
     sensor->state.fsync = MAX9296_STATE_IDLE;
 
     if (sensor->shared.sensor != NULL) {
@@ -3386,8 +3454,23 @@ static const struct media_entity_operations max9296_sd_media_ops = {
 //-------------------------------------------------------------------------
 static int max9296_fsync(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
-  unsigned int high = 1000, low = 0;
-  static unsigned int restart_cnt = 0;
+  /*
+   * low_fps remembers which fps the current `low` was derived from. Without it
+   * the `if (low == 0)` guard computed the period exactly once per thread
+   * lifetime - and this thread lives from probe to remove - so a runtime
+   * VIDIOC_SUBDEV_S_FRAME_INTERVAL updated sensor->fps while FSYNC kept
+   * pulsing at the old rate. max9296_s_frame_interval() writes no hardware
+   * register, so this pulse train is the only path fps has to the sensors:
+   * freezing it meant runtime fps changes could never take effect.
+   */
+  unsigned int high = 1000, low = 0, low_fps = 0;
+  /*
+   * Per-thread, not static: it carries across loop iterations of THIS thread
+   * only. As a function-scope static it would be shared by every FSYNC thread
+   * in the system - harmless while max9296_0 owns the sole fsync-gpios, but a
+   * silent cross-instance coupling the moment a second one is given one.
+   */
+  unsigned int restart_cnt = 0;
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
@@ -3415,9 +3498,13 @@ static int max9296_fsync(void *data) {
         if (sensor->state.fsync != MAX9296_STATE_RUNNING)
           usleep_range(1000000, 1000000);
 
-        if (low == 0) {
-          low = (1000000 / sensor->fps);
-          low -= high;
+        if (low_fps != sensor->fps) {
+          low_fps = sensor->fps;
+          low = (1000000 / low_fps) - high;
+          printk(KERN_NOTICE
+                 "[%s:%d][%s:%d] %s single fps : %u, low : %u, high : %u\n",
+                 KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+                 __FUNCTION__, low_fps, low, high);
         }
 
         gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
@@ -3441,15 +3528,15 @@ static int max9296_fsync(void *data) {
           if (sensor->shared.sensor->state.fsync != MAX9296_STATE_RUNNING)
             usleep_range(1000000, 1000000);
 
-          if (low == 0) {
-            low = (1000000 / sensor->fps);
-            low -= high;
+          if (low_fps != sensor->fps) {
+            low_fps = sensor->fps;
+            low = (1000000 / low_fps) - high;
+            printk(KERN_NOTICE
+                   "[%s:%d][%s:%d] %s dual fps : %u, low : %u, high : %u\n",
+                   KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+                   __FUNCTION__, low_fps, low, high);
           }
 
-          pr_notice_once("[%s:%d][%s:%d] %s fps : %d, low : %d, high : "
-                         "%d\n",
-                         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
-                         __LINE__, __FUNCTION__, sensor->fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
           usleep_range(high, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
@@ -3464,16 +3551,33 @@ static int max9296_fsync(void *data) {
       else {
         int start = 0, fps = 30;
         unsigned int *fsync_state = NULL;
+        /*
+         * Only one side has come up (the outer test already ruled out both).
+         * Drive FSYNC for whichever side that is.
+         *
+         * state.setup used to gate these tests as a stand-in for "the other
+         * side is idle", but max9296_set_fmt() latches it to DONE on every
+         * call - TRY and error paths included - and never clears it. Merely
+         * opening the other video node and setting a format was therefore
+         * enough to make both tests fail forever: FSYNC never started,
+         * state.fsync never reached RUNNING, and max9296_enable() consequently
+         * never wrote the CSI output enable (0x0313), so the streaming channel
+         * produced no frames. init+enable already say who is actually
+         * streaming, so the setup terms are dropped.
+         *
+         * Keep pulsing while the other side is inside max9296_set_mode(): the
+         * side that is already streaming needs FSYNC continuously, and its
+         * register table load takes seconds. Nothing races it - max9296_enable()
+         * only ever programs its own deserializer now.
+         */
         if ((sensor->state.init == MAX9296_STATE_DONE) &&
-            (sensor->state.enable == MAX9296_STATE_DONE) &&
-            (sensor->shared.sensor->state.setup != MAX9296_STATE_DONE)) {
+            (sensor->state.enable == MAX9296_STATE_DONE)) {
           fsync_state = &sensor->state.fsync;
           fps = sensor->fps;
           start = 1;
         } else if ((sensor->shared.sensor->state.init == MAX9296_STATE_DONE) &&
                    (sensor->shared.sensor->state.enable ==
-                    MAX9296_STATE_DONE) &&
-                   (sensor->state.setup != MAX9296_STATE_DONE)) {
+                    MAX9296_STATE_DONE)) {
           fsync_state = &sensor->shared.sensor->state.fsync;
           fps = sensor->shared.sensor->fps;
           start = 1;
@@ -3485,15 +3589,15 @@ static int max9296_fsync(void *data) {
           if (*fsync_state != MAX9296_STATE_RUNNING)
             usleep_range(1000000, 1000000);
 
-          if (low == 0) {
-            low = (1000000 / fps);
-            low -= high;
+          if (low_fps != fps) {
+            low_fps = fps;
+            low = (1000000 / low_fps) - high;
+            printk(KERN_NOTICE
+                   "[%s:%d][%s:%d] %s side fps : %u, low : %u, high : %u\n",
+                   KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+                   __FUNCTION__, low_fps, low, high);
           }
 
-          pr_notice_once("[%s:%d][%s:%d] %s fps : %d, low : %d, "
-                         "high : %d\n",
-                         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_,
-                         __LINE__, __FUNCTION__, fps, low, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
           usleep_range(high, high);
           gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
@@ -3529,64 +3633,62 @@ static int max9296_enable(void *data) {
         (sensor->state.fsync == MAX9296_STATE_RUNNING)) {
       // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
       // __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
+
       msleep_interruptible(300);
-      if (sensor->shared.sensor != NULL) {
-        if (sensor->shared.sensor->state.setup == MAX9296_STATE_DONE) {
-          if (sensor->fsync_gpio != NULL) {
-            if (sensor->current_mode->id == MAX9296_MODE_1280x720) {
-              maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1);
-              // usleep_range(10000, 11000);
-              maxim_ops_i2c_write(sensor->shared.sensor, 0x00, 0x0313, 0x02, 2,
-                                  1);
-              usleep_range(10000, 11000);
-            } else {
-              maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1);
-              // usleep_range(10000, 11000);
-              maxim_ops_i2c_write(sensor->shared.sensor, 0x00, 0x0313, 0x82, 2,
-                                  1);
-              usleep_range(10000, 11000);
-            }
 
-            // ae
-            maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2);
-            maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5002, 0x0290, 2,
-                                2);
-            usleep_range(100000, 101000);
-            maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2);
-            maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5002, 0x0299, 2,
-                                2);
-            // awb
-            usleep_range(100000, 101000);
-            maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2);
-            maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x5100, 0x115f, 2,
-                                2);
-            // lsc
-            usleep_range(100000, 101000);
-            maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
-            maxim_ops_i2c_write(sensor->shared.sensor, 0x3c, 0x54a0, 0x3fff, 2,
-                                2);
-          }
-        } else {
-          if (sensor->current_mode->id == MAX9296_MODE_1280x720) {
-            maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1);
-            usleep_range(10000, 11000);
-          } else {
-            maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1);
-            usleep_range(10000, 11000);
-          }
+      /*
+       * Program this deserializer, and only this one.
+       *
+       * This used to choose between a two-sided write and a self-only write on
+       * peer->state.setup, with the two-sided path nested under
+       * `if (sensor->fsync_gpio != NULL)` and no else. Two failures came out of
+       * that:
+       *
+       *   - Only max9296_0 owns the board-global FSYNC GPIO, so max9296_1
+       *     (i2c3, /dev/video4) entered the two-sided path, failed the inner
+       *     test and wrote nothing at all - no CSI output enable, no frames.
+       *     max9296_0 could not cover for it: stream_on is a one-shot cleared
+       *     on its own first pass, so with /dev/video3 already streaming its
+       *     enable thread never ran again.
+       *   - When both threads did run, one wrote the other's AP1302 AE/AWB
+       *     registers while that instance's own max9296_apply_cached_controls()
+       *     wrote the same registers on the same client, unserialized.
+       *
+       * Every enable thread is already gated on its own stream_on and
+       * state.fsync, so having each instance program itself covers every start
+       * order with exactly one writer per register. What aligns the two
+       * deserializers is the shared FSYNC net, not the pairing of these writes.
+       *
+       * Done under sensor->lock, which max9296_s_stream() holds for its whole
+       * body: the stream can no longer go down between the liveness test and
+       * the writes. Without that, a STREAMOFF landing in the sleep above was
+       * followed by 0x0313 being switched back on for a channel nobody was
+       * streaming - max9296_set_stream_mipi() had already written 0x00 and this
+       * pass overwrote it. sensor->streaming is the live flag; state.fsync is
+       * cleared by the same stream-off path.
+       */
+      mutex_lock(&sensor->lock);
+      if (sensor->streaming &&
+          (sensor->state.fsync == MAX9296_STATE_RUNNING)) {
+        /*
+         * Consume the request here - only on a pass that actually serves it.
+         *
+         * The clear used to sit at the very end of the pass, where it could
+         * erase a STREAMON that arrived while the pass was running: the app
+         * restarting its pipeline inside that ~600 ms window lost its request
+         * and the deserializer never got its CSI output enable. Clearing it
+         * before the liveness test is no better - a test that then fails would
+         * throw the request away with nothing left to re-raise it, wedging the
+         * channel at no frames. Inside the test both cases are safe: a rejected
+         * pass leaves the flag up for the next iteration, and a STREAMON
+         * landing mid-pass cannot be swallowed because the clear and the writes
+         * are atomic under sensor->lock, which max9296_s_stream() holds for its
+         * whole body. Such a STREAMON either completes before we take the lock,
+         * in which case this pass is the one that serves it, or lands after we
+         * drop it and leaves the flag raised for the next iteration.
+         */
+        sensor->stream_on = 0;
 
-          // ae
-          maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2);
-          usleep_range(100000, 101000);
-          maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2);
-          // awb
-          usleep_range(100000, 101000);
-          maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2);
-          // lsc
-          usleep_range(100000, 101000);
-          maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
-        }
-      } else {
         if (sensor->current_mode->id == MAX9296_MODE_1280x720) {
           maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1);
           usleep_range(10000, 11000);
@@ -3605,12 +3707,10 @@ static int max9296_enable(void *data) {
         // lsc
         usleep_range(100000, 101000);
         maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
-      }
-      sensor->stream_on = 0;
 
-      /* Override hardcoded AE/AWB init with V4L2 cached controls */
-      mutex_lock(&sensor->lock);
-      max9296_apply_cached_controls(sensor);
+        /* Override hardcoded AE/AWB init with V4L2 cached controls */
+        max9296_apply_cached_controls(sensor);
+      }
       mutex_unlock(&sensor->lock);
 
       usleep_range(10000, 11000);
@@ -3769,11 +3869,18 @@ static int max9296_probe(struct i2c_client *client) {
     return -ENOMEM;
 
   sensor->i2c_client = client;
+
+  /*
+   * Initialised up front, not just before max9296_init_controls(), so that
+   * every error path below can reach the common cleanup tail: mutex_destroy()
+   * on a still-zeroed mutex trips a CONFIG_DEBUG_MUTEXES magic check.
+   */
+  mutex_init(&sensor->lock);
+
   sensor->state.init = MAX9296_STATE_IDLE;
   sensor->state.firmware = MAX9296_STATE_IDLE;
   sensor->state.enable = MAX9296_STATE_IDLE;
   sensor->state.fsync = MAX9296_STATE_IDLE;
-  sensor->state.setup = MAX9296_STATE_IDLE;
   sensor->state.power = MAX9296_STATE_IDLE;
   sensor->stream_on = 0;
   sensor->ctrl_cache.firmware_ready = false;
@@ -3851,7 +3958,9 @@ static int max9296_probe(struct i2c_client *client) {
     return PTR_ERR(sensor->reset_gpio);
   }
   if (!sensor->reset_gpio) {
-    dev_info(dev, "warning reset gpio...\n");
+    printk(KERN_WARNING "[%s:%d][%s:%d] warning reset gpio...", KEYWORD,
+           client->adapter->nr, _FILE_, __LINE__);
+    //dev_info(dev, "warning reset gpio...\n");
   }
 
   sensor->fsync_gpio = devm_gpiod_get_optional(dev, "fsync", GPIOD_OUT_LOW);
@@ -3884,7 +3993,12 @@ static int max9296_probe(struct i2c_client *client) {
         printk(KERN_CRIT
                "[%s:%d][%s:%d] sensor->shared.thread_shared_init error",
                KEYWORD, client->adapter->nr, _FILE_, __LINE__);
-        goto free_ctrls;
+        /*
+         * ret still holds the 0 from v4l2_fwnode_endpoint_parse() here, so
+         * without this probe would report success on a failed kthread_run.
+         */
+        ret = PTR_ERR(sensor->shared.thread_shared_init);
+        goto entity_cleanup;
       }
       get_task_struct(sensor->shared.thread_shared_init);
     }
@@ -3904,10 +4018,8 @@ static int max9296_probe(struct i2c_client *client) {
   if (ret) {
     printk(KERN_CRIT "[%s:%d][%s:%d] media_entity_pads_init error(%d)", KEYWORD,
            client->adapter->nr, _FILE_, __LINE__, ret);
-    return ret;
+    goto entity_cleanup;
   }
-
-  mutex_init(&sensor->lock);
 
   ret = max9296_init_controls(sensor);
   if (ret) {
@@ -4040,15 +4152,27 @@ free_ctrls:
     kthread_stop(sensor->thread_en);
   if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync))
     kthread_stop(sensor->thread_fsync);
+
+  v4l2_ctrl_handler_free(&sensor->ctrls.handler);
+entity_cleanup:
+  /*
+   * The peer-resolver kthread has to be stopped on EVERY error path reachable
+   * after its kthread_run(), which is why it lives in the common tail rather
+   * than under free_ctrls. sensor is devm-allocated, so returning an error
+   * frees it while that thread is still dereferencing sensor->shared.* every
+   * 10 ms - and when the peer never resolves it never breaks out on its own,
+   * leaving a zombie thread on freed memory. The IS_ERR guard covers the
+   * kthread_run failure path, which jumps here with an ERR_PTR in hand.
+   */
   if (sensor->shared.thread_shared_init &&
       !IS_ERR(sensor->shared.thread_shared_init)) {
     kthread_stop(sensor->shared.thread_shared_init);
     put_task_struct(sensor->shared.thread_shared_init);
   }
   sensor->shared.thread_shared_init = NULL;
+  of_node_put(sensor->shared.np);
+  sensor->shared.np = NULL;
 
-  v4l2_ctrl_handler_free(&sensor->ctrls.handler);
-entity_cleanup:
   media_entity_cleanup(&sensor->sd.entity);
   mutex_destroy(&sensor->lock);
   return ret;
@@ -4062,9 +4186,56 @@ static int max9296_remove(struct i2c_client *client) {
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
-  /* Phase 1: Stop peer threads that reference our memory */
+  /*
+   * Phase 0: stop new s_power() callers, then hand back this instance's share
+   * of the board-global power count. remove() never goes through
+   * max9296_s_power(), so without this an unbind with the node still open would
+   * leave max9296_power_users stuck above zero: a later rebind would see a
+   * non-zero count and skip the power-on sequence entirely, and the count could
+   * never fall back to zero. The per-device state this replaced was
+   * re-initialised at probe, so the leak is specific to module-global state.
+   *
+   * This must run BEFORE the kthreads are stopped. max9296_s_stream() holds
+   * sensor->lock while it waits for the firmware kthread, and Phase 2 kills
+   * that kthread - taking sensor->lock afterwards would block here forever,
+   * wedging the unbind in D state with the driver-core device_lock held.
+   *
+   * The rails are deliberately left up rather than calling
+   * max9296_set_power_off() here. A teardown-time power-down buys nothing: the
+   * next probe requests every GPIO as GPIOD_OUT_HIGH, which with the DT's
+   * GPIO_ACTIVE_LOW flags drives all three rails off again, and the first
+   * s_power(1) after that runs the full sequence. It would also be unreliable:
+   * in a two-device teardown the peer's Phase 1 has already NULLed our
+   * shared.sensor, so max9296_1 - which has no reset-gpios of its own - could
+   * not reach the board-wide camera-module rail on GPIO1_IO01 and would drop
+   * only its own deserializer. Leaving everything energised matches pre-patch
+   * behaviour in every ordering.
+   */
+  v4l2_async_unregister_subdev(&sensor->sd);
+
+  mutex_lock(&sensor->lock);
+  mutex_lock(&max9296_power_lock);
+  if (sensor->power_count > 0) {
+    sensor->power_count = 0;
+    if (!WARN_ON(max9296_power_users == 0))
+      max9296_power_users--;
+  }
+  mutex_unlock(&max9296_power_lock);
+  mutex_unlock(&sensor->lock);
+
+  /*
+   * Phase 1: Stop peer threads that reference our memory.
+   *
+   * Stop first, clear the pointer second. The reverse order raced: those
+   * threads test peer->shared.sensor and then dereference it in a later
+   * statement, sometimes with a 1 s usleep_range() in between (the FSYNC
+   * catch-up waits), and kthread_stop() only waits for the current iteration
+   * to finish - it cannot interrupt one mid-way. Clearing the pointer first
+   * therefore let a thread wake up past its NULL check and store through
+   * NULL+offset. While the threads are still running the pointer is valid:
+   * nothing of ours has been freed yet at this point in remove().
+   */
   if (peer && peer->shared.sensor == sensor) {
-    WRITE_ONCE(peer->shared.sensor, NULL);
     if (peer->thread_fsync && !IS_ERR(peer->thread_fsync)) {
       kthread_stop(peer->thread_fsync);
       peer->thread_fsync = NULL;
@@ -4073,6 +4244,7 @@ static int max9296_remove(struct i2c_client *client) {
       kthread_stop(peer->thread_en);
       peer->thread_en = NULL;
     }
+    WRITE_ONCE(peer->shared.sensor, NULL);
   }
 
   /* Phase 2: Stop our own threads */
@@ -4101,12 +4273,14 @@ static int max9296_remove(struct i2c_client *client) {
     put_device(&sensor->shared.client->dev);
     sensor->shared.client = NULL;
   }
+  /* of_parse_phandle() in probe took a reference on this node */
+  of_node_put(sensor->shared.np);
+  sensor->shared.np = NULL;
 
   /* Phase 4: V4L2/media cleanup */
   device_remove_file(&client->dev, &dev_attr_rotate);
   device_remove_file(&client->dev, &dev_attr_enable);
   device_remove_file(&client->dev, &dev_attr_link_status);
-  v4l2_async_unregister_subdev(&sensor->sd);
   media_entity_cleanup(&sensor->sd.entity);
   v4l2_ctrl_handler_free(&sensor->ctrls.handler);
   mutex_destroy(&sensor->lock);
