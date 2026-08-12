@@ -600,7 +600,7 @@ static const struct reg_value max9296_init_setting_1080p_crop_720p_2ch_30fps[] =
 
         {0x00, 0x031D, 2, 0xEF, 1, 10},
         {0x00, 0x0010, 2, 0x23, 1, 100},
-
+        //{0x00, 0x0320, 2, 0x26, 1, 10},
         //
         {0x40, 0x03F1, 2, 0x85, 1, 100},
         {0x60, 0x03F1, 2, 0x85, 1, 100},
