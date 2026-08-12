@@ -28,6 +28,7 @@
 #include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/kthread.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/of_device.h>
 #include <linux/slab.h>
@@ -39,7 +40,7 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-#define SW_VERSION "2.3"
+#define SW_VERSION "2.4"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
@@ -53,6 +54,16 @@ static int debug;
 #define DEFAULT_RESOLUTION_HEIGHT (720)
 
 #define MAX9296_REG_CHIP_ID 0x000d
+#define MAX9296_CHIP_ID 0x96
+#define MAX9296_REG_CTRL3 0x0013
+#define MAX9296_REG_RX3 0x002f
+#define MAX9295_REG_CHIP_ID 0x000d
+#define MAX9295_CHIP_ID 0x91
+#define AP1302_REG_FRAME_CNT 0x0002
+
+/* RX3 link-level bits. FAILLOCK is read-clear and is deliberately excluded. */
+#define MAX9296_RX3_LINK_A_UP 0x06
+#define MAX9296_RX3_LINK_B_UP 0x60
 
 /* AP1302 ISP I2C slave address and register map */
 #define AP1302_I2C_ADDR 0x3c
@@ -400,6 +411,14 @@ struct max9296_dev {
       int disconnect;         // bitmask of disconnected channels, -1 = not checked
       unsigned int ch_shift;  // bit shift for Link A (0 for adapter2, 2 for adapter1)
   } link_status;
+
+  /* On-demand health sampling state. There is intentionally no timer/work:
+   * userspace owns cadence, and a sysfs read never resets or reconfigures HW. */
+  struct {
+    u64 sequence;
+    u8 hinf_count[2];
+    bool hinf_valid[2];
+  } health;
 
   // for firmware
   struct work_struct fw_work;
@@ -1012,6 +1031,55 @@ static int maxim_ops_i2c_read(struct max9296_dev *sensor,
   return 0;
 }
 
+/* One-attempt, no-log I2C read for health observation.
+ *
+ * The control path helper above retries ten times and emits an error for each
+ * failed attempt. That is appropriate for an operator control but harmful for
+ * a periodic observer: a disconnected cable would monopolise the adapter and
+ * flood the journal. Health reads therefore make exactly one transfer and
+ * return the real errno (or -EIO for a short transfer).
+ */
+static int max9296_health_i2c_read_once(struct max9296_dev *sensor,
+                                        unsigned int slave_addr,
+                                        unsigned int reg,
+                                        unsigned int reg_byte,
+                                        unsigned int val_byte,
+                                        unsigned int *val) {
+  struct i2c_client *client = sensor->i2c_client;
+  unsigned char reg_buf[4] = {0};
+  unsigned char val_buf[4] = {0};
+  struct i2c_msg msgs[2] = {0};
+  unsigned int i;
+  int ret;
+
+  if (!val || reg_byte == 0 || reg_byte > sizeof(reg_buf) ||
+      val_byte == 0 || val_byte > sizeof(val_buf))
+    return -EINVAL;
+
+  *val = 0;
+  for (i = 0; i < reg_byte; i++)
+    reg_buf[i] = (reg >> ((reg_byte - i - 1) * 8)) & 0xff;
+
+  msgs[0].addr = slave_addr ? slave_addr : client->addr;
+  msgs[0].flags = 0;
+  msgs[0].len = reg_byte;
+  msgs[0].buf = reg_buf;
+  msgs[1].addr = msgs[0].addr;
+  msgs[1].flags = I2C_M_RD;
+  msgs[1].len = val_byte;
+  msgs[1].buf = val_buf;
+
+  ret = i2c_transfer(client->adapter, msgs, ARRAY_SIZE(msgs));
+  if (ret < 0)
+    return ret;
+  if (ret != ARRAY_SIZE(msgs))
+    return -EIO;
+
+  for (i = 0; i < val_byte; i++)
+    *val |= (unsigned int)val_buf[i] << ((val_byte - i - 1) * 8);
+  return 0;
+}
+
 /*
  * MAX9295 MFP4 GPIO toggle — gates MCP4018 VCC.
  * Equivalent to the commented-out reg_value entries in link init tables:
@@ -1583,6 +1651,7 @@ static void max9296_set_power_off(struct max9296_dev *sensor) {
   }
 
   max9296_power(sensor, false);
+  memset(sensor->health.hinf_valid, 0, sizeof(sensor->health.hinf_valid));
   sensor->streaming = false;
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
@@ -3405,6 +3474,8 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     }
   }
 
+  if (sensor->streaming != enable)
+    memset(sensor->health.hinf_valid, 0, sizeof(sensor->health.hinf_valid));
   sensor->streaming = enable;
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
@@ -3841,6 +3912,337 @@ static ssize_t sysfs_enable_store(struct device *dev,
 }
 static DEVICE_ATTR(enable, 0664, sysfs_enable_show, sysfs_enable_store);
 //-------------------------------------------------------------------------
+struct max9296_health_channel_sample {
+  unsigned int channel;
+  bool enabled;
+  bool link_up;
+  const char *phy;
+  const char *link_status;
+  const char *control_tunnel;
+  const char *serializer_status;
+  const char *isp_status;
+  const char *sensor_status;
+  const char *hinf_progress;
+  int serializer_errno;
+  int isp_errno;
+  unsigned int serializer_id;
+  unsigned int hinf_count;
+  bool serializer_id_valid;
+  bool hinf_valid;
+};
+
+struct max9296_health_sample {
+  u64 sequence;
+  s64 observed_ms;
+  bool dual;
+  bool streaming;
+  unsigned int configured_local_mask;
+  unsigned int configured_global_mask;
+  int deserializer_errno;
+  int ctrl3_errno;
+  int rx3_errno;
+  unsigned int deserializer_id;
+  unsigned int ctrl3;
+  unsigned int rx3;
+  bool deserializer_id_valid;
+  bool ctrl3_valid;
+  bool rx3_valid;
+  bool link_a_up;
+  bool link_b_up;
+  struct max9296_health_channel_sample channel[2];
+};
+
+static void max9296_health_set_unavailable(
+    struct max9296_health_channel_sample *channel, const char *link_status) {
+  channel->link_status = link_status;
+  channel->control_tunnel = "BLOCKED";
+  channel->serializer_status = "BLOCKED";
+  channel->isp_status = "BLOCKED";
+  channel->sensor_status = "BLOCKED";
+  channel->hinf_progress = "NOT_AVAILABLE";
+}
+
+/* Collect a shallow, on-demand observation while sensor->lock is held.
+ *
+ * Probe dependency is intentionally not identical to the video data path:
+ * after DES/RX3, MAX9295 management and AP1302 are probed as parallel branches.
+ * A MAX9295 ID NAK must not prevent the AP1302 read that distinguishes a
+ * serializer-management failure from an unavailable remote control tunnel.
+ * AR0234 DMA is excluded here because it can take hundreds of milliseconds;
+ * sensor static presence will be a separate explicitly rate-limited deep ABI.
+ */
+static void max9296_collect_health_locked(struct max9296_dev *sensor,
+                                          struct max9296_health_sample *sample) {
+  unsigned int des_id = 0, ctrl3 = 0, rx3 = 0;
+  unsigned int local_ch;
+
+  memset(sample, 0, sizeof(*sample));
+  sample->sequence = ++sensor->health.sequence;
+  sample->observed_ms = ktime_to_ms(ktime_get_boottime());
+  sample->dual = max9296_hw_is_dual(sensor);
+  sample->streaming = sensor->streaming;
+  sample->configured_local_mask = sensor->enable & 0x03;
+  sample->configured_global_mask =
+      sample->configured_local_mask << sensor->link_status.ch_shift;
+
+  sample->deserializer_errno = max9296_health_i2c_read_once(
+      sensor, 0, MAX9296_REG_CHIP_ID, 2, 1, &des_id);
+  if (!sample->deserializer_errno) {
+    sample->deserializer_id_valid = true;
+    sample->deserializer_id = des_id;
+    if (des_id != MAX9296_CHIP_ID)
+      sample->deserializer_errno = -ENODEV;
+  }
+  if (!sample->deserializer_errno) {
+    sample->ctrl3_errno = max9296_health_i2c_read_once(
+        sensor, 0, MAX9296_REG_CTRL3, 2, 1, &ctrl3);
+    if (!sample->ctrl3_errno) {
+      sample->ctrl3_valid = true;
+      sample->ctrl3 = ctrl3;
+    }
+    sample->rx3_errno = max9296_health_i2c_read_once(
+        sensor, 0, MAX9296_REG_RX3, 2, 1, &rx3);
+    if (!sample->rx3_errno) {
+      sample->rx3_valid = true;
+      sample->rx3 = rx3;
+      sample->link_a_up =
+          (rx3 & MAX9296_RX3_LINK_A_UP) == MAX9296_RX3_LINK_A_UP;
+      sample->link_b_up =
+          (rx3 & MAX9296_RX3_LINK_B_UP) == MAX9296_RX3_LINK_B_UP;
+    }
+  } else {
+    sample->ctrl3_errno = -ENXIO;
+    sample->rx3_errno = -ENXIO;
+  }
+
+  for (local_ch = 0; local_ch < ARRAY_SIZE(sample->channel); local_ch++) {
+    struct max9296_health_channel_sample *channel =
+        &sample->channel[local_ch];
+    unsigned int serializer_id = 0, frame_count = 0;
+    unsigned int serializer_addr, ap1302_addr;
+    bool physical_up;
+
+    channel->channel = sensor->link_status.ch_shift + local_ch;
+    channel->enabled = sample->configured_local_mask & BIT(local_ch);
+    channel->serializer_errno = -ENODATA;
+    channel->isp_errno = -ENODATA;
+    channel->phy = "NONE";
+
+    if (!channel->enabled) {
+      channel->link_status = "N/A";
+      channel->control_tunnel = "N/A";
+      channel->serializer_status = "N/A";
+      channel->isp_status = "N/A";
+      channel->sensor_status = "N/A";
+      channel->hinf_progress = "NOT_EXPECTED";
+      sensor->health.hinf_valid[local_ch] = false;
+      continue;
+    }
+    if (sample->deserializer_errno) {
+      max9296_health_set_unavailable(channel, "BLOCKED_BY_DES");
+      sensor->health.hinf_valid[local_ch] = false;
+      continue;
+    }
+    if (!sample->rx3_valid) {
+      max9296_health_set_unavailable(channel, "UNKNOWN");
+      sensor->health.hinf_valid[local_ch] = false;
+      continue;
+    }
+
+    if (sample->dual) {
+      /* Bench evidence: removing odd ch1/ch3 clears RX3 Link A (0x06),
+       * leaving 0x60. Therefore local even -> Link B, local odd -> Link A. */
+      if (local_ch == 0) {
+        channel->phy = "B";
+        physical_up = sample->link_b_up;
+      } else {
+        channel->phy = "A";
+        physical_up = sample->link_a_up;
+      }
+    } else {
+      /* Single-channel tables may route either configured channel over Link A;
+       * channel identity must come from enable, not from the PHY nibble. */
+      physical_up = sample->link_a_up || sample->link_b_up;
+      if (sample->link_a_up && sample->link_b_up)
+        channel->phy = "AB";
+      else if (sample->link_a_up)
+        channel->phy = "A";
+      else if (sample->link_b_up)
+        channel->phy = "B";
+    }
+    channel->link_up = physical_up;
+    if (!physical_up) {
+      max9296_health_set_unavailable(channel, "DOWN");
+      sensor->health.hinf_valid[local_ch] = false;
+      continue;
+    }
+    channel->link_status = "OK";
+
+    serializer_addr = max9296_ser_addr(sensor, local_ch);
+    ap1302_addr = sample->dual
+                      ? (local_ch ? AP1302_CH1_I2C_ADDR
+                                  : AP1302_CH0_I2C_ADDR)
+                      : AP1302_I2C_ADDR;
+
+    /* Parallel branches below: do not gate AP1302 on serializer ID ACK. */
+    channel->serializer_errno = max9296_health_i2c_read_once(
+        sensor, serializer_addr, MAX9295_REG_CHIP_ID, 2, 1,
+        &serializer_id);
+    if (!channel->serializer_errno) {
+      channel->serializer_id_valid = true;
+      channel->serializer_id = serializer_id;
+      if (serializer_id != MAX9295_CHIP_ID)
+        channel->serializer_errno = -ENODEV;
+    }
+    channel->isp_errno = max9296_health_i2c_read_once(
+        sensor, ap1302_addr, AP1302_REG_FRAME_CNT, 2, 2, &frame_count);
+    if (!channel->isp_errno) {
+      channel->hinf_valid = true;
+      channel->hinf_count = (frame_count >> 8) & 0xff;
+    }
+
+    if (!channel->serializer_errno && !channel->isp_errno)
+      channel->control_tunnel = "OK";
+    else if (!channel->serializer_errno || !channel->isp_errno)
+      channel->control_tunnel = "PARTIAL";
+    else
+      channel->control_tunnel = "AMBIGUOUS";
+
+    if (!channel->serializer_errno)
+      channel->serializer_status = "OK";
+    else if (!channel->isp_errno)
+      channel->serializer_status = "FAIL";
+    else
+      channel->serializer_status = "UNKNOWN";
+
+    if (!channel->isp_errno) {
+      if (!sample->streaming) {
+        channel->isp_status = "OK";
+        channel->hinf_progress = "NOT_EXPECTED";
+        sensor->health.hinf_valid[local_ch] = false;
+      } else if (!sensor->health.hinf_valid[local_ch]) {
+        channel->isp_status = "STARTING";
+        channel->hinf_progress = "STARTING";
+        sensor->health.hinf_valid[local_ch] = true;
+        sensor->health.hinf_count[local_ch] = channel->hinf_count;
+      } else if (sensor->health.hinf_count[local_ch] != channel->hinf_count) {
+        channel->isp_status = "OK";
+        channel->hinf_progress = "YES";
+        sensor->health.hinf_count[local_ch] = channel->hinf_count;
+      } else {
+        /* HINF stall alone cannot distinguish AR0234 from AP1302. */
+        channel->isp_status = "UNKNOWN";
+        channel->hinf_progress = "NO";
+      }
+      channel->sensor_status = "UNKNOWN";
+    } else {
+      sensor->health.hinf_valid[local_ch] = false;
+      channel->hinf_progress = "NOT_AVAILABLE";
+      if (!channel->serializer_errno)
+        channel->isp_status = "FAIL";
+      else
+        channel->isp_status = "UNKNOWN";
+      channel->sensor_status = "BLOCKED";
+    }
+  }
+}
+
+static ssize_t sysfs_health_raw_show(struct device *dev,
+                                     struct device_attribute *attr,
+                                     char *buf) {
+  struct v4l2_subdev *sd = i2c_get_clientdata(to_i2c_client(dev));
+  struct max9296_dev *sensor = to_max9296_dev(sd);
+  struct max9296_health_sample sample;
+  s64 now_ms = ktime_to_ms(ktime_get_boottime());
+  size_t len = 0;
+  unsigned int i;
+  char deserializer_id[16], ctrl3[16], rx3[16];
+
+  /* Do not queue behind STREAMON, controls, firmware load, or teardown. The
+   * userspace exporter skips busy samples and lets the prior snapshot expire. */
+  if (!mutex_trylock(&sensor->lock))
+    return scnprintf(buf, PAGE_SIZE,
+                     "{\"schema\":1,\"adapter\":%d,\"sequence\":%llu,"
+                     "\"observed_monotonic_ms\":%lld,\"busy\":true}\n",
+                     sensor->i2c_client->adapter->nr,
+                     (unsigned long long)READ_ONCE(sensor->health.sequence),
+                     (long long)now_ms);
+
+  max9296_collect_health_locked(sensor, &sample);
+  mutex_unlock(&sensor->lock);
+
+  if (sample.deserializer_id_valid)
+    scnprintf(deserializer_id, sizeof(deserializer_id), "%u",
+              sample.deserializer_id);
+  else
+    strscpy(deserializer_id, "null", sizeof(deserializer_id));
+  if (sample.ctrl3_valid)
+    scnprintf(ctrl3, sizeof(ctrl3), "%u", sample.ctrl3);
+  else
+    strscpy(ctrl3, "null", sizeof(ctrl3));
+  if (sample.rx3_valid)
+    scnprintf(rx3, sizeof(rx3), "%u", sample.rx3);
+  else
+    strscpy(rx3, "null", sizeof(rx3));
+
+  len += scnprintf(
+      buf + len, PAGE_SIZE - len,
+      "{\"schema\":1,\"adapter\":%d,\"sequence\":%llu,"
+      "\"observed_monotonic_ms\":%lld,\"busy\":false,"
+      "\"mode\":\"%s\",\"streaming\":%s,"
+      "\"configured_local_mask\":%u,\"configured_global_mask\":%u,"
+      "\"deserializer\":{\"status\":\"%s\",\"errno\":%d,"
+      "\"device_id\":%s,\"ctrl3_errno\":%d,\"ctrl3\":%s,"
+      "\"rx3_errno\":%d,\"rx3\":%s,\"link_a_up\":%s,"
+      "\"link_b_up\":%s},\"channels\":[",
+      sensor->i2c_client->adapter->nr,
+      (unsigned long long)sample.sequence, (long long)sample.observed_ms,
+      sample.dual ? "dual-wide" : "single",
+      sample.streaming ? "true" : "false", sample.configured_local_mask,
+      sample.configured_global_mask,
+      sample.deserializer_errno ? "FAIL" : "OK", sample.deserializer_errno,
+      deserializer_id, sample.ctrl3_errno, ctrl3, sample.rx3_errno, rx3,
+      sample.link_a_up ? "true" : "false",
+      sample.link_b_up ? "true" : "false");
+
+  for (i = 0; i < ARRAY_SIZE(sample.channel); i++) {
+    const struct max9296_health_channel_sample *channel = &sample.channel[i];
+    char serializer_id[16], hinf_count[16];
+
+    if (channel->serializer_id_valid)
+      scnprintf(serializer_id, sizeof(serializer_id), "%u",
+                channel->serializer_id);
+    else
+      strscpy(serializer_id, "null", sizeof(serializer_id));
+    if (channel->hinf_valid)
+      scnprintf(hinf_count, sizeof(hinf_count), "%u", channel->hinf_count);
+    else
+      strscpy(hinf_count, "null", sizeof(hinf_count));
+
+    len += scnprintf(
+        buf + len, PAGE_SIZE - len,
+        "%s{\"channel\":%u,\"enabled\":%s,\"phy\":\"%s\","
+        "\"link\":{\"status\":\"%s\",\"up\":%s},"
+        "\"control_tunnel\":\"%s\","
+        "\"serializer\":{\"status\":\"%s\",\"errno\":%d,"
+        "\"device_id\":%s},"
+        "\"isp\":{\"status\":\"%s\",\"errno\":%d,"
+        "\"hinf_count\":%s,\"hinf_progress\":\"%s\"},"
+        "\"sensor\":{\"status\":\"%s\","
+        "\"probe\":\"DEEP_NOT_RUN\"}}",
+        i ? "," : "", channel->channel,
+        channel->enabled ? "true" : "false", channel->phy,
+        channel->link_status, channel->link_up ? "true" : "false",
+        channel->control_tunnel, channel->serializer_status,
+        channel->serializer_errno, serializer_id, channel->isp_status,
+        channel->isp_errno, hinf_count, channel->hinf_progress,
+        channel->sensor_status);
+  }
+  len += scnprintf(buf + len, PAGE_SIZE - len, "]}\n");
+  return len;
+}
+static DEVICE_ATTR(health_raw, 0444, sysfs_health_raw_show, NULL);
+//-------------------------------------------------------------------------
 static ssize_t sysfs_link_status_show(struct device *dev,
                                       struct device_attribute *attr,
                                       char *buf) {
@@ -4132,13 +4534,19 @@ static int max9296_probe(struct i2c_client *client) {
     printk(KERN_CRIT "[%s:%d][%s:%d] sysfs enable entry failed", KEYWORD,
            client->adapter->nr, _FILE_, __LINE__);
     ret = (-EINVAL);
-    goto free_ctrls;
+    goto remove_rotate_attr;
   }
   if (device_create_file(&client->dev, &dev_attr_link_status) != 0) {
     printk(KERN_CRIT "[%s:%d][%s:%d] sysfs link_status entry failed", KEYWORD,
            client->adapter->nr, _FILE_, __LINE__);
     ret = (-EINVAL);
-    goto free_ctrls;
+    goto remove_enable_attr;
+  }
+  if (device_create_file(&client->dev, &dev_attr_health_raw) != 0) {
+    printk(KERN_CRIT "[%s:%d][%s:%d] sysfs health_raw entry failed", KEYWORD,
+           client->adapter->nr, _FILE_, __LINE__);
+    ret = (-EINVAL);
+    goto remove_link_status_attr;
   }
 
   if (debug)
@@ -4146,6 +4554,12 @@ static int max9296_probe(struct i2c_client *client) {
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
 
+remove_link_status_attr:
+  device_remove_file(&client->dev, &dev_attr_link_status);
+remove_enable_attr:
+  device_remove_file(&client->dev, &dev_attr_enable);
+remove_rotate_attr:
+  device_remove_file(&client->dev, &dev_attr_rotate);
 free_ctrls:
   /* Stop threads that were already started */
   if (sensor->thread_en && !IS_ERR(sensor->thread_en))
@@ -4278,9 +4692,10 @@ static int max9296_remove(struct i2c_client *client) {
   sensor->shared.np = NULL;
 
   /* Phase 4: V4L2/media cleanup */
-  device_remove_file(&client->dev, &dev_attr_rotate);
-  device_remove_file(&client->dev, &dev_attr_enable);
+  device_remove_file(&client->dev, &dev_attr_health_raw);
   device_remove_file(&client->dev, &dev_attr_link_status);
+  device_remove_file(&client->dev, &dev_attr_enable);
+  device_remove_file(&client->dev, &dev_attr_rotate);
   media_entity_cleanup(&sensor->sd.entity);
   v4l2_ctrl_handler_free(&sensor->ctrls.handler);
   mutex_destroy(&sensor->lock);

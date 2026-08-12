@@ -5,6 +5,29 @@ All notable changes to the MAX9296 driver will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4] - 2026-08-12
+
+### Added
+- 읽기 전용 `health_raw` sysfs ABI: MAX9296 DES, RX3 GMSL link, MAX9295 SER
+  management endpoint, AP1302 ISP HINF counter를 요청 시점에 한 번만 샘플링
+- `tools/max9296_health_export.py`: 두 MAX9296 인스턴스의 raw snapshot을
+  `/run/pim-camera/max9296.json` camera-health v1 문서로 원자적으로 변환
+- DES/GMSL/SER/ISP/Sensor를 분리한 진단 상태와
+  `configured_channel_mask`, `physical_present_mask`,
+  `stream_domain_active_mask` 세 종류의 mask
+- dual-wide 공유 stream domain, 독립적인 MAX9295/AP1302 remote probe branch,
+  SER 귀속 불가 및 Sensor/ISP stall 모호성에 대한 단위 테스트
+
+### Changed
+- sysfs attribute 생성 실패 시 이미 생성한 attribute를 역순으로 회수
+- 드라이버 버전 2.3 → 2.4
+
+### Safety
+- health read는 reset, power toggle, register write, module reload를 수행하지 않음
+- health용 I2C read는 retry/log 없이 한 번만 시도하며 control mutex가 사용 중이면
+  대기하지 않고 `busy:true`를 반환
+- AR0234 deep DMA probe는 수백 ms 지연 가능성 때문에 이 shallow ABI에서 제외
+
 ## [2.1] - 2026-04-23
 
 ### Added

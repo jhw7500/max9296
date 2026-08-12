@@ -22,3 +22,8 @@ tmp/
 
 # Compound Engineering (local agent tooling — not committed to driver repo)
 .compound-engineering/
+
+# Python health exporter/test artifacts
+__pycache__/
+*.py[cod]
+.ruff_cache/
