@@ -505,6 +505,14 @@ struct max9296_dev {
   } shared;
 };
 
+static int max9296_normalize_fingerprint_locked(
+    const struct max9296_dev *sensor,
+    struct max9296_hw_fingerprint *fingerprint);
+static bool max9296_fingerprint_equal(
+    const struct max9296_hw_fingerprint *left,
+    const struct max9296_hw_fingerprint *right);
+static void max9296_mark_prepare_stale_locked(struct max9296_dev *sensor);
+
 static inline struct max9296_dev *to_max9296_dev(struct v4l2_subdev *sd) {
   return container_of(sd, struct max9296_dev, sd);
 }
@@ -1805,7 +1813,8 @@ static int max9296_s_power(struct v4l2_subdev *sd, int on) {
         sensor->prepare_lease_held = false;
         cancel_delayed_work(&sensor->prepare_lease_timeout);
         sensor->prepare_lease_generation = 0;
-        sensor->prepare_state = MAX9296_PREP_CONSUMED;
+        if (sensor->prepare_state != MAX9296_PREP_STALE)
+          sensor->prepare_state = MAX9296_PREP_CONSUMED;
       } else {
         ret = max9296_set_power(sensor, true);
         if (ret)
@@ -1911,9 +1920,11 @@ static int max9296_set_fmt(struct v4l2_subdev *sd,
                            struct v4l2_subdev_pad_config *cfg,
                            struct v4l2_subdev_format *format) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
+  struct max9296_hw_fingerprint old_fingerprint, new_fingerprint;
   const struct max9296_mode_info *new_mode;
   struct v4l2_mbus_framefmt *mbus_fmt = &format->format;
   struct v4l2_mbus_framefmt *fmt;
+  bool old_valid;
   int ret;
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
@@ -1940,25 +1951,29 @@ static int max9296_set_fmt(struct v4l2_subdev *sd,
     goto out;
   }
 
-  if (format->which == V4L2_SUBDEV_FORMAT_TRY)
+  if (format->which == V4L2_SUBDEV_FORMAT_TRY) {
     fmt = v4l2_subdev_get_try_format(sd, cfg, 0);
-  else
-    fmt = &sensor->fmt;
-
-  *fmt = *mbus_fmt;
-
-  if (new_mode != sensor->current_mode) {
-    sensor->current_mode = new_mode;
-    sensor->pending_mode_change = true;
+    *fmt = *mbus_fmt;
+    goto out;
   }
+
+  old_valid = !max9296_normalize_fingerprint_locked(sensor,
+                                                     &old_fingerprint);
+  if (new_mode != sensor->current_mode)
+    sensor->pending_mode_change = true;
   if (mbus_fmt->code != sensor->fmt.code)
     sensor->pending_fmt_change = true;
 
+  sensor->current_mode = new_mode;
+  sensor->fmt = *mbus_fmt;
+
+  if (old_valid &&
+      !max9296_normalize_fingerprint_locked(sensor, &new_fingerprint) &&
+      !max9296_fingerprint_equal(&old_fingerprint, &new_fingerprint))
+    max9296_mark_prepare_stale_locked(sensor);
+
   __v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
                            max9296_calc_pixel_rate(sensor));
-
-  if (sensor->pending_mode_change || sensor->pending_fmt_change)
-    sensor->fmt = *mbus_fmt;
 out:
 
   mutex_unlock(&sensor->lock);
@@ -3151,13 +3166,11 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
     goto out;
   }
 
-  sensor->frame_interval.numerator = 1;
-  sensor->frame_interval.denominator = fps;
-  sensor->fps = fps;
-
-  if (sensor->shared.sensor) {
-    sensor->shared.sensor->frame_interval = sensor->frame_interval;
-    sensor->shared.sensor->fps = fps;
+  if (sensor->fps != fps) {
+    sensor->frame_interval.numerator = 1;
+    sensor->frame_interval.denominator = fps;
+    sensor->fps = fps;
+    max9296_mark_prepare_stale_locked(sensor);
   }
 
   //if (debug)
@@ -3409,18 +3422,33 @@ static int max9296_normalize_fingerprint_locked(
   return 0;
 }
 
+static bool max9296_fingerprint_equal(
+    const struct max9296_hw_fingerprint *left,
+    const struct max9296_hw_fingerprint *right) {
+  return left->mode == right->mode && left->width == right->width &&
+         left->height == right->height && left->code == right->code &&
+         left->fps == right->fps && left->enable == right->enable;
+}
+
+/* Runtime negotiation is allowed after prepare, but it must not silently keep
+ * READY/CONSUMED attached to a different hardware tuple.  Hardware validity is
+ * intentionally retained so STREAMON reports -ESTALE instead of attempting an
+ * unsafe same-power-lifetime dual/single table switch. */
+static void max9296_mark_prepare_stale_locked(struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+
+  if (sensor->prepare_state == MAX9296_PREP_READY ||
+      sensor->prepare_state == MAX9296_PREP_CONSUMED)
+    sensor->prepare_state = MAX9296_PREP_STALE;
+}
+
 static bool max9296_prepare_matches_locked(
     const struct max9296_dev *sensor,
     const struct max9296_hw_fingerprint *fingerprint) {
   const struct max9296_hw_fingerprint *initialized =
       &sensor->initialized_fingerprint;
 
-  return initialized->mode == fingerprint->mode &&
-         initialized->width == fingerprint->width &&
-         initialized->height == fingerprint->height &&
-         initialized->code == fingerprint->code &&
-         initialized->fps == fingerprint->fps &&
-         initialized->enable == fingerprint->enable;
+  return max9296_fingerprint_equal(initialized, fingerprint);
 }
 
 static int max9296_set_mode(
@@ -3541,14 +3569,44 @@ static int max9296_prepare_hardware_locked(
   return 0;
 }
 
+static void max9296_apply_prepare_fingerprint_locked(
+    struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint) {
+  const struct max9296_mode_info *mode = fingerprint->mode;
+
+  lockdep_assert_held(&sensor->lock);
+
+  /* current_mode is the public mode selection.  The normalized fingerprint
+   * still retains the right-hand table pointer as the exact hardware identity. */
+  if (mode == &max9296_mode_data_HD_R)
+    mode = &max9296_mode_data[MAX9296_MODE_1280x720];
+  else if (mode == &max9296_mode_data_FHD_R)
+    mode = &max9296_mode_data[MAX9296_MODE_1920x1080];
+
+  sensor->current_mode = mode;
+  sensor->fmt.width = fingerprint->width;
+  sensor->fmt.height = fingerprint->height;
+  sensor->fmt.code = fingerprint->code;
+  sensor->fps = fingerprint->fps;
+  sensor->frame_interval.numerator = 1;
+  sensor->frame_interval.denominator = fingerprint->fps;
+  sensor->enable = fingerprint->enable;
+  sensor->pending_mode_change = false;
+  sensor->pending_fmt_change = false;
+
+  __v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
+                           max9296_calc_pixel_rate(sensor));
+}
+
 /*
  * Start one driver-owned prepare while sensor->lock is held.  The sysfs ABI is
  * deliberately added by Task 4; keeping ownership here makes that caller a
  * parser/admission layer rather than a second power-accounting implementation.
  */
-static int __maybe_unused max9296_prepare_request_locked(
+static int max9296_prepare_request_locked(
     struct max9296_dev *sensor,
     const struct max9296_hw_fingerprint *fingerprint, u64 generation) {
+  u64 epoch;
   int ret;
 
   sensor->prepare_state = MAX9296_PREP_PREPARING;
@@ -3564,9 +3622,18 @@ static int __maybe_unused max9296_prepare_request_locked(
   }
   sensor->prepare_lease_held = true;
 
-  ret = max9296_prepare_hardware_locked(sensor, fingerprint);
-  if (ret)
-    goto release_failed_lease;
+  /* An expired request can leave valid hardware behind while a peer keeps the
+   * board powered.  Acquiring this instance's user does not reset in that
+   * case, so reuse the exact current fingerprint instead of downloading the
+   * firmware again.  A first-user acquisition advances the epoch and falls
+   * through to the normal synchronous initialization. */
+  epoch = READ_ONCE(max9296_hw_epoch);
+  if (!sensor->hardware_valid || sensor->initialized_epoch != epoch ||
+      !max9296_prepare_matches_locked(sensor, fingerprint)) {
+    ret = max9296_prepare_hardware_locked(sensor, fingerprint);
+    if (ret)
+      goto release_failed_lease;
+  }
 
   sensor->prepare_state = MAX9296_PREP_READY;
   sensor->prepare_lease_generation = generation;
@@ -3593,6 +3660,43 @@ static bool max9296_prepare_lease_can_arm_locked(
          sensor->prepare_lease_generation == generation;
 }
 
+static int max9296_queue_prepare_lease_locked(struct max9296_dev *sensor,
+                                               u64 generation) {
+  if (!max9296_prepare_lease_can_arm_locked(sensor, generation))
+    return -ESTALE;
+  if (WARN_ON(!queue_delayed_work(system_wq,
+                                  &sensor->prepare_lease_timeout, 60 * HZ)))
+    return -EBUSY;
+  return 0;
+}
+
+static int max9296_prepare_existing_lease_locked(
+    struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint, u64 generation) {
+  int ret;
+
+  sensor->prepare_state = MAX9296_PREP_PREPARING;
+  sensor->prepare_generation = generation;
+  sensor->prepare_lease_generation = 0;
+  sensor->prepare_fingerprint = *fingerprint;
+  sensor->prepare_errno = 0;
+
+  ret = max9296_prepare_hardware_locked(sensor, fingerprint);
+  if (ret) {
+    sensor->prepare_releasing = true;
+    sensor->prepare_lease_held = false;
+    max9296_set_power(sensor, false);
+    sensor->prepare_releasing = false;
+    sensor->prepare_errno = ret;
+    sensor->prepare_state = MAX9296_PREP_FAILED;
+    return ret;
+  }
+
+  sensor->prepare_state = MAX9296_PREP_READY;
+  sensor->prepare_lease_generation = generation;
+  return 0;
+}
+
 /*
  * A single delayed_work object cannot carry an immutable per-arm generation:
  * changing fields before an already-running callback has drained lets that old
@@ -3600,12 +3704,15 @@ static bool max9296_prepare_lease_can_arm_locked(
  * synchronously drain the one work item without sensor->lock, then take the
  * sensor lock, revalidate the current ownership, and queue a fresh invocation.
  */
-static int __maybe_unused max9296_prepare_request(
+static int max9296_prepare_request(
     struct max9296_dev *sensor,
     const struct max9296_hw_fingerprint *fingerprint, u64 generation) {
+  u64 epoch;
+  bool hardware_current;
   int ret;
 
-  mutex_lock(&sensor->prepare_request_lock);
+  if (!mutex_trylock(&sensor->prepare_request_lock))
+    return READ_ONCE(sensor->dying) ? -ENODEV : -EBUSY;
   cancel_delayed_work_sync(&sensor->prepare_lease_timeout);
 
   mutex_lock(&sensor->lock);
@@ -3613,20 +3720,61 @@ static int __maybe_unused max9296_prepare_request(
     ret = -ENODEV;
     goto unlock;
   }
+  if (!READ_ONCE(sensor->shared.probe_ready)) {
+    ret = -EAGAIN;
+    goto unlock;
+  }
   if (sensor->prepare_state == MAX9296_PREP_PREPARING ||
       sensor->prepare_releasing) {
     ret = -EBUSY;
     goto unlock;
   }
-  if (sensor->prepare_lease_held || sensor->power_count > 0 ||
-      sensor->streaming) {
-    /* This is the fresh-request path.  Preserve the old lease's expiry if a
-     * caller should have routed an idempotent renewal to rearm instead. */
-    if (max9296_prepare_lease_can_arm_locked(
-            sensor, sensor->prepare_generation))
-      WARN_ON(!queue_delayed_work(system_wq,
-                                  &sensor->prepare_lease_timeout, 60 * HZ));
+  if (sensor->power_count > 0 || sensor->streaming) {
     ret = -EBUSY;
+    goto unlock;
+  }
+
+  /* One orchestration generation cannot be rebound to another command. */
+  if (sensor->prepare_generation == generation && generation != 0 &&
+      !max9296_fingerprint_equal(&sensor->prepare_fingerprint, fingerprint)) {
+    ret = -ESTALE;
+    goto preserve_lease;
+  }
+
+  epoch = READ_ONCE(max9296_hw_epoch);
+  hardware_current = sensor->hardware_valid &&
+                     sensor->initialized_epoch == epoch;
+  if (hardware_current &&
+      !max9296_prepare_matches_locked(sensor, fingerprint)) {
+    /* Changing exact dual/left/right programming within one hardware epoch is
+     * unsafe because serializer address routing may already have changed. */
+    ret = -ESTALE;
+    goto preserve_lease;
+  }
+
+  max9296_apply_prepare_fingerprint_locked(sensor, fingerprint);
+
+  if (sensor->prepare_lease_held) {
+    if (hardware_current) {
+      /* Same generation+tuple is idempotent.  A new generation with the same
+       * hardware tuple renews only request identity and timeout. */
+      sensor->prepare_generation = generation;
+      sensor->prepare_lease_generation = generation;
+      sensor->prepare_fingerprint = *fingerprint;
+      sensor->prepare_errno = 0;
+      sensor->prepare_state = MAX9296_PREP_READY;
+      ret = max9296_queue_prepare_lease_locked(sensor, generation);
+    } else {
+      /* The lease still owns power but its fingerprint was invalidated by a
+       * real external epoch transition.  Reuse the ownership, not the stale
+       * initialization result. */
+      ret = max9296_prepare_existing_lease_locked(sensor, fingerprint,
+                                                  generation);
+      if (!ret)
+        ret = max9296_queue_prepare_lease_locked(sensor, generation);
+    }
+    if (ret)
+      goto release_unarmed_lease;
     goto unlock;
   }
 
@@ -3645,6 +3793,31 @@ static int __maybe_unused max9296_prepare_request(
     max9296_set_power(sensor, false);
     sensor->prepare_releasing = false;
     ret = READ_ONCE(sensor->dying) ? -ENODEV : -EBUSY;
+  }
+  goto unlock;
+
+preserve_lease:
+  sensor->prepare_errno = ret;
+  if (sensor->prepare_lease_held) {
+    int arm_ret = max9296_queue_prepare_lease_locked(
+        sensor, sensor->prepare_generation);
+
+    if (arm_ret) {
+      ret = arm_ret;
+      goto release_unarmed_lease;
+    }
+  }
+  goto unlock;
+
+release_unarmed_lease:
+  if (sensor->prepare_lease_held) {
+    sensor->prepare_lease_held = false;
+    sensor->prepare_lease_generation = 0;
+    sensor->prepare_errno = ret;
+    sensor->prepare_state = MAX9296_PREP_FAILED;
+    sensor->prepare_releasing = true;
+    max9296_set_power(sensor, false);
+    sensor->prepare_releasing = false;
   }
 
 unlock:
@@ -3682,6 +3855,48 @@ static int __maybe_unused max9296_rearm_prepare_lease(
   if (WARN_ON(!queue_delayed_work(system_wq, &sensor->prepare_lease_timeout,
                                   60 * HZ)))
     ret = -EBUSY;
+
+unlock:
+  mutex_unlock(&sensor->lock);
+  mutex_unlock(&sensor->prepare_request_lock);
+  return ret;
+}
+
+static int max9296_cancel_prepare(struct max9296_dev *sensor) {
+  int ret = 0;
+
+  if (!mutex_trylock(&sensor->prepare_request_lock))
+    return READ_ONCE(sensor->dying) ? -ENODEV : -EBUSY;
+  cancel_delayed_work_sync(&sensor->prepare_lease_timeout);
+
+  mutex_lock(&sensor->lock);
+  if (READ_ONCE(sensor->dying)) {
+    ret = -ENODEV;
+    goto unlock;
+  }
+  if (!READ_ONCE(sensor->shared.probe_ready)) {
+    ret = -EAGAIN;
+    goto unlock;
+  }
+  if (sensor->prepare_state == MAX9296_PREP_PREPARING ||
+      sensor->prepare_releasing) {
+    ret = -EBUSY;
+    goto unlock;
+  }
+  if (sensor->streaming || sensor->power_count > 0) {
+    ret = -EBUSY;
+    goto unlock;
+  }
+
+  if (sensor->prepare_lease_held) {
+    sensor->prepare_releasing = true;
+    sensor->prepare_lease_held = false;
+    sensor->prepare_lease_generation = 0;
+    ret = max9296_set_power(sensor, false);
+    sensor->prepare_releasing = false;
+  }
+  sensor->prepare_errno = ret;
+  sensor->prepare_state = MAX9296_PREP_IDLE;
 
 unlock:
   mutex_unlock(&sensor->lock);
@@ -4279,6 +4494,244 @@ static void max9296_release_probe_shared(struct max9296_dev *sensor) {
 }
 
 //-------------------------------------------------------------------------
+struct max9296_prepare_command {
+  bool cancel;
+  u64 generation;
+  u32 width;
+  u32 height;
+  u32 fps;
+  u32 enable;
+  enum max9296_mode_id mode_id;
+};
+
+static int max9296_parse_prepare_command(
+    const char *buf, size_t count, struct max9296_prepare_command *command) {
+  char *input, *cursor, *token;
+  char *fields[7];
+  u64 values[5];
+  unsigned int nr_fields = 0, i;
+  int ret = -EINVAL;
+
+  if (!count || count > 127 || memchr(buf, '\0', count))
+    return -EINVAL;
+
+  input = kmemdup_nul(buf, count, GFP_KERNEL);
+  if (!input)
+    return -ENOMEM;
+  cursor = strim(input);
+
+  while ((token = strsep(&cursor, " \t")) != NULL) {
+    if (!*token)
+      continue;
+    if (nr_fields == ARRAY_SIZE(fields))
+      goto out;
+    fields[nr_fields++] = token;
+  }
+
+  memset(command, 0, sizeof(*command));
+  if (nr_fields == 1 && !strcmp(fields[0], "0")) {
+    command->cancel = true;
+    ret = 0;
+    goto out;
+  }
+  if (nr_fields != 6 || strcmp(fields[0], "1"))
+    goto out;
+
+  for (i = 1; i < nr_fields; i++) {
+    const char *digit;
+
+    if (!fields[i][0])
+      goto out;
+    for (digit = fields[i]; *digit; digit++)
+      if (*digit < '0' || *digit > '9')
+        goto out;
+    ret = kstrtoull(fields[i], 10, &values[i - 1]);
+    if (ret)
+      goto out;
+  }
+
+  command->generation = values[0];
+  if (command->generation == 0 || values[1] > U32_MAX ||
+      values[2] > U32_MAX || values[3] > U32_MAX || values[4] > U32_MAX) {
+    ret = -EINVAL;
+    goto out;
+  }
+  command->width = values[1];
+  command->height = values[2];
+  command->fps = values[3];
+  command->enable = values[4];
+
+  if (command->fps < 1 || command->fps > 120) {
+    ret = -EINVAL;
+    goto out;
+  }
+
+  if (command->width == 2560 && command->height == 720) {
+    command->mode_id = MAX9296_MODE_2560x720;
+    if (command->enable != 3)
+      goto invalid;
+  } else if (command->width == 3840 && command->height == 1080) {
+    command->mode_id = MAX9296_MODE_3840x1080;
+    if (command->enable != 3)
+      goto invalid;
+  } else if (command->width == 1280 && command->height == 720) {
+    command->mode_id = MAX9296_MODE_1280x720;
+    if (command->enable != 1 && command->enable != 2)
+      goto invalid;
+  } else if (command->width == 1920 && command->height == 1080) {
+    command->mode_id = MAX9296_MODE_1920x1080;
+    if (command->enable != 1 && command->enable != 2)
+      goto invalid;
+  } else {
+    goto invalid;
+  }
+
+  ret = 0;
+  goto out;
+
+invalid:
+  ret = -EINVAL;
+out:
+  kfree(input);
+  return ret;
+}
+
+static const char *max9296_prepare_state_name(
+    enum max9296_prepare_request_state state) {
+  switch (state) {
+  case MAX9296_PREP_IDLE:
+    return "IDLE";
+  case MAX9296_PREP_PREPARING:
+    return "PREPARING";
+  case MAX9296_PREP_READY:
+    return "READY";
+  case MAX9296_PREP_STALE:
+    return "STALE";
+  case MAX9296_PREP_CONSUMED:
+    return "CONSUMED";
+  case MAX9296_PREP_FAILED:
+    return "FAILED";
+  case MAX9296_PREP_EXPIRED:
+    return "EXPIRED";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+static void max9296_prepare_mode_names(
+    const struct max9296_hw_fingerprint *fingerprint, const char **mode,
+    const char **table) {
+  if (fingerprint->mode == &max9296_mode_data[MAX9296_MODE_2560x720] ||
+      fingerprint->mode == &max9296_mode_data[MAX9296_MODE_3840x1080]) {
+    *mode = "dual-wide";
+    *table = "dual";
+  } else if (fingerprint->mode == &max9296_mode_data_HD_R ||
+             fingerprint->mode == &max9296_mode_data_FHD_R) {
+    *mode = "single";
+    *table = "right";
+  } else if (fingerprint->mode ==
+                 &max9296_mode_data[MAX9296_MODE_1280x720] ||
+             fingerprint->mode ==
+                 &max9296_mode_data[MAX9296_MODE_1920x1080]) {
+    *mode = "single";
+    *table = "left";
+  } else {
+    *mode = "none";
+    *table = "none";
+  }
+}
+
+static ssize_t sysfs_prepare_show(struct device *dev,
+                                  struct device_attribute *attr, char *buf) {
+  struct v4l2_subdev *sd = i2c_get_clientdata(to_i2c_client(dev));
+  struct max9296_dev *sensor = to_max9296_dev(sd);
+  struct max9296_hw_fingerprint prepared, runtime;
+  enum max9296_prepare_request_state state;
+  const char *state_name, *mode, *table;
+  u64 generation, epoch;
+  unsigned int lease, match = 0;
+  int last_errno;
+
+  if (READ_ONCE(sensor->dying))
+    return -ENODEV;
+  if (!READ_ONCE(sensor->shared.probe_ready))
+    return -EAGAIN;
+
+  mutex_lock(&sensor->lock);
+  mutex_lock(&max9296_power_lock);
+  if (sensor->dying) {
+    mutex_unlock(&max9296_power_lock);
+    mutex_unlock(&sensor->lock);
+    return -ENODEV;
+  }
+  if (!READ_ONCE(sensor->shared.probe_ready)) {
+    mutex_unlock(&max9296_power_lock);
+    mutex_unlock(&sensor->lock);
+    return -EAGAIN;
+  }
+
+  state = sensor->prepare_state;
+  prepared = sensor->prepare_fingerprint;
+  generation = sensor->prepare_generation;
+  epoch = max9296_hw_epoch;
+  lease = sensor->prepare_lease_held;
+  last_errno = sensor->prepare_errno;
+  if (sensor->hardware_valid && sensor->initialized_epoch == epoch &&
+      !max9296_normalize_fingerprint_locked(sensor, &runtime) &&
+      max9296_fingerprint_equal(&runtime, &prepared) &&
+      max9296_prepare_matches_locked(sensor, &runtime))
+    match = 1;
+  mutex_unlock(&max9296_power_lock);
+  mutex_unlock(&sensor->lock);
+
+  state_name = max9296_prepare_state_name(state);
+  max9296_prepare_mode_names(&prepared, &mode, &table);
+  return scnprintf(buf, PAGE_SIZE, "state=%s generation=%llu epoch=%llu mode=%s table=%s width=%u height=%u fps=%u code=0x%x enable=%u errno=%d lease=%u match=%u\n",
+                   state_name, (unsigned long long)generation,
+                   (unsigned long long)epoch, mode, table, prepared.width,
+                   prepared.height, prepared.fps, prepared.code,
+                   prepared.enable, last_errno, lease, match);
+}
+
+static ssize_t sysfs_prepare_store(struct device *dev,
+                                   struct device_attribute *attr,
+                                   const char *buf, size_t count) {
+  struct v4l2_subdev *sd = i2c_get_clientdata(to_i2c_client(dev));
+  struct max9296_dev *sensor = to_max9296_dev(sd);
+  struct max9296_prepare_command command;
+  struct max9296_hw_fingerprint fingerprint;
+  int ret;
+
+  if (READ_ONCE(sensor->dying))
+    return -ENODEV;
+  if (!READ_ONCE(sensor->shared.probe_ready))
+    return -EAGAIN;
+
+  ret = max9296_parse_prepare_command(buf, count, &command);
+  if (ret)
+    return ret;
+  if (command.cancel) {
+    ret = max9296_cancel_prepare(sensor);
+    return ret ? ret : count;
+  }
+
+  if (command.mode_id == MAX9296_MODE_1280x720 && command.enable == 2)
+    fingerprint.mode = &max9296_mode_data_HD_R;
+  else if (command.mode_id == MAX9296_MODE_1920x1080 && command.enable == 2)
+    fingerprint.mode = &max9296_mode_data_FHD_R;
+  else
+    fingerprint.mode = &max9296_mode_data[command.mode_id];
+  fingerprint.width = command.width;
+  fingerprint.height = command.height;
+  fingerprint.code = MEDIA_BUS_FMT_UYVY8_2X8;
+  fingerprint.fps = command.fps;
+  fingerprint.enable = command.enable;
+
+  ret = max9296_prepare_request(sensor, &fingerprint, command.generation);
+  return ret ? ret : count;
+}
+static DEVICE_ATTR(prepare, 0664, sysfs_prepare_show, sysfs_prepare_store);
+//-------------------------------------------------------------------------
 static ssize_t sysfs_rotate_show(struct device *dev,
                                  struct device_attribute *attr, char *buf) {
   struct v4l2_subdev *sd = i2c_get_clientdata(to_i2c_client(dev));
@@ -4316,11 +4769,16 @@ static ssize_t sysfs_enable_show(struct device *dev,
                                  struct device_attribute *attr, char *buf) {
   struct v4l2_subdev *sd = i2c_get_clientdata(to_i2c_client(dev));
   struct max9296_dev *sensor = to_max9296_dev(sd);
+  unsigned int enable;
+
+  mutex_lock(&sensor->lock);
+  enable = sensor->enable;
+  mutex_unlock(&sensor->lock);
 
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] sensor enable : 0x%x", KEYWORD,
-           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, sensor->enable);
-  return snprintf(buf, PAGE_SIZE, "%u\n", sensor->enable);
+           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, enable);
+  return snprintf(buf, PAGE_SIZE, "%u\n", enable);
 }
 
 static ssize_t sysfs_enable_store(struct device *dev,
@@ -4334,12 +4792,20 @@ static ssize_t sysfs_enable_store(struct device *dev,
   ret = kstrtoul(buf, 10, &val);
   if (ret)
     return ret;
+  if (val > U32_MAX)
+    return -EINVAL;
 
-  sensor->enable = val;
+  mutex_lock(&sensor->lock);
+  if (sensor->enable != val) {
+    sensor->enable = val;
+    max9296_mark_prepare_stale_locked(sensor);
+  }
+  mutex_unlock(&sensor->lock);
 
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] sensor enable : 0x%x", KEYWORD,
-           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, sensor->enable);
+           sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           (unsigned int)val);
 
   return count;
 }
@@ -4980,6 +5446,12 @@ static int max9296_probe(struct i2c_client *client) {
     ret = (-EINVAL);
     goto remove_link_status_attr;
   }
+  if (device_create_file(&client->dev, &dev_attr_prepare) != 0) {
+    printk(KERN_CRIT "[%s:%d][%s:%d] sysfs prepare entry failed", KEYWORD,
+           client->adapter->nr, _FILE_, __LINE__);
+    ret = -EINVAL;
+    goto remove_health_raw_attr;
+  }
 
   /* Keep async registration as the final fallible step.  Once registered,
    * external V4L2 operations may start custom firmware work that the ordinary
@@ -4989,7 +5461,7 @@ static int max9296_probe(struct i2c_client *client) {
     printk(KERN_CRIT
            "[%s:%d][%s:%d] v4l2_async_register_subdev_sensor_common error(%d)",
            KEYWORD, client->adapter->nr, _FILE_, __LINE__, ret);
-    goto remove_health_raw_attr;
+    goto remove_prepare_attr;
   }
 
   /* Final non-failing commit: sibling resolvers may publish us only now. */
@@ -5002,6 +5474,8 @@ static int max9296_probe(struct i2c_client *client) {
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
 
+remove_prepare_attr:
+  device_remove_file(&client->dev, &dev_attr_prepare);
 remove_health_raw_attr:
   device_remove_file(&client->dev, &dev_attr_health_raw);
 remove_link_status_attr:
@@ -5040,9 +5514,7 @@ static int max9296_remove(struct i2c_client *client) {
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
-  /* Phase 0: withdraw every admission point before waiting on admitted work.
-   * Task 4 inserts prepare-attribute removal between these commits and V4L2
-   * unregistration. */
+  /* Phase 0: withdraw every admission point before waiting on admitted work. */
   /* The board lock is the final FSYNC/output authority too: removal becomes
    * visible atomically before any later pulse or non-zero output write. */
   mutex_lock(&max9296_power_lock);
@@ -5053,6 +5525,9 @@ static int max9296_remove(struct i2c_client *client) {
   WRITE_ONCE(sensor->shared.probe_ready, false);
   mutex_unlock(&max9296_shared_lock);
 
+  /* Removing the file waits for already admitted blocking stores to return.
+   * Admission is closed above, so no new prepare request can enter. */
+  device_remove_file(&client->dev, &dev_attr_prepare);
   v4l2_async_unregister_subdev(&sensor->sd);
 
   /* Exclude fresh prepare/renewal and wait for any already admitted request.

@@ -18,6 +18,32 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "max9296.c"
 
 
+def parse_prepare_command(text: str) -> tuple[int, ...]:
+    """Executable model of the strict, whitespace-delimited v1 grammar."""
+    fields = text.strip(" \t\n").split()
+    if fields == ["0"]:
+        return (0,)
+    if len(fields) != 6 or fields[0] != "1":
+        raise ValueError("syntax")
+    if any(not field.isascii() or not field.isdecimal() for field in fields[1:]):
+        raise ValueError("unsigned decimal fields only")
+
+    generation, width, height, fps, enable = map(int, fields[1:])
+    if generation == 0 or generation > (1 << 64) - 1:
+        raise ValueError("generation")
+    if fps < 1 or fps > 120:
+        raise ValueError("fps")
+    if (width, height) in ((2560, 720), (3840, 1080)):
+        if enable != 3:
+            raise ValueError("dual mask")
+    elif (width, height) in ((1280, 720), (1920, 1080)):
+        if enable not in (1, 2):
+            raise ValueError("single mask")
+    else:
+        raise ValueError("tuple")
+    return (1, generation, width, height, fps, enable)
+
+
 @dataclass
 class Board:
     users: int = 0
@@ -60,6 +86,10 @@ class Camera:
     releasing: bool = False
     timeout_pending: bool = False
     timeout_running: bool = False
+    firmware_loads: int = 0
+    hardware_fingerprint: tuple[int, int, int, int] | None = None
+    request_fingerprint: tuple[int, int, int, int] | None = None
+    runtime_fingerprint: tuple[int, int, int, int] | None = None
 
     def drain_timeout_sync(self) -> None:
         """Mirror cancel_delayed_work_sync before request fields are mutated."""
@@ -92,23 +122,79 @@ class Camera:
             self.release_lease("expired")
             self.releasing = False
 
-    def prepare(self, succeeds: bool = True, generation: int = 1) -> None:
+    def prepare(
+        self,
+        succeeds: bool = True,
+        generation: int = 1,
+        fingerprint: tuple[int, int, int, int] = (2560, 720, 30, 3),
+    ) -> None:
         self.drain_timeout_sync()
         assert not self.lease and self.power_count == 0
         self.board.get()
         self.lease = True
         self.generation = generation
         self.lease_generation = generation
+        self.request_fingerprint = fingerprint
+        self.runtime_fingerprint = fingerprint
         self.state = "preparing"
         if succeeds:
+            self.firmware_loads += 1
             self.state = "ready"
             self.initialized_epoch = self.board.epoch
             self.hardware_valid = True
+            self.hardware_fingerprint = fingerprint
             self.arm_timeout()
         else:
             self.state = "failed"
             self.lease = False
             self.board.put()
+
+    def request_prepare(
+        self, generation: int, fingerprint: tuple[int, int, int, int]
+    ) -> str:
+        """Model renewal, expired-current reuse, and stale rejection."""
+        self.drain_timeout_sync()
+        if self.dying:
+            return "enodev"
+        if self.streaming or self.power_count or self.releasing:
+            return "ebusy"
+        if (
+            self.generation == generation
+            and self.request_fingerprint is not None
+            and self.request_fingerprint != fingerprint
+        ):
+            if self.lease:
+                self.arm_timeout()
+            return "estale"
+        if self.hardware_current() and self.hardware_fingerprint != fingerprint:
+            if self.lease:
+                self.arm_timeout()
+            return "estale"
+
+        if not self.lease:
+            self.board.get()
+            self.lease = True
+        self.generation = generation
+        self.lease_generation = generation
+        self.request_fingerprint = fingerprint
+        self.runtime_fingerprint = fingerprint
+        if not self.hardware_current():
+            self.firmware_loads += 1
+            self.hardware_valid = True
+            self.initialized_epoch = self.board.epoch
+            self.hardware_fingerprint = fingerprint
+        self.state = "ready"
+        self.arm_timeout()
+        return "ready"
+
+    def rewrite_runtime(
+        self, fingerprint: tuple[int, int, int, int], active: bool = True
+    ) -> None:
+        if not active or self.runtime_fingerprint == fingerprint:
+            return
+        self.runtime_fingerprint = fingerprint
+        if self.state in ("ready", "consumed"):
+            self.state = "stale"
 
     def rearm_timeout(self, generation: int | None = None) -> bool:
         """A running old callback drains before mutable request revalidation."""
@@ -132,7 +218,8 @@ class Camera:
             if self.lease:
                 self.timeout_pending = False
                 self.lease = False
-                self.state = "consumed"
+                if self.state != "stale":
+                    self.state = "consumed"
             else:
                 self.board.get()
         self.power_count += 1
@@ -218,6 +305,48 @@ class Camera:
 
 
 def check_model(failures: list[str]) -> None:
+    valid_commands = (
+        "0\n",
+        "1 1 2560 720 30 3\n",
+        "1 2 3840 1080 120 3",
+        "1 3 1280 720 1 1",
+        "1 4 1280 720 60 2",
+        "1 5 1920 1080 30 1",
+        "1 6 1920 1080 30 2",
+    )
+    for command in valid_commands:
+        try:
+            parse_prepare_command(command)
+        except ValueError:
+            failures.append(f"valid prepare command rejected by model: {command!r}")
+
+    invalid_commands = (
+        "",
+        "00",
+        "0 1",
+        "1",
+        "1 1 2560 720 30",
+        "1 1 2560 720 30 3 trailing",
+        "1 0 2560 720 30 3",
+        "1 -1 2560 720 30 3",
+        "1 +1 2560 720 30 3",
+        "1 18446744073709551616 2560 720 30 3",
+        "1 1 2560 720 0 3",
+        "1 1 2560 720 121 3",
+        "1 1 2560 720 30 1",
+        "1 1 1280 720 30 3",
+        "1 1 640 480 30 1",
+        "1 1 2560 720 30 3\n2",
+        "1 1 2560 720 30 3\x00ignored",
+    )
+    for command in invalid_commands:
+        try:
+            parse_prepare_command(command)
+        except ValueError:
+            pass
+        else:
+            failures.append(f"invalid prepare command accepted by model: {command!r}")
+
     board = Board()
     cam = Camera(board)
     cam.prepare()
@@ -329,6 +458,58 @@ def check_model(failures: list[str]) -> None:
     if board.users != 0:
         failures.append("remove must reconcile a V4L2-owned power reference")
 
+    board = Board()
+    first = Camera(board)
+    tuple_a = (1280, 720, 30, 1)
+    tuple_b = (1280, 720, 30, 2)
+    if first.request_prepare(41, tuple_a) != "ready":
+        failures.append("fresh valid prepare request must reach READY")
+    first_loads = first.firmware_loads
+    if first.request_prepare(41, tuple_a) != "ready":
+        failures.append("same generation and tuple must be idempotent")
+    if first.request_prepare(42, tuple_a) != "ready":
+        failures.append("new generation with the same tuple must renew")
+    if first.firmware_loads != first_loads or board.users != 1:
+        failures.append("same-hardware renewal must not reload or duplicate power")
+    if first.request_prepare(42, tuple_b) != "estale":
+        failures.append("one generation must not be rebound to another tuple")
+    if first.request_prepare(43, tuple_b) != "estale":
+        failures.append("same-epoch hardware tuple switch must be ESTALE")
+    if not first.timeout_pending:
+        failures.append("rejected mismatch must preserve the old lease expiry")
+
+    board = Board()
+    keeper, expired = Camera(board), Camera(board)
+    keeper.prepare(generation=50)
+    expired.prepare(generation=51, fingerprint=tuple_a)
+    expired.begin_timeout()
+    expired.finish_timeout()
+    expired_loads = expired.firmware_loads
+    resets = board.resets
+    if expired.request_prepare(52, tuple_a) != "ready":
+        failures.append("expired current hardware must be reusable while a peer owns power")
+    if (
+        expired.firmware_loads != expired_loads
+        or board.resets != resets
+        or board.users != 2
+    ):
+        failures.append("expired-current reuse must acquire one user without reset/reload")
+
+    unchanged = Camera(Board())
+    unchanged.prepare(generation=60, fingerprint=tuple_a)
+    unchanged.rewrite_runtime(tuple_a)
+    if unchanged.state != "ready":
+        failures.append("identical ACTIVE rewrite must preserve prepare readiness")
+    unchanged.rewrite_runtime(tuple_b, active=False)
+    if unchanged.state != "ready":
+        failures.append("TRY format must not invalidate prepare readiness")
+    unchanged.rewrite_runtime(tuple_b)
+    if unchanged.state != "stale":
+        failures.append("changed ACTIVE hardware value must mark prepare stale")
+    unchanged.power_on()
+    if unchanged.state != "stale":
+        failures.append("lease transfer must not erase a detected stale tuple")
+
 
 def function(source: str, name: str) -> str:
     start = -1
@@ -379,7 +560,10 @@ def check_source(source: str, failures: list[str]) -> None:
             failures.append(f"missing prepare contract token: {token}")
 
     stream = function(code, "max9296_s_stream")
+    show = function(code, "sysfs_prepare_show")
     store = function(code, "sysfs_prepare_store")
+    parser = function(code, "max9296_parse_prepare_command")
+    cancel_prepare = function(code, "max9296_cancel_prepare")
     power = function(code, "max9296_s_power")
     timeout = function(code, "max9296_prepare_lease_timeout")
     remove = function(code, "max9296_remove")
@@ -392,6 +576,9 @@ def check_source(source: str, failures: list[str]) -> None:
     fsync_pulse = function(code, "max9296_fsync_pulse_current")
     output_gate = function(code, "max9296_enable_output_locked")
     output_disable = function(code, "max9296_disable_stream_mipi")
+    set_fmt = function(code, "max9296_set_fmt")
+    set_interval = function(code, "max9296_s_frame_interval")
+    enable_store = function(code, "sysfs_enable_store")
     probe = function(code, "max9296_probe")
 
     request_scaffolding = (
@@ -425,7 +612,12 @@ def check_source(source: str, failures: list[str]) -> None:
         failures.append("mutable delayed work must not be requeued with mod_delayed_work")
 
     for name, body in (("request", request), ("renewal", rearm)):
-        request_lock = body.find("mutex_lock(&sensor->prepare_request_lock)")
+        if name == "request":
+            request_lock = body.find(
+                "mutex_trylock(&sensor->prepare_request_lock)"
+            )
+        else:
+            request_lock = body.find("mutex_lock(&sensor->prepare_request_lock)")
         cancel = body.find("cancel_delayed_work_sync(&sensor->prepare_lease_timeout)")
         lock = body.find("mutex_lock(&sensor->lock)")
         if name == "request":
@@ -492,13 +684,34 @@ def check_source(source: str, failures: list[str]) -> None:
     for token in ("initialized_epoch", "max9296_hw_epoch", "-ESTALE"):
         if token not in stream:
             failures.append(f"s_stream decision table missing: {token}")
-    if "max9296_prepare_hardware_locked" not in store:
+    if "max9296_prepare_request" not in store:
         failures.append("sysfs prepare does not use the common prepare helper")
+
+    for token in (
+        "kmemdup_nul",
+        "memchr",
+        "strsep",
+        "kstrtoull",
+        "generation == 0",
+        "fps < 1",
+        "fps > 120",
+        "MAX9296_MODE_2560x720",
+        "MAX9296_MODE_1280x720",
+        "MAX9296_MODE_3840x1080",
+        "MAX9296_MODE_1920x1080",
+        "-EINVAL",
+    ):
+        if token not in parser:
+            failures.append(f"strict prepare parser/tuple validation missing: {token}")
+    if "MEDIA_BUS_FMT_UYVY8_2X8" not in store:
+        failures.append("prepare command must derive the sole UYVY media-bus code")
 
     if not re.search(
         r"prepare_lease_held\s*=\s*false.*power_count\+\+", power, re.S
     ):
         failures.append("s_power has no atomic lease-to-local-owner transfer")
+    if "prepare_state != MAX9296_PREP_STALE" not in power:
+        failures.append("s_power lease transfer erases a changed prepared tuple")
     if "WARN_ON(sensor->power_count <= 0)" not in power:
         failures.append("s_power does not reject local power-count underflow")
     if "sensor->dying" not in power or "-ENODEV" not in power:
@@ -548,14 +761,56 @@ def check_source(source: str, failures: list[str]) -> None:
         if attr_lifecycle not in source:
             failures.append(f"prepare sysfs lifecycle missing: {attr_lifecycle}")
 
-    for admission in (
-        "READ_ONCE(sensor->shared.probe_ready)",
-        "sensor->dying",
-        "-EAGAIN",
-        "-ENODEV",
+    for callback_name, callback in (("show", show), ("store", store)):
+        for admission in (
+            "READ_ONCE(sensor->shared.probe_ready)",
+            "sensor->dying",
+            "-EAGAIN",
+            "-ENODEV",
+        ):
+            if admission not in callback:
+                failures.append(
+                    f"prepare {callback_name} callback admission missing: {admission}"
+                )
+
+    cancel_request_lock = cancel_prepare.find(
+        "mutex_trylock(&sensor->prepare_request_lock)"
+    )
+    cancel_sync = cancel_prepare.find(
+        "cancel_delayed_work_sync(&sensor->prepare_lease_timeout)"
+    )
+    cancel_sensor_lock = cancel_prepare.find("mutex_lock(&sensor->lock)")
+    cancel_release = cancel_prepare.find("max9296_set_power(sensor, false)")
+    if not (
+        0 <= cancel_request_lock < cancel_sync < cancel_sensor_lock < cancel_release
     ):
-        if admission not in store:
-            failures.append(f"prepare callback admission missing: {admission}")
+        failures.append("prepare=0 must sync-drain outside sensor lock before release")
+    for token in (
+        "sensor->streaming",
+        "sensor->power_count > 0",
+        "prepare_lease_held",
+        "prepare_lease_held = false",
+        "-EBUSY",
+    ):
+        if token not in cancel_prepare:
+            failures.append(f"prepare=0 ownership guard missing: {token}")
+
+    for name, body in (
+        ("ACTIVE format", set_fmt),
+        ("ACTIVE fps", set_interval),
+        ("enable", enable_store),
+    ):
+        if "max9296_mark_prepare_stale_locked" not in body:
+            failures.append(f"{name} rewrite cannot mark a changed request stale")
+    if set_fmt.find("V4L2_SUBDEV_FORMAT_TRY") > set_fmt.find(
+        "max9296_mark_prepare_stale_locked"
+    ):
+        failures.append("TRY format can reach prepare invalidation")
+    enable_lock = enable_store.find("mutex_lock(&sensor->lock)")
+    enable_write = enable_store.find("sensor->enable =")
+    enable_unlock = enable_store.find("mutex_unlock(&sensor->lock)")
+    if not (0 <= enable_lock < enable_write < enable_unlock):
+        failures.append("enable sysfs mutation is not protected by sensor->lock")
 
     admission_start = stream.find("if (enable) {")
     request_trylock = stream.find("mutex_trylock(&sensor->prepare_request_lock)")
@@ -742,6 +997,30 @@ def check_source(source: str, failures: list[str]) -> None:
     ):
         failures.append("remove does not atomically withdraw, drain, then reconcile")
 
+    remove_prepare_attr = remove.find(
+        "device_remove_file(&client->dev, &dev_attr_prepare)"
+    )
+    if not (0 <= remove_dying < remove_prepare_attr < unregister < request_lock):
+        failures.append(
+            "normal remove must close admission, drain prepare sysfs, unregister, "
+            "then drain expiry"
+        )
+
+    create_prepare = probe.find(
+        "device_create_file(&client->dev, &dev_attr_prepare)"
+    )
+    register_subdev = probe.find("v4l2_async_register_subdev_sensor_common")
+    remove_prepare = probe.find(
+        "device_remove_file(&client->dev, &dev_attr_prepare)", register_subdev
+    )
+    remove_health = probe.find(
+        "device_remove_file(&client->dev, &dev_attr_health_raw)", register_subdev
+    )
+    if not (
+        0 <= create_prepare < register_subdev < remove_prepare < remove_health
+    ):
+        failures.append("prepare attribute probe setup/unwind is not reverse ordered")
+
     if "kthread_run(max9296_fw_init" in stream:
         failures.append("s_stream still creates the serial firmware waiter thread")
     if "sensor->state.firmware = MAX9296_STATE_DONE" in function(
@@ -751,7 +1030,12 @@ def check_source(source: str, failures: list[str]) -> None:
     if loadfw and loadfw.count("release_firmware(fw)") < 3:
         failures.append("firmware error exits do not all release the image")
 
-    if "state=%s generation=%llu epoch=%llu" not in source or "lease=%u match=%u" not in source:
+    status_fields = (
+        "state=%s generation=%llu epoch=%llu",
+        "mode=%s table=%s width=%u height=%u fps=%u code=0x%x enable=%u ",
+        "errno=%d lease=%u match=%u\\n",
+    )
+    if any(field not in source for field in status_fields):
         failures.append("prepare read ABI has no stable key=value status line")
 
 

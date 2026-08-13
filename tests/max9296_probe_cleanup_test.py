@@ -23,6 +23,7 @@ def main() -> int:
     register_call = probe.index("v4l2_async_register_subdev_sensor_common")
     first_worker = probe.index("if (sensor->fsync_gpio")
     health_attr = probe.index("device_create_file(&client->dev, &dev_attr_health_raw)")
+    prepare_attr = probe.index("device_create_file(&client->dev, &dev_attr_prepare)")
     failures: list[str] = []
 
     subdev_init = probe.index("v4l2_i2c_subdev_init(")
@@ -111,13 +112,13 @@ def main() -> int:
             "resolver must lookup, validate, and publish the peer in one critical section"
         )
 
-    if not (first_worker < health_attr < register_call):
+    if not (first_worker < health_attr < prepare_attr < register_call):
         failures.append("V4L2 registration must follow every fallible worker/sysfs step")
 
     registered_tail = probe[register_call:probe.index("return 0;", register_call)]
     if "device_create_file(" in registered_tail or "kthread_run(" in registered_tail:
         failures.append("fallible setup remains after V4L2 registration")
-    if "goto remove_health_raw_attr;" not in registered_tail:
+    if "goto remove_prepare_attr;" not in registered_tail:
         failures.append("registration failure does not unwind the completed sysfs setup")
     if "v4l2_async_unregister_subdev(&sensor->sd);" in probe:
         failures.append("probe error path unregisters a subdev that never registered")
@@ -134,6 +135,7 @@ def main() -> int:
             failures.append(f"{thread} failure does not propagate its errno")
 
     labels = (
+        "remove_prepare_attr:",
         "remove_health_raw_attr:",
         "remove_link_status_attr:",
         "remove_enable_attr:",
