@@ -59,6 +59,12 @@ wait "$pid0" || exit $?
 wait "$pid1" || exit $?
 ```
 
+The two MAX9296 instances share one physical FSYNC signal, so both commands
+must request the same FPS. The first request reserves that cadence for the
+current board-power epoch and propagates it to the idle peer; a conflicting
+request is rejected with `ESTALE` before its live/request tuple is published.
+Width, height, and enable remain per-CSI-domain values.
+
 After both writes succeed, read status before starting the application:
 
 ```sh

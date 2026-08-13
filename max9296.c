@@ -468,6 +468,11 @@ struct max9296_dev {
   u64 prepare_lease_generation;
   int prepare_errno;
 
+  /* One physical FSYNC net cannot serve different per-instance cadences.
+   * These reservations are compared only within their board-power epoch. */
+  u64 fsync_contract_epoch;
+  u32 fsync_contract_fps;
+
   struct v4l2_mbus_framefmt fmt;
   bool pending_fmt_change;
 
@@ -1609,7 +1614,7 @@ static u64 max9296_calc_pixel_rate(struct max9296_dev *sensor) {
   u64 rate;
 
   rate = sensor->current_mode->width * sensor->current_mode->height;
-  rate *= sensor->fps;
+  rate *= READ_ONCE(sensor->fps);
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s (rate:%llu)", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, rate);
   return rate;
 }
@@ -1728,6 +1733,15 @@ static void max9296_set_power_off(struct max9296_dev *sensor) {
  * same pins.
  */
 static DEFINE_MUTEX(max9296_power_lock);
+/* Serializes one shared-FSYNC configuration transaction across both instances.
+ * It is held only for power acquisition plus the short cadence reservation;
+ * firmware downloads remain parallel. */
+static DEFINE_MUTEX(max9296_fsync_config_lock);
+/* Protects peer publication/lifetime admission and short peer propagation. */
+static DEFINE_MUTEX(max9296_shared_lock);
+/* The shared.sensor links are raw devm pointers.  Serialize device removal so
+ * one instance cannot free its storage while its sibling stops peer threads. */
+static DEFINE_MUTEX(max9296_remove_lock);
 static int max9296_power_users;
 /*
  * Identifies one continuous board-power lifetime.  Fingerprints programmed in
@@ -1735,6 +1749,114 @@ static int max9296_power_users;
  * hold max9296_power_lock; readers use READ_ONCE while holding sensor->lock.
  */
 static u64 max9296_hw_epoch = 1;
+
+/* Resolve the configured sibling while the publication lock excludes probe
+ * unwind/removal admission changes.  This also closes the short window where
+ * both probes are committed but the background resolver has not published the
+ * raw shared.sensor pointer yet. */
+static struct max9296_dev *
+max9296_ready_shared_peer_locked(struct max9296_dev *sensor) {
+  struct max9296_dev *peer = READ_ONCE(sensor->shared.sensor);
+  struct v4l2_subdev *sd;
+
+  lockdep_assert_held(&max9296_shared_lock);
+
+  if (peer && peer != sensor &&
+      READ_ONCE(peer->shared.probe_ready) && !READ_ONCE(peer->dying))
+    return peer;
+  if (!sensor->shared.np)
+    return NULL;
+
+  if (!sensor->shared.client)
+    sensor->shared.client = of_find_i2c_device_by_node(sensor->shared.np);
+  if (!sensor->shared.client)
+    return NULL;
+
+  sd = i2c_get_clientdata(sensor->shared.client);
+  if (!sd)
+    return NULL;
+  peer = to_max9296_dev(sd);
+  if (peer == sensor || !READ_ONCE(peer->shared.probe_ready) ||
+      READ_ONCE(peer->dying))
+    return NULL;
+
+  sensor->shared.sd = sd;
+  WRITE_ONCE(sensor->shared.sensor, peer);
+  return peer;
+}
+
+/* Configure one physical FSYNC domain without ever taking the peer's sensor
+ * lock.  Callers hold their own sensor lock and the board FSYNC transaction
+ * lock.  The board power lock makes the current epoch and both reservations a
+ * single snapshot; the shared lock pins peer admission for the short lockless
+ * WRITE_ONCE propagation used by the legacy V4L2 interval semantics. */
+static int max9296_configure_shared_fsync_locked(
+    struct max9296_dev *sensor, unsigned int fps, bool bind) {
+  struct max9296_dev *peer;
+  u64 epoch;
+  int ret = 0;
+
+  lockdep_assert_held(&sensor->lock);
+  lockdep_assert_held(&max9296_fsync_config_lock);
+
+  mutex_lock(&max9296_power_lock);
+  if (READ_ONCE(sensor->dying)) {
+    ret = -ENODEV;
+    goto unlock_power;
+  }
+  epoch = max9296_hw_epoch;
+  mutex_lock(&max9296_shared_lock);
+  peer = max9296_ready_shared_peer_locked(sensor);
+
+  if ((sensor->fsync_contract_epoch == epoch &&
+       sensor->fsync_contract_fps != fps) ||
+      (peer && peer->fsync_contract_epoch == epoch &&
+       peer->fsync_contract_fps != fps)) {
+    ret = -ESTALE;
+    goto unlock;
+  }
+
+  /* No live/request field is changed until every current reservation agrees. */
+  if (bind) {
+    sensor->fsync_contract_epoch = epoch;
+    sensor->fsync_contract_fps = fps;
+  }
+  WRITE_ONCE(sensor->fps, fps);
+  WRITE_ONCE(sensor->frame_interval.numerator, 1);
+  WRITE_ONCE(sensor->frame_interval.denominator, fps);
+  if (peer) {
+    WRITE_ONCE(peer->fps, fps);
+    WRITE_ONCE(peer->frame_interval.numerator, 1);
+    WRITE_ONCE(peer->frame_interval.denominator, fps);
+  }
+
+unlock:
+  mutex_unlock(&max9296_shared_lock);
+unlock_power:
+  mutex_unlock(&max9296_power_lock);
+  return ret;
+}
+
+static int max9296_update_shared_fsync_locked(struct max9296_dev *sensor,
+                                               unsigned int fps, bool bind) {
+  int ret;
+
+  lockdep_assert_held(&sensor->lock);
+  mutex_lock(&max9296_fsync_config_lock);
+  ret = max9296_configure_shared_fsync_locked(sensor, fps, bind);
+  mutex_unlock(&max9296_fsync_config_lock);
+  return ret;
+}
+
+static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+  mutex_lock(&max9296_fsync_config_lock);
+  mutex_lock(&max9296_power_lock);
+  sensor->fsync_contract_epoch = 0;
+  sensor->fsync_contract_fps = 0;
+  mutex_unlock(&max9296_power_lock);
+  mutex_unlock(&max9296_fsync_config_lock);
+}
 
 static int max9296_set_power(struct max9296_dev *sensor, bool on) {
   int ret = 0;
@@ -1860,7 +1982,7 @@ static int max9296_get_fmt(struct v4l2_subdev *sd,
   else
     fmt = &sensor->fmt;
 
-  fmt->reserved[1] = sensor->fps;
+  fmt->reserved[1] = READ_ONCE(sensor->fps);
   format->format = *fmt;
   if (debug)
     printk(KERN_DEBUG
@@ -3127,7 +3249,10 @@ static int max9296_g_frame_interval(struct v4l2_subdev *sd,
   struct max9296_dev *sensor = to_max9296_dev(sd);
 
   mutex_lock(&sensor->lock);
-  fi->interval = sensor->frame_interval;
+  fi->interval.numerator =
+      READ_ONCE(sensor->frame_interval.numerator);
+  fi->interval.denominator =
+      READ_ONCE(sensor->frame_interval.denominator);
   mutex_unlock(&sensor->lock);
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%u denominator:%u)", KEYWORD,
@@ -3139,6 +3264,8 @@ static int max9296_g_frame_interval(struct v4l2_subdev *sd,
 static int max9296_s_frame_interval(struct v4l2_subdev *sd,
                                     struct v4l2_subdev_frame_interval *fi) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
+  unsigned int old_fps;
+  unsigned int fps;
   int ret = 0;
 
   if (fi->pad != 0) {
@@ -3146,8 +3273,6 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
     return -EINVAL;
   }
-
-  unsigned int fps;
 
   mutex_lock(&sensor->lock);
 
@@ -3166,12 +3291,12 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
     goto out;
   }
 
-  if (sensor->fps != fps) {
-    sensor->frame_interval.numerator = 1;
-    sensor->frame_interval.denominator = fps;
-    sensor->fps = fps;
+  old_fps = READ_ONCE(sensor->fps);
+  ret = max9296_update_shared_fsync_locked(sensor, fps, false);
+  if (ret)
+    goto out;
+  if (old_fps != fps)
     max9296_mark_prepare_stale_locked(sensor);
-  }
 
   //if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%u denominator:%u)", KEYWORD,
@@ -3416,7 +3541,7 @@ static int max9296_normalize_fingerprint_locked(
   fingerprint->width = mode->width;
   fingerprint->height = mode->height;
   fingerprint->code = sensor->fmt.code;
-  fingerprint->fps = sensor->fps;
+  fingerprint->fps = READ_ONCE(sensor->fps);
   fingerprint->enable = sensor->enable;
 
   return 0;
@@ -3587,9 +3712,9 @@ static void max9296_apply_prepare_fingerprint_locked(
   sensor->fmt.width = fingerprint->width;
   sensor->fmt.height = fingerprint->height;
   sensor->fmt.code = fingerprint->code;
-  sensor->fps = fingerprint->fps;
-  sensor->frame_interval.numerator = 1;
-  sensor->frame_interval.denominator = fingerprint->fps;
+  WRITE_ONCE(sensor->fps, fingerprint->fps);
+  WRITE_ONCE(sensor->frame_interval.numerator, 1);
+  WRITE_ONCE(sensor->frame_interval.denominator, fingerprint->fps);
   sensor->enable = fingerprint->enable;
   sensor->pending_mode_change = false;
   sensor->pending_fmt_change = false;
@@ -3609,17 +3734,33 @@ static int max9296_prepare_request_locked(
   u64 epoch;
   int ret;
 
+  /* Keep power acquisition and the first FSYNC reservation in one short
+   * transaction.  This closes the gap where a legacy frame-interval write
+   * could land after reset but before a prepare published its cadence. */
+  mutex_lock(&max9296_fsync_config_lock);
+  ret = max9296_set_power(sensor, true);
+  if (ret) {
+    max9296_set_power(sensor, false);
+    mutex_unlock(&max9296_fsync_config_lock);
+    return ret;
+  }
+  if (READ_ONCE(sensor->dying) ||
+      !READ_ONCE(sensor->shared.probe_ready)) {
+    ret = READ_ONCE(sensor->dying) ? -ENODEV : -EAGAIN;
+    goto release_unpublished_power;
+  }
+  ret = max9296_configure_shared_fsync_locked(
+      sensor, fingerprint->fps, true);
+  if (ret)
+    goto release_unpublished_power;
+  mutex_unlock(&max9296_fsync_config_lock);
+
+  max9296_apply_prepare_fingerprint_locked(sensor, fingerprint);
   sensor->prepare_state = MAX9296_PREP_PREPARING;
   sensor->prepare_generation = generation;
   sensor->prepare_lease_generation = 0;
   sensor->prepare_fingerprint = *fingerprint;
   sensor->prepare_errno = 0;
-
-  ret = max9296_set_power(sensor, true);
-  if (ret) {
-    max9296_set_power(sensor, false);
-    goto failed;
-  }
   sensor->prepare_lease_held = true;
 
   /* An expired request can leave valid hardware behind while a peer keeps the
@@ -3640,13 +3781,18 @@ static int max9296_prepare_request_locked(
   return 0;
 
 release_failed_lease:
+  max9296_drop_fsync_contract_locked(sensor);
   sensor->prepare_releasing = true;
   sensor->prepare_lease_held = false;
   max9296_set_power(sensor, false);
   sensor->prepare_releasing = false;
-failed:
   sensor->prepare_errno = ret;
   sensor->prepare_state = MAX9296_PREP_FAILED;
+  return ret;
+
+release_unpublished_power:
+  max9296_set_power(sensor, false);
+  mutex_unlock(&max9296_fsync_config_lock);
   return ret;
 }
 
@@ -3683,6 +3829,7 @@ static int max9296_prepare_existing_lease_locked(
 
   ret = max9296_prepare_hardware_locked(sensor, fingerprint);
   if (ret) {
+    max9296_drop_fsync_contract_locked(sensor);
     sensor->prepare_releasing = true;
     sensor->prepare_lease_held = false;
     max9296_set_power(sensor, false);
@@ -3709,6 +3856,7 @@ static int max9296_prepare_request(
     const struct max9296_hw_fingerprint *fingerprint, u64 generation) {
   u64 epoch;
   bool hardware_current;
+  int arm_ret;
   int ret;
 
   if (!mutex_trylock(&sensor->prepare_request_lock))
@@ -3752,9 +3900,13 @@ static int max9296_prepare_request(
     goto preserve_lease;
   }
 
-  max9296_apply_prepare_fingerprint_locked(sensor, fingerprint);
-
   if (sensor->prepare_lease_held) {
+    ret = max9296_update_shared_fsync_locked(
+        sensor, fingerprint->fps, true);
+    if (ret)
+      goto preserve_lease;
+    max9296_apply_prepare_fingerprint_locked(sensor, fingerprint);
+
     if (hardware_current) {
       /* Same generation+tuple is idempotent.  A new generation with the same
        * hardware tuple renews only request identity and timeout. */
@@ -3778,6 +3930,8 @@ static int max9296_prepare_request(
     goto unlock;
   }
 
+  /* Fresh ownership acquires board power and reserves shared FSYNC inside the
+   * common helper before it publishes any request/live tuple. */
   ret = max9296_prepare_request_locked(sensor, fingerprint, generation);
   if (ret)
     goto unlock;
@@ -3785,21 +3939,15 @@ static int max9296_prepare_request(
   if (!max9296_prepare_lease_can_arm_locked(sensor, generation) ||
       WARN_ON(!queue_delayed_work(system_wq,
                                   &sensor->prepare_lease_timeout, 60 * HZ))) {
-    sensor->prepare_lease_held = false;
-    sensor->prepare_lease_generation = 0;
-    sensor->prepare_errno = -EBUSY;
-    sensor->prepare_state = MAX9296_PREP_FAILED;
-    sensor->prepare_releasing = true;
-    max9296_set_power(sensor, false);
-    sensor->prepare_releasing = false;
     ret = READ_ONCE(sensor->dying) ? -ENODEV : -EBUSY;
+    goto release_unarmed_lease;
   }
   goto unlock;
 
 preserve_lease:
   sensor->prepare_errno = ret;
   if (sensor->prepare_lease_held) {
-    int arm_ret = max9296_queue_prepare_lease_locked(
+    arm_ret = max9296_queue_prepare_lease_locked(
         sensor, sensor->prepare_generation);
 
     if (arm_ret) {
@@ -3811,6 +3959,9 @@ preserve_lease:
 
 release_unarmed_lease:
   if (sensor->prepare_lease_held) {
+    /* No timeout/V4L2 owner can preserve this request.  Do not leave its
+     * per-instance cadence blocking a peer that keeps the epoch powered. */
+    max9296_drop_fsync_contract_locked(sensor);
     sensor->prepare_lease_held = false;
     sensor->prepare_lease_generation = 0;
     sensor->prepare_errno = ret;
@@ -3819,42 +3970,6 @@ release_unarmed_lease:
     max9296_set_power(sensor, false);
     sensor->prepare_releasing = false;
   }
-
-unlock:
-  mutex_unlock(&sensor->lock);
-  mutex_unlock(&sensor->prepare_request_lock);
-  return ret;
-}
-
-/* Extend an already validated READY/STALE lease without allowing a previous
- * callback invocation to observe mutable fields from the renewed arm. */
-static int __maybe_unused max9296_rearm_prepare_lease(
-    struct max9296_dev *sensor, u64 generation) {
-  int ret = 0;
-
-  mutex_lock(&sensor->prepare_request_lock);
-  cancel_delayed_work_sync(&sensor->prepare_lease_timeout);
-
-  mutex_lock(&sensor->lock);
-  if (READ_ONCE(sensor->dying) || !sensor->prepare_lease_held ||
-      sensor->power_count != 0 ||
-      (sensor->prepare_state != MAX9296_PREP_READY &&
-       sensor->prepare_state != MAX9296_PREP_STALE)) {
-    ret = READ_ONCE(sensor->dying) ? -ENODEV : -ESTALE;
-    goto unlock;
-  }
-
-  /* Mutation happens only after the old invocation is fully gone. */
-  sensor->prepare_generation = generation;
-  sensor->prepare_lease_generation = generation;
-  if (WARN_ON(!max9296_prepare_lease_can_arm_locked(sensor, generation))) {
-    ret = -ESTALE;
-    goto unlock;
-  }
-
-  if (WARN_ON(!queue_delayed_work(system_wq, &sensor->prepare_lease_timeout,
-                                  60 * HZ)))
-    ret = -EBUSY;
 
 unlock:
   mutex_unlock(&sensor->lock);
@@ -4043,6 +4158,10 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     ret = max9296_normalize_fingerprint_locked(sensor, &fingerprint);
     if (ret)
       goto out;
+    ret = max9296_update_shared_fsync_locked(
+        sensor, fingerprint.fps, true);
+    if (ret)
+      goto out;
 
     epoch = READ_ONCE(max9296_hw_epoch);
     if (sensor->hardware_valid && sensor->initialized_epoch == epoch) {
@@ -4054,8 +4173,10 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
       }
     } else {
       ret = max9296_prepare_hardware_locked(sensor, &fingerprint);
-      if (ret)
+      if (ret) {
+        max9296_drop_fsync_contract_locked(sensor);
         goto out;
+      }
     }
 
     /* Removal publishes dying under this same epoch/ownership lock.  Recheck
@@ -4186,8 +4307,8 @@ static int max9296_fsync(void *data) {
         if (sensor->state.fsync != MAX9296_STATE_RUNNING)
           usleep_range(1000000, 1000000);
 
-        if (low_fps != sensor->fps) {
-          low_fps = sensor->fps;
+        if (low_fps != READ_ONCE(sensor->fps)) {
+          low_fps = READ_ONCE(sensor->fps);
           low = (1000000 / low_fps) - high;
           printk(KERN_NOTICE
                  "[%s:%d][%s:%d] %s single fps : %u, low : %u, high : %u\n",
@@ -4216,8 +4337,8 @@ static int max9296_fsync(void *data) {
           if (sensor->shared.sensor->state.fsync != MAX9296_STATE_RUNNING)
             usleep_range(1000000, 1000000);
 
-          if (low_fps != sensor->fps) {
-            low_fps = sensor->fps;
+          if (low_fps != READ_ONCE(sensor->fps)) {
+            low_fps = READ_ONCE(sensor->fps);
             low = (1000000 / low_fps) - high;
             printk(KERN_NOTICE
                    "[%s:%d][%s:%d] %s dual fps : %u, low : %u, high : %u\n",
@@ -4261,14 +4382,14 @@ static int max9296_fsync(void *data) {
             (sensor->state.enable == MAX9296_STATE_DONE) &&
             max9296_stream_epoch_current(sensor)) {
           fsync_state = &sensor->state.fsync;
-          fps = sensor->fps;
+          fps = READ_ONCE(sensor->fps);
           start = 1;
         } else if ((sensor->shared.sensor->state.init == MAX9296_STATE_DONE) &&
                    (sensor->shared.sensor->state.enable ==
                     MAX9296_STATE_DONE) &&
                    max9296_stream_epoch_current(sensor->shared.sensor)) {
           fsync_state = &sensor->shared.sensor->state.fsync;
-          fps = sensor->shared.sensor->fps;
+          fps = READ_ONCE(sensor->shared.sensor->fps);
           start = 1;
         } else {
           usleep_range(10000, 11000);
@@ -4413,15 +4534,6 @@ static int max9296_enable(void *data) {
 }
 
 //-------------------------------------------------------------------------
-/*
- * This lock protects only the probe publication handshake.  v4l2's I2C
- * helper publishes clientdata before probe has passed its later fallible
- * setup, so a sibling resolver must not turn that pointer into a long-lived
- * shared.sensor until probe_ready is committed.  Normal bound-device removal
- * retains its existing lifetime protocol and is outside this narrow lock.
- */
-static DEFINE_MUTEX(max9296_shared_lock);
-
 static int max9296_shared_init(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
   bool resolved;
@@ -4546,8 +4658,10 @@ static int max9296_parse_prepare_command(
       if (*digit < '0' || *digit > '9')
         goto out;
     ret = kstrtoull(fields[i], 10, &values[i - 1]);
-    if (ret)
+    if (ret) {
+      ret = -EINVAL;
       goto out;
+    }
   }
 
   command->generation = values[0];
@@ -5508,11 +5622,15 @@ entity_cleanup:
 static int max9296_remove(struct i2c_client *client) {
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
-  struct max9296_dev *peer = sensor->shared.sensor;
+  struct max9296_dev *peer;
   bool accounted;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+
+  /* A device reference does not pin devm allocations after another remove()
+   * returns.  Keep sibling remove callbacks serialized for every raw peer use. */
+  mutex_lock(&max9296_remove_lock);
 
   /* Phase 0: withdraw every admission point before waiting on admitted work. */
   /* The board lock is the final FSYNC/output authority too: removal becomes
@@ -5522,6 +5640,7 @@ static int max9296_remove(struct i2c_client *client) {
   mutex_unlock(&max9296_power_lock);
 
   mutex_lock(&max9296_shared_lock);
+  peer = READ_ONCE(sensor->shared.sensor);
   WRITE_ONCE(sensor->shared.probe_ready, false);
   mutex_unlock(&max9296_shared_lock);
 
@@ -5583,7 +5702,10 @@ static int max9296_remove(struct i2c_client *client) {
       kthread_stop(peer->thread_en);
       peer->thread_en = NULL;
     }
-    WRITE_ONCE(peer->shared.sensor, NULL);
+    mutex_lock(&max9296_shared_lock);
+    if (READ_ONCE(peer->shared.sensor) == sensor)
+      WRITE_ONCE(peer->shared.sensor, NULL);
+    mutex_unlock(&max9296_shared_lock);
   }
 
   /* Phase 2: Stop our own threads */
@@ -5617,10 +5739,16 @@ static int max9296_remove(struct i2c_client *client) {
   device_remove_file(&client->dev, &dev_attr_link_status);
   device_remove_file(&client->dev, &dev_attr_enable);
   device_remove_file(&client->dev, &dev_attr_rotate);
+  mutex_lock(&max9296_shared_lock);
+  if (i2c_get_clientdata(client) == sd)
+    i2c_set_clientdata(client, NULL);
+  mutex_unlock(&max9296_shared_lock);
   media_entity_cleanup(&sensor->sd.entity);
   v4l2_ctrl_handler_free(&sensor->ctrls.handler);
   mutex_destroy(&sensor->prepare_request_lock);
   mutex_destroy(&sensor->lock);
+
+  mutex_unlock(&max9296_remove_lock);
 
   return 0;
 }

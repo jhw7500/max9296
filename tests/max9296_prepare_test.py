@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -20,7 +20,8 @@ SOURCE = ROOT / "max9296.c"
 
 def parse_prepare_command(text: str) -> tuple[int, ...]:
     """Executable model of the strict, whitespace-delimited v1 grammar."""
-    fields = text.strip(" \t\n").split()
+    stripped = text.strip()
+    fields = re.split(r"[ \t]+", stripped) if stripped else []
     if fields == ["0"]:
         return (0,)
     if len(fields) != 6 or fields[0] != "1":
@@ -52,6 +53,36 @@ class Board:
     fsync_pulses: int = 0
     des_writes: int = 0
     epoch_guarded: bool = False
+    cameras: list[Camera] = field(default_factory=list)
+
+    def target_epoch(self) -> int:
+        return self.epoch + (1 if self.users == 0 else 0)
+
+    def configure_fsync(self, owner: Camera, fps: int, bind: bool) -> bool:
+        target = self.target_epoch()
+        for camera in self.cameras:
+            if (
+                camera.fsync_contract_epoch == target
+                and camera.fsync_contract_fps != fps
+            ):
+                return False
+        if bind:
+            owner.fsync_contract_epoch = target
+            owner.fsync_contract_fps = fps
+        for camera in self.cameras:
+            camera.fps = fps
+        return True
+
+    def physical_fsync_fps(self) -> int:
+        contracts = {
+            camera.fsync_contract_fps
+            for camera in self.cameras
+            if camera.fsync_contract_epoch == self.epoch
+        }
+        assert len(contracts) <= 1
+        if contracts:
+            return contracts.pop()
+        return self.cameras[0].fps if self.cameras else 0
 
     def get(self) -> None:
         if self.users == 0:
@@ -90,6 +121,12 @@ class Camera:
     hardware_fingerprint: tuple[int, int, int, int] | None = None
     request_fingerprint: tuple[int, int, int, int] | None = None
     runtime_fingerprint: tuple[int, int, int, int] | None = None
+    fps: int = 30
+    fsync_contract_epoch: int = -1
+    fsync_contract_fps: int = 0
+
+    def __post_init__(self) -> None:
+        self.board.cameras.append(self)
 
     def drain_timeout_sync(self) -> None:
         """Mirror cancel_delayed_work_sync before request fields are mutated."""
@@ -130,6 +167,7 @@ class Camera:
     ) -> None:
         self.drain_timeout_sync()
         assert not self.lease and self.power_count == 0
+        assert self.board.configure_fsync(self, fingerprint[2], bind=True)
         self.board.get()
         self.lease = True
         self.generation = generation
@@ -146,11 +184,15 @@ class Camera:
             self.arm_timeout()
         else:
             self.state = "failed"
+            self.drop_fsync_contract()
             self.lease = False
             self.board.put()
 
     def request_prepare(
-        self, generation: int, fingerprint: tuple[int, int, int, int]
+        self,
+        generation: int,
+        fingerprint: tuple[int, int, int, int],
+        arm_succeeds: bool = True,
     ) -> str:
         """Model renewal, expired-current reuse, and stale rejection."""
         self.drain_timeout_sync()
@@ -171,6 +213,11 @@ class Camera:
                 self.arm_timeout()
             return "estale"
 
+        if not self.board.configure_fsync(self, fingerprint[2], bind=True):
+            if self.lease:
+                self.arm_timeout()
+            return "estale"
+
         if not self.lease:
             self.board.get()
             self.lease = True
@@ -184,8 +231,25 @@ class Camera:
             self.initialized_epoch = self.board.epoch
             self.hardware_fingerprint = fingerprint
         self.state = "ready"
+        if not arm_succeeds:
+            self.drop_fsync_contract()
+            self.lease = False
+            self.state = "failed"
+            self.board.put()
+            return "ebusy"
         self.arm_timeout()
         return "ready"
+
+    def set_frame_interval(self, fps: int) -> str:
+        old_fps = self.fps
+        if not self.board.configure_fsync(self, fps, bind=False):
+            assert self.fps == old_fps
+            return "estale"
+        if self.runtime_fingerprint is not None and self.runtime_fingerprint[2] != fps:
+            self.rewrite_runtime(
+                (*self.runtime_fingerprint[:2], fps, self.runtime_fingerprint[3])
+            )
+        return "ok"
 
     def rewrite_runtime(
         self, fingerprint: tuple[int, int, int, int], active: bool = True
@@ -239,6 +303,17 @@ class Camera:
 
     def hardware_current(self) -> bool:
         return self.hardware_valid and self.initialized_epoch == self.board.epoch
+
+    def prepare_status_matches(self) -> bool:
+        return (
+            self.hardware_current()
+            and self.runtime_fingerprint == self.request_fingerprint
+            and self.hardware_fingerprint == self.runtime_fingerprint
+        )
+
+    def drop_fsync_contract(self) -> None:
+        self.fsync_contract_epoch = -1
+        self.fsync_contract_fps = 0
 
     def stream_current(self) -> bool:
         return (
@@ -313,6 +388,7 @@ def check_model(failures: list[str]) -> None:
         "1 4 1280 720 60 2",
         "1 5 1920 1080 30 1",
         "1 6 1920 1080 30 2",
+        "1 18446744073709551615 2560 720 30 3",
     )
     for command in valid_commands:
         try:
@@ -331,6 +407,8 @@ def check_model(failures: list[str]) -> None:
         "1 -1 2560 720 30 3",
         "1 +1 2560 720 30 3",
         "1 18446744073709551616 2560 720 30 3",
+        "1 1 4294967296 720 30 3",
+        "1 1 2560 4294967296 30 3",
         "1 1 2560 720 0 3",
         "1 1 2560 720 121 3",
         "1 1 2560 720 30 1",
@@ -510,6 +588,111 @@ def check_model(failures: list[str]) -> None:
     if unchanged.state != "stale":
         failures.append("lease transfer must not erase a detected stale tuple")
 
+    board = Board()
+    owner, peer = Camera(board), Camera(board)
+    common_60 = (2560, 720, 60, 3)
+    if owner.request_prepare(70, common_60) != "ready":
+        failures.append("first shared-FSYNC prepare must reserve a common 60 fps")
+    if peer.fps != 60:
+        failures.append("first common-FPS prepare must propagate cadence to idle peer")
+    if peer.request_prepare(70, common_60) != "ready":
+        failures.append("both default-30 peers must transition to common 60 fps")
+    if (
+        owner.request_fingerprint[2],
+        peer.request_fingerprint[2],
+        board.physical_fsync_fps(),
+    ) != (60, 60, 60):
+        failures.append("READY status FPS and physical shared cadence must agree")
+    if not owner.prepare_status_matches() or not peer.prepare_status_matches():
+        failures.append("common-FPS peers must both report a matching READY tuple")
+
+    board = Board()
+    owner, peer = Camera(board), Camera(board)
+    common_30 = (2560, 720, 30, 3)
+    if owner.request_prepare(80, common_30) != "ready":
+        failures.append("shared-FSYNC baseline prepare failed")
+    before = (
+        peer.generation,
+        peer.request_fingerprint,
+        peer.runtime_fingerprint,
+        peer.fps,
+        peer.state,
+    )
+    if peer.request_prepare(81, common_60) != "estale":
+        failures.append("shared-FSYNC 30/60 prepare mismatch must be rejected")
+    after = (
+        peer.generation,
+        peer.request_fingerprint,
+        peer.runtime_fingerprint,
+        peer.fps,
+        peer.state,
+    )
+    if after != before:
+        failures.append("shared-FSYNC mismatch mutated requester live/request state")
+    if board.physical_fsync_fps() != 30:
+        failures.append("rejected peer mismatch changed physical cadence")
+
+    # The reservation follows the hardware epoch, not just the temporary
+    # prepare lease.  A consumed or streaming peer must therefore protect the
+    # physical cadence exactly like a still-leased READY peer.
+    owner.power_on()
+    before = (
+        peer.generation,
+        peer.request_fingerprint,
+        peer.runtime_fingerprint,
+        peer.fps,
+        peer.state,
+    )
+    if peer.request_prepare(82, common_60) != "estale":
+        failures.append("consumed shared-FSYNC peer must reject 30/60 mismatch")
+    if (
+        peer.generation,
+        peer.request_fingerprint,
+        peer.runtime_fingerprint,
+        peer.fps,
+        peer.state,
+    ) != before:
+        failures.append("consumed-peer rejection mutated requester state")
+    if not owner.commit_stream():
+        failures.append("shared-FSYNC owner stream setup failed in model")
+    if peer.request_prepare(83, common_60) != "estale":
+        failures.append("streaming shared-FSYNC peer must reject 30/60 mismatch")
+
+    # A single probed side still owns and enforces its cadence.  The same
+    # command remains valid; a conflicting new request in the epoch does not.
+    board = Board()
+    only = Camera(board)
+    if only.request_prepare(84, common_60) != "ready":
+        failures.append("single-side prepare must not require a resolved peer")
+    if board.physical_fsync_fps() != 60 or not only.prepare_status_matches():
+        failures.append("single-side physical cadence/status must match")
+    if only.request_prepare(85, common_30) != "estale":
+        failures.append("single-side current-epoch cadence switch must be ESTALE")
+
+    # A request that initialized hardware but could not publish its expiry
+    # owner is FAILED/unowned.  Its per-instance reservation must not pin the
+    # shared cadence while another user keeps the epoch alive.
+    board = Board()
+    keeper, unarmed = Camera(board), Camera(board)
+    keeper.power_on()
+    if unarmed.request_prepare(86, common_60, arm_succeeds=False) != "ebusy":
+        failures.append("unarmed shared-FSYNC prepare must report busy")
+    if unarmed.fsync_contract_epoch == board.epoch:
+        failures.append("unarmed prepare retained a current FSYNC reservation")
+    if keeper.set_frame_interval(30) != "ok":
+        failures.append("failed/unowned prepare must not block peer cadence")
+
+    board = Board()
+    owner, peer = Camera(board), Camera(board)
+    if owner.set_frame_interval(60) != "ok" or (owner.fps, peer.fps) != (60, 60):
+        failures.append("legacy non-prepare FPS update must propagate to shared peer")
+    if peer.set_frame_interval(30) != "ok" or (owner.fps, peer.fps) != (30, 30):
+        failures.append("unbound shared FPS must remain reconfigurable")
+    owner.request_prepare(90, common_30)
+    before = (owner.fps, peer.fps)
+    if peer.set_frame_interval(60) != "estale" or (owner.fps, peer.fps) != before:
+        failures.append("bound shared cadence must reject conflicting V4L2 FPS")
+
 
 def function(source: str, name: str) -> str:
     start = -1
@@ -570,7 +753,7 @@ def check_source(source: str, failures: list[str]) -> None:
     loadfw = function(code, "max9296_loadfw")
     request_locked = function(code, "max9296_prepare_request_locked")
     request = function(code, "max9296_prepare_request")
-    rearm = function(code, "max9296_rearm_prepare_lease")
+    fsync_contract = function(code, "max9296_configure_shared_fsync_locked")
     can_arm = function(code, "max9296_prepare_lease_can_arm_locked")
     epoch_gate = function(code, "max9296_stream_epoch_current")
     fsync_pulse = function(code, "max9296_fsync_pulse_current")
@@ -611,52 +794,134 @@ def check_source(source: str, failures: list[str]) -> None:
     if "mod_delayed_work" in code:
         failures.append("mutable delayed work must not be requeued with mod_delayed_work")
 
-    for name, body in (("request", request), ("renewal", rearm)):
-        if name == "request":
-            request_lock = body.find(
-                "mutex_trylock(&sensor->prepare_request_lock)"
-            )
-        else:
-            request_lock = body.find("mutex_lock(&sensor->prepare_request_lock)")
-        cancel = body.find("cancel_delayed_work_sync(&sensor->prepare_lease_timeout)")
-        lock = body.find("mutex_lock(&sensor->lock)")
-        if name == "request":
-            prepared = body.find("max9296_prepare_request_locked")
-            revalidate = body.find(
-                "max9296_prepare_lease_can_arm_locked", prepared
-            )
-            arm = body.find("queue_delayed_work", revalidate)
-        else:
-            prepared = body.find("sensor->prepare_generation = generation")
-            revalidate = body.find(
-                "max9296_prepare_lease_can_arm_locked", prepared
-            )
-            arm = body.find("queue_delayed_work", revalidate)
-        unlock = body.rfind("mutex_unlock(&sensor->lock)")
-        request_unlock = body.rfind(
-            "mutex_unlock(&sensor->prepare_request_lock)"
-        )
-        if not (
-            0 <= request_lock < cancel < lock < prepared < revalidate < arm
-            < unlock < request_unlock
-        ):
-            failures.append(
-                f"{name} must hold request admission across sync-drain, "
-                "sensor revalidation, and final arm"
-            )
-        if "60 * HZ" not in body:
-            failures.append(f"{name} does not arm the 60-second lease timeout")
-
-    generation_write = rearm.find("sensor->prepare_generation = generation")
-    lease_generation_write = rearm.find(
-        "sensor->prepare_lease_generation = generation"
+    request_lock = request.find("mutex_trylock(&sensor->prepare_request_lock)")
+    cancel = request.find("cancel_delayed_work_sync(&sensor->prepare_lease_timeout)")
+    lock = request.find("mutex_lock(&sensor->lock)")
+    contract = request.find("max9296_update_shared_fsync_locked")
+    apply = request.find("max9296_apply_prepare_fingerprint_locked")
+    prepared = request.find("max9296_prepare_request_locked")
+    renewal_generation = request.find("sensor->prepare_generation = generation")
+    renewal_lease_generation = request.find(
+        "sensor->prepare_lease_generation = generation", renewal_generation
     )
-    renewal_revalidate = rearm.find("max9296_prepare_lease_can_arm_locked")
-    renewal_arm = rearm.find("queue_delayed_work")
+    renewal_arm = request.find("max9296_queue_prepare_lease_locked", renewal_generation)
+    fresh_arm = request.find("queue_delayed_work", prepared)
+    unlock = request.rfind("mutex_unlock(&sensor->lock)")
+    request_unlock = request.rfind("mutex_unlock(&sensor->prepare_request_lock)")
     if not (
-        0 <= generation_write < lease_generation_write < renewal_revalidate < renewal_arm
+        0 <= request_lock < cancel < lock < contract < apply < prepared < fresh_arm
+        < unlock < request_unlock
     ):
-        failures.append("renewal generation must be mutated only post-drain and pre-arm")
+        failures.append(
+            "actual prepare path must drain, validate shared FPS before mutation, "
+            "prepare, arm, then release request admission"
+        )
+    if not (
+        0 <= contract < renewal_generation < renewal_lease_generation < renewal_arm
+    ):
+        failures.append("actual renewal path does not publish generation before rearm")
+    if "60 * HZ" not in request:
+        failures.append("actual prepare path does not arm the 60-second lease timeout")
+    if "max9296_rearm_prepare_lease" in code:
+        failures.append("dead prepare renewal helper remains in production")
+
+    fresh_config_lock = request_locked.find(
+        "mutex_lock(&max9296_fsync_config_lock)"
+    )
+    fresh_power = request_locked.find("max9296_set_power(sensor, true)")
+    fresh_contract = request_locked.find(
+        "max9296_configure_shared_fsync_locked"
+    )
+    fresh_apply = request_locked.find("max9296_apply_prepare_fingerprint_locked")
+    fresh_request_write = request_locked.find(
+        "sensor->prepare_generation = generation"
+    )
+    if not (
+        0 <= fresh_config_lock < fresh_power < fresh_contract < fresh_apply
+        < fresh_request_write
+    ):
+        failures.append(
+            "fresh prepare does not atomically acquire power/reserve FPS before "
+            "publishing live/request state"
+        )
+
+    for token in (
+        "mutex_lock(&max9296_power_lock)",
+        "mutex_lock(&max9296_shared_lock)",
+        "fsync_contract_epoch",
+        "fsync_contract_fps",
+        "peer->fsync_contract_epoch",
+        "peer->fsync_contract_fps",
+        "WRITE_ONCE(peer->fps, fps)",
+        "-ESTALE",
+    ):
+        if token not in fsync_contract:
+            failures.append(f"shared-FSYNC contract missing: {token}")
+    if "mutex_lock(&peer->lock)" in fsync_contract:
+        failures.append("shared-FSYNC contract introduces cross-instance sensor-lock ABBA")
+
+    fsync_power_lock = fsync_contract.find("mutex_lock(&max9296_power_lock)")
+    fsync_dying = fsync_contract.find("READ_ONCE(sensor->dying)", fsync_power_lock)
+    fsync_shared_lock = fsync_contract.find(
+        "mutex_lock(&max9296_shared_lock)", fsync_dying
+    )
+    fsync_peer = fsync_contract.find(
+        "max9296_ready_shared_peer_locked(sensor)", fsync_shared_lock
+    )
+    fsync_self_check = fsync_contract.find(
+        "sensor->fsync_contract_epoch == epoch", fsync_peer
+    )
+    fsync_peer_check = fsync_contract.find(
+        "peer->fsync_contract_epoch == epoch", fsync_self_check
+    )
+    fsync_reject = fsync_contract.find("ret = -ESTALE", fsync_peer_check)
+    fsync_bind = fsync_contract.find("if (bind)", fsync_reject)
+    fsync_self_write = fsync_contract.find(
+        "sensor->fsync_contract_epoch = epoch", fsync_bind
+    )
+    fsync_live_write = fsync_contract.find("WRITE_ONCE(sensor->fps, fps)")
+    fsync_peer_write = fsync_contract.find("WRITE_ONCE(peer->fps, fps)")
+    fsync_shared_unlock = fsync_contract.find(
+        "mutex_unlock(&max9296_shared_lock)", fsync_peer_write
+    )
+    fsync_power_unlock = fsync_contract.find(
+        "mutex_unlock(&max9296_power_lock)", fsync_shared_unlock
+    )
+    if not (
+        0 <= fsync_power_lock < fsync_dying < fsync_shared_lock < fsync_peer
+        < fsync_self_check < fsync_peer_check < fsync_reject < fsync_bind
+        < fsync_self_write < fsync_live_write < fsync_peer_write
+        < fsync_shared_unlock < fsync_power_unlock
+    ):
+        failures.append(
+            "shared-FSYNC helper must snapshot epoch/peer, reject mismatches, "
+            "then publish cadence under power/shared locks"
+        )
+    pre_reject = fsync_contract[:fsync_reject]
+    for mutation in (
+        r"sensor->fsync_contract_epoch\s*=\s*epoch",
+        r"sensor->fsync_contract_fps\s*=\s*fps",
+        r"WRITE_ONCE\(sensor->fps",
+        r"WRITE_ONCE\(peer->fps",
+        r"sensor->prepare_(?:state|generation|fingerprint)\s*=",
+    ):
+        if re.search(mutation, pre_reject):
+            failures.append(
+                "shared-FSYNC mismatch path mutates live/request state before rejection"
+            )
+            break
+
+    contract_call = request.find("max9296_update_shared_fsync_locked")
+    first_live_write = min(
+        position
+        for position in (
+            request.find("sensor->prepare_generation = generation"),
+            request.find("max9296_apply_prepare_fingerprint_locked"),
+        )
+        if position >= 0
+    )
+    if not (0 <= contract_call < first_live_write):
+        failures.append("shared-FSYNC mismatch can mutate request/live state before rejection")
 
     for token in (
         "prepare_lease_held",
@@ -686,6 +951,19 @@ def check_source(source: str, failures: list[str]) -> None:
             failures.append(f"s_stream decision table missing: {token}")
     if "max9296_prepare_request" not in store:
         failures.append("sysfs prepare does not use the common prepare helper")
+    stream_normalize = stream.find("max9296_normalize_fingerprint_locked")
+    stream_contract = stream.find(
+        "max9296_update_shared_fsync_locked", stream_normalize
+    )
+    stream_epoch = stream.find("epoch = READ_ONCE(max9296_hw_epoch)", stream_contract)
+    stream_hardware = stream.find("max9296_prepare_hardware_locked", stream_epoch)
+    if not (
+        0 <= stream_normalize < stream_contract < stream_epoch < stream_hardware
+        and "fingerprint.fps, true" in stream[stream_contract:stream_epoch]
+    ):
+        failures.append(
+            "STREAMON must bind shared FPS before matching/programming hardware"
+        )
 
     for token in (
         "kmemdup_nul",
@@ -703,6 +981,14 @@ def check_source(source: str, failures: list[str]) -> None:
     ):
         if token not in parser:
             failures.append(f"strict prepare parser/tuple validation missing: {token}")
+    numeric_parse = re.search(
+        r"ret\s*=\s*kstrtoull\([^;]+;\s*if\s*\(ret\)\s*\{\s*"
+        r"ret\s*=\s*-EINVAL;\s*goto\s+out;\s*\}",
+        parser,
+        re.S,
+    )
+    if not numeric_parse:
+        failures.append("prepare numeric overflow/syntax errno is not normalized to EINVAL")
     if "MEDIA_BUS_FMT_UYVY8_2X8" not in store:
         failures.append("prepare command must derive the sole UYVY media-bus code")
 
@@ -754,6 +1040,38 @@ def check_source(source: str, failures: list[str]) -> None:
         if token not in remove:
             failures.append(f"remove lease reconciliation missing: {token}")
 
+    remove_serial_lock = remove.find("mutex_lock(&max9296_remove_lock)")
+    remove_peer_snapshot = remove.find("peer = READ_ONCE(sensor->shared.sensor)")
+    remove_peer_use = remove.find("peer->shared.sensor", remove_peer_snapshot)
+    remove_clientdata_clear = remove.find("i2c_set_clientdata(client, NULL)")
+    remove_serial_unlock = remove.rfind("mutex_unlock(&max9296_remove_lock)")
+    if not (
+        "static DEFINE_MUTEX(max9296_remove_lock)" in code
+        and 0 <= remove_serial_lock < remove_peer_snapshot < remove_peer_use
+        < remove_clientdata_clear < remove_serial_unlock
+    ):
+        failures.append(
+            "remove must serialize raw-peer snapshot/use through clientdata withdrawal"
+        )
+
+    fresh_arm_check = request.find(
+        "if (!max9296_prepare_lease_can_arm_locked(sensor, generation)"
+    )
+    fresh_arm_exit = request.find("goto unlock", fresh_arm_check)
+    if not (
+        0 <= fresh_arm_check < fresh_arm_exit
+        and "goto release_unarmed_lease" in request[fresh_arm_check:fresh_arm_exit]
+    ):
+        failures.append("fresh prepare arm failure bypasses common lease cleanup")
+    unarmed_cleanup = request[request.find("release_unarmed_lease:"):]
+    unarmed_drop = unarmed_cleanup.find("max9296_drop_fsync_contract_locked")
+    unarmed_lease_clear = unarmed_cleanup.find("prepare_lease_held = false")
+    unarmed_power_put = unarmed_cleanup.find("max9296_set_power(sensor, false)")
+    if not (0 <= unarmed_drop < unarmed_lease_clear < unarmed_power_put):
+        failures.append(
+            "unarmed prepare must drop its FSYNC reservation before ownership"
+        )
+
     for attr_lifecycle in (
         "device_create_file(&client->dev, &dev_attr_prepare)",
         "device_remove_file(&client->dev, &dev_attr_prepare)",
@@ -802,6 +1120,13 @@ def check_source(source: str, failures: list[str]) -> None:
     ):
         if "max9296_mark_prepare_stale_locked" not in body:
             failures.append(f"{name} rewrite cannot mark a changed request stale")
+    interval_contract = set_interval.find("max9296_update_shared_fsync_locked")
+    interval_stale = set_interval.find("max9296_mark_prepare_stale_locked")
+    if not (0 <= interval_contract < interval_stale):
+        failures.append("V4L2 FPS path does not reject shared mismatch before mutation")
+    for token in ("WRITE_ONCE(peer->fps, fps)", "WRITE_ONCE(peer->frame_interval"):
+        if token not in fsync_contract:
+            failures.append(f"legacy shared-FPS propagation missing: {token}")
     if set_fmt.find("V4L2_SUBDEV_FORMAT_TRY") > set_fmt.find(
         "max9296_mark_prepare_stale_locked"
     ):
@@ -869,6 +1194,13 @@ def check_source(source: str, failures: list[str]) -> None:
     for name, body in (("fsync", fsync), ("enable", enable)):
         if "max9296_stream_epoch_current" not in body:
             failures.append(f"{name} lacks current-epoch stream gate")
+    if (
+        "READ_ONCE(sensor->fps)" not in fsync
+        or "READ_ONCE(sensor->shared.sensor->fps)" not in fsync
+    ):
+        failures.append(
+            "physical shared-FSYNC cadence does not consume the synchronized FPS"
+        )
 
     actual_pulses = re.findall(
         r"gpiod_set_value_cansleep\s*\([^;]*fsync_gpio[^;]*;", code, re.S
