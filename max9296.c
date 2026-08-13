@@ -456,6 +456,7 @@ struct max9296_dev {
     struct v4l2_subdev *sd;
     struct max9296_dev *sensor;
     struct task_struct *thread_shared_init;
+    bool probe_ready;
   } shared;
 };
 
@@ -3797,8 +3798,18 @@ static int max9296_enable(void *data) {
 }
 
 //-------------------------------------------------------------------------
+/*
+ * This lock protects only the probe publication handshake.  v4l2's I2C
+ * helper publishes clientdata before probe has passed its later fallible
+ * setup, so a sibling resolver must not turn that pointer into a long-lived
+ * shared.sensor until probe_ready is committed.  Normal bound-device removal
+ * retains its existing lifetime protocol and is outside this narrow lock.
+ */
+static DEFINE_MUTEX(max9296_shared_lock);
+
 static int max9296_shared_init(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
+  bool resolved;
 
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
@@ -3809,40 +3820,62 @@ static int max9296_shared_init(void *data) {
     if (kthread_should_stop())
       break;
 
-    if (sensor->shared.sensor == NULL) {
-      if (sensor->shared.client == NULL) {
-        sensor->shared.client = of_find_i2c_device_by_node(sensor->shared.np);
-        if (sensor->shared.client == NULL) {
-          // dev_warn(&sensor->i2c_client->dev, "warning not found i2c_client
-          // from handle.. this device works in single mode..\n");
-          usleep_range(10000, 11000);
-        } else {
-          sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
-          if (sensor->shared.sd == NULL)
-            usleep_range(10000, 11000);
-          else {
-            sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
-            if (sensor->shared.sensor == NULL)
-              usleep_range(10000, 11000);
-          }
-        }
-      } else {
-        sensor->shared.sd = i2c_get_clientdata(sensor->shared.client);
-        if (sensor->shared.sd == NULL)
-          usleep_range(10000, 11000);
-        else {
-          sensor->shared.sensor = to_max9296_dev(sensor->shared.sd);
-          if (sensor->shared.sensor == NULL)
-            usleep_range(10000, 11000);
+    resolved = false;
+    mutex_lock(&max9296_shared_lock);
+    if (sensor->shared.client == NULL)
+      sensor->shared.client = of_find_i2c_device_by_node(sensor->shared.np);
+
+    if (sensor->shared.client != NULL) {
+      struct v4l2_subdev *sd = i2c_get_clientdata(sensor->shared.client);
+
+      if (sd != NULL) {
+        struct max9296_dev *peer = to_max9296_dev(sd);
+
+        if (peer != sensor && READ_ONCE(peer->shared.probe_ready)) {
+          sensor->shared.sd = sd;
+          WRITE_ONCE(sensor->shared.sensor, peer);
+          resolved = true;
         }
       }
-    } else
+    }
+    mutex_unlock(&max9296_shared_lock);
+
+    if (resolved)
       break;
+
+    usleep_range(10000, 11000);
   }
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
+}
+
+/* Release only resources owned by this failed probe.  probe_ready is committed
+ * after the final fallible setup step, so no sibling resolver can have
+ * published this never-bound devm object. */
+static void max9296_release_probe_shared(struct max9296_dev *sensor) {
+  if (sensor->shared.thread_shared_init &&
+      !IS_ERR(sensor->shared.thread_shared_init)) {
+    kthread_stop(sensor->shared.thread_shared_init);
+    put_task_struct(sensor->shared.thread_shared_init);
+  }
+  sensor->shared.thread_shared_init = NULL;
+
+  mutex_lock(&max9296_shared_lock);
+  WRITE_ONCE(sensor->shared.probe_ready, false);
+  if (i2c_get_clientdata(sensor->i2c_client) == &sensor->sd)
+    i2c_set_clientdata(sensor->i2c_client, NULL);
+  mutex_unlock(&max9296_shared_lock);
+
+  sensor->shared.sensor = NULL;
+  sensor->shared.sd = NULL;
+  if (sensor->shared.client) {
+    put_device(&sensor->shared.client->dev);
+    sensor->shared.client = NULL;
+  }
+  of_node_put(sensor->shared.np);
+  sensor->shared.np = NULL;
 }
 
 //-------------------------------------------------------------------------
@@ -4390,19 +4423,22 @@ static int max9296_probe(struct i2c_client *client) {
       printk(KERN_NOTICE "[%s:%d][%s:%d] shared Init", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
       sensor->shared.thread_shared_init =
-          kthread_run(max9296_shared_init, sensor, "max9296_shared_init");
+          kthread_create(max9296_shared_init, sensor, "max9296_shared_init");
       if (IS_ERR(sensor->shared.thread_shared_init)) {
         printk(KERN_CRIT
                "[%s:%d][%s:%d] sensor->shared.thread_shared_init error",
                KEYWORD, client->adapter->nr, _FILE_, __LINE__);
         /*
          * ret still holds the 0 from v4l2_fwnode_endpoint_parse() here, so
-         * without this probe would report success on a failed kthread_run.
+         * without this probe would report success on a failed kthread_create.
          */
         ret = PTR_ERR(sensor->shared.thread_shared_init);
         goto entity_cleanup;
       }
+      /* The resolver can return immediately when its peer is already ready.
+       * Pin the task before waking it so cleanup can always stop/put safely. */
       get_task_struct(sensor->shared.thread_shared_init);
+      wake_up_process(sensor->shared.thread_shared_init);
     }
   }
 
@@ -4410,7 +4446,9 @@ static int max9296_probe(struct i2c_client *client) {
   // sensor->thread_fw_init = kthread_run(max9296_fw_init, sensor,
   // "max9296_fw_init");
 
+  mutex_lock(&max9296_shared_lock);
   v4l2_i2c_subdev_init(&sensor->sd, client, &max9296_subdev_ops);
+  mutex_unlock(&max9296_shared_lock);
 
   sensor->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS;
   sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
@@ -4499,19 +4537,12 @@ static int max9296_probe(struct i2c_client *client) {
            sensor->ctrl_cache.ch1.gain, sensor->ctrl_cache.ch1.hflip,
            sensor->ctrl_cache.ch1.vflip, sensor->ctrl_cache.exposure);
 
-  ret = v4l2_async_register_subdev_sensor_common(&sensor->sd);
-  if (ret) {
-    printk(KERN_CRIT
-           "[%s:%d][%s:%d] v4l2_async_register_subdev_sensor_common error(%d)",
-           KEYWORD, client->adapter->nr, _FILE_, __LINE__, ret);
-    goto free_ctrls;
-  }
-
   if (sensor->fsync_gpio != NULL) {
     sensor->thread_fsync = kthread_run(max9296_fsync, sensor, "max9296_fsync");
     if (IS_ERR(sensor->thread_fsync)) {
       printk(KERN_CRIT "[%s:%d][%s:%d] sensor thread fsync error", KEYWORD,
              client->adapter->nr, _FILE_, __LINE__);
+      ret = PTR_ERR(sensor->thread_fsync);
       goto free_ctrls;
     }
   }
@@ -4522,6 +4553,7 @@ static int max9296_probe(struct i2c_client *client) {
   if (IS_ERR(sensor->thread_en)) {
     printk(KERN_CRIT "[%s:%d][%s:%d] sensor thread enable error", KEYWORD,
            client->adapter->nr, _FILE_, __LINE__);
+    ret = PTR_ERR(sensor->thread_en);
     goto free_ctrls;
   }
   if (device_create_file(&client->dev, &dev_attr_rotate) != 0) {
@@ -4549,11 +4581,29 @@ static int max9296_probe(struct i2c_client *client) {
     goto remove_link_status_attr;
   }
 
+  /* Keep async registration as the final fallible step.  Once registered,
+   * external V4L2 operations may start custom firmware work that the ordinary
+   * probe unwind cannot safely drain. */
+  ret = v4l2_async_register_subdev_sensor_common(&sensor->sd);
+  if (ret) {
+    printk(KERN_CRIT
+           "[%s:%d][%s:%d] v4l2_async_register_subdev_sensor_common error(%d)",
+           KEYWORD, client->adapter->nr, _FILE_, __LINE__, ret);
+    goto remove_health_raw_attr;
+  }
+
+  /* Final non-failing commit: sibling resolvers may publish us only now. */
+  mutex_lock(&max9296_shared_lock);
+  WRITE_ONCE(sensor->shared.probe_ready, true);
+  mutex_unlock(&max9296_shared_lock);
+
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   return 0;
 
+remove_health_raw_attr:
+  device_remove_file(&client->dev, &dev_attr_health_raw);
 remove_link_status_attr:
   device_remove_file(&client->dev, &dev_attr_link_status);
 remove_enable_attr:
@@ -4562,30 +4612,18 @@ remove_rotate_attr:
   device_remove_file(&client->dev, &dev_attr_rotate);
 free_ctrls:
   /* Stop threads that were already started */
-  if (sensor->thread_en && !IS_ERR(sensor->thread_en))
+  if (sensor->thread_en && !IS_ERR(sensor->thread_en)) {
     kthread_stop(sensor->thread_en);
-  if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync))
+    sensor->thread_en = NULL;
+  }
+  if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync)) {
     kthread_stop(sensor->thread_fsync);
+    sensor->thread_fsync = NULL;
+  }
 
   v4l2_ctrl_handler_free(&sensor->ctrls.handler);
 entity_cleanup:
-  /*
-   * The peer-resolver kthread has to be stopped on EVERY error path reachable
-   * after its kthread_run(), which is why it lives in the common tail rather
-   * than under free_ctrls. sensor is devm-allocated, so returning an error
-   * frees it while that thread is still dereferencing sensor->shared.* every
-   * 10 ms - and when the peer never resolves it never breaks out on its own,
-   * leaving a zombie thread on freed memory. The IS_ERR guard covers the
-   * kthread_run failure path, which jumps here with an ERR_PTR in hand.
-   */
-  if (sensor->shared.thread_shared_init &&
-      !IS_ERR(sensor->shared.thread_shared_init)) {
-    kthread_stop(sensor->shared.thread_shared_init);
-    put_task_struct(sensor->shared.thread_shared_init);
-  }
-  sensor->shared.thread_shared_init = NULL;
-  of_node_put(sensor->shared.np);
-  sensor->shared.np = NULL;
+  max9296_release_probe_shared(sensor);
 
   media_entity_cleanup(&sensor->sd.entity);
   mutex_destroy(&sensor->lock);
