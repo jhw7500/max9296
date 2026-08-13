@@ -254,6 +254,7 @@ enum max9296_state {
   MAX9296_STATE_IDLE = 0,
   MAX9296_STATE_RUNNING,
   MAX9296_STATE_DONE,
+  MAX9296_STATE_FAILED,
   MAX9296_STATE_MAX,
 };
 
@@ -289,6 +290,24 @@ struct max9296_mode_info {
   const struct reg_value *reg_data;
   u32 reg_data_size;
   u32 max_fps;
+};
+
+/*
+ * Normalized identity of the hardware programming performed before STREAMON.
+ *
+ * mode is deliberately part of the identity rather than only mode->id: the
+ * left and right single-channel tables have the same mode id and dimensions,
+ * but program different physical inputs.  Request generation belongs to the
+ * userspace orchestration state and is therefore not part of this hardware
+ * fingerprint.
+ */
+struct max9296_hw_fingerprint {
+  const struct max9296_mode_info *mode;
+  u32 width;
+  u32 height;
+  u32 code;
+  u32 fps;
+  u32 enable;
 };
 
 struct max9296_ctrls {
@@ -386,7 +405,6 @@ struct max9296_dev {
   struct gpio_desc *fsync_gpio;
   struct task_struct *thread_fsync;
   struct task_struct *thread_en;
-  struct task_struct *thread_fw_init;
 
   // state
   /*
@@ -420,10 +438,6 @@ struct max9296_dev {
     bool hinf_valid[2];
   } health;
 
-  // for firmware
-  struct work_struct fw_work;
-  wait_queue_head_t fw_wait;
-
   /* lock to protect all members below */
   struct mutex lock;
 
@@ -442,6 +456,12 @@ struct max9296_dev {
   bool pending_mode_change;
   bool streaming;
   unsigned int stream_on;
+
+  /* Hardware readiness is independent of a userspace prepare request. */
+  struct max9296_hw_fingerprint initialized_fingerprint;
+  bool hardware_valid;
+  u64 initialized_epoch;
+  u64 stream_commit_epoch;
 
   unsigned int fps;
   unsigned int rotate;
@@ -803,11 +823,10 @@ static const struct max9296_mode_info max9296_mode_data_FHD_R = {
 /* True when the hardware is currently programmed for both cameras.
  *
  * Deliberately reads last_mode, not current_mode. current_mode is the requested
- * format and max9296_set_fmt() moves it with no gate, while the register tables
- * are loaded at most once per probe lifetime (max9296_load_regs is gated on
- * sensor->restart). last_mode is assigned in max9296_set_mode() right before
- * load_regs, so it alone says which table the hardware actually received - and
- * the serializer address is a property of that, not of the pending format.
+ * format and max9296_set_fmt() moves it with no gate. last_mode is assigned in
+ * max9296_set_mode() right before load_regs, so it alone says which table the
+ * hardware actually received - and the serializer address is a property of
+ * that, not of the pending format.
  * A dual stream followed by stream-off and an S_FMT to a single mode leaves a
  * serializer physically at 0x60 while current_mode already reads single.
  */
@@ -825,10 +844,11 @@ static bool max9296_hw_is_dual(const struct max9296_dev *sensor) {
  * the only serializer self-address write in this driver. The single-channel
  * tables (max9296_init_setting_720p_30fps_L/_R) carry no such remap and address
  * the serializer exclusively at 0x40 - including MAX9295_REG_MFP4_CTRL itself.
- * max9296_load_regs() also runs at most once per probe lifetime (gated on
- * sensor->restart), so the dual remap and a single-channel table can never both
- * execute. In single-channel mode the one serializer therefore always answers at
- * its power-on default 0x40, whichever local channel is active.
+ * The current-epoch fingerprint prevents a dual and single table from both
+ * executing in one board-power lifetime; a real power reset advances the epoch
+ * and restores the serializer's default address before another table may run.
+ * In single-channel mode the one serializer therefore answers at its power-on
+ * default 0x40, whichever local channel is active.
  *
  * Confirmed on the bench (ch1 single-channel unit):
  *   i2ctransfer -f -y -a 2 w3@0x60 0x02 0xca 0x90   -> NAK
@@ -1405,7 +1425,7 @@ static int max9296_load_regs(struct max9296_dev *sensor,
   const struct reg_value *regs = mode->reg_data;
   unsigned int i;
   int ret = 0;
-  int local_err = 0;
+  int first_err = 0;
   /*
    * Despite the names these are CHANNEL-position flags, not GMSL PHY flags:
    * link_a_err -> the even channel (ch0/ch2), link_b_err -> the odd one
@@ -1436,6 +1456,13 @@ static int max9296_load_regs(struct max9296_dev *sensor,
     ret = maxim_ops_i2c_write(sensor, slave_addr, reg_addr, val, reg_byte,
                               val_byte);
     if (ret < 0) {
+      /* Keep walking the table so every disconnected channel is attributed,
+       * but make hardware preparation truthful: any failed table write makes
+       * the complete preparation fail.  Preserve the first errno rather than
+       * letting later successes or failures overwrite its root cause. */
+      if (!first_err)
+        first_err = ret;
+
       if (slave_addr == 0x40) {
         /*
          * 0x40 does NOT imply a GMSL PHY here - see the note on the err flags
@@ -1457,8 +1484,6 @@ static int max9296_load_regs(struct max9296_dev *sensor,
           link_a_err = true;
       } else if (slave_addr == 0x60) {
         link_b_err = true;
-      } else {
-        local_err = ret;
       }
     }
 
@@ -1485,8 +1510,7 @@ static int max9296_load_regs(struct max9296_dev *sensor,
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
-  /* MAX9296 local register failure is fatal; serializer failure is not */
-  return local_err;
+  return first_err;
 }
 
 static int max9296_set_autoexposure(struct max9296_dev *sensor, bool on) {
@@ -1679,6 +1703,12 @@ static void max9296_set_power_off(struct max9296_dev *sensor) {
  */
 static DEFINE_MUTEX(max9296_power_lock);
 static int max9296_power_users;
+/*
+ * Identifies one continuous board-power lifetime.  Fingerprints programmed in
+ * an older lifetime must never be used to skip initialization.  All writers
+ * hold max9296_power_lock; readers use READ_ONCE while holding sensor->lock.
+ */
+static u64 max9296_hw_epoch = 1;
 
 static int max9296_set_power(struct max9296_dev *sensor, bool on) {
   int ret = 0;
@@ -1704,6 +1734,10 @@ static int max9296_set_power(struct max9296_dev *sensor, bool on) {
          on ? "on" : "off", max9296_power_users, run ? "run" : "skip");
 
   if (run) {
+    /* Invalidate every previously programmed fingerprint before the physical
+     * transition starts.  This also closes the legacy close/open hole where
+     * restart used to skip firmware after a real board power cycle. */
+    max9296_hw_epoch++;
     sensor->state.power = MAX9296_STATE_RUNNING;
 
     if (on)
@@ -3141,8 +3175,14 @@ static int start_fw_load(struct i2c_client *client) {
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   ret = maxim_ops_i2c_write(sensor, 0x3c, 0xf05a, 0x0014, 2, 2);
+  if (ret)
+    return ret;
   ret = maxim_ops_i2c_write(sensor, 0x3c, 0x6024, 0x00300000, 2, 4);
+  if (ret)
+    return ret;
   ret = maxim_ops_i2c_write(sensor, 0x3c, 0x6034, 0x012c0000, 2, 4);
+  if (ret)
+    return ret;
 
   msleep(100);
   if (debug)
@@ -3170,16 +3210,20 @@ static int end_fw_load(struct i2c_client *client) {
 
 static int fw_write(struct i2c_client *client, const u8 *data, int size) {
   unsigned short addr = client->addr; /* chip address - NOTE: 7bit	*/
+  int ret;
 
   client->addr = 0x3c;
-
-  if (i2c_master_send(client, data, size) < size) {
-    client->addr = addr;
-    v4l_err(client, "firmware load i2c failure\n");
-    return -ENOSYS;
-  }
-
+  ret = i2c_master_send(client, data, size);
   client->addr = addr;
+
+  if (ret < 0) {
+    v4l_err(client, "firmware load i2c failure: %d\n", ret);
+    return ret;
+  }
+  if (ret != size) {
+    v4l_err(client, "firmware load short i2c write: %d/%d\n", ret, size);
+    return -EIO;
+  }
 
   return 0;
 }
@@ -3190,7 +3234,7 @@ static const char *get_fw_name(struct i2c_client *client) {
   else
     return MAX9296_FIRMWARE;
 }
-int max9296_loadfw(struct i2c_client *client) {
+static int max9296_loadfw(struct i2c_client *client) {
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
   const struct firmware *fw = NULL;
@@ -3203,17 +3247,19 @@ int max9296_loadfw(struct i2c_client *client) {
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  if (request_firmware(&fw, fwname, FWDEV(client)) != 0) {
+  retval = request_firmware(&fw, fwname, FWDEV(client));
+  if (retval) {
     // v4l_err(client, "unable to open firmware %s\n", fwname);
     printk(KERN_CRIT "[%s:%d][%s:%d] unable to open firmware %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, fwname);
-    return -EINVAL;
+    return retval;
   }
 
   retval = start_fw_load(client);
   if (retval < 0) {
     printk(KERN_CRIT "[%s:%d][%s:%d] start firmware load i2c failure", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__);
+    release_firmware(fw);
     return retval;
   }
 
@@ -3260,6 +3306,7 @@ int max9296_loadfw(struct i2c_client *client) {
   if (retval < 0) {
     printk(KERN_CRIT "[%s:%d][%s:%d] end firmware load i2c failure", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__);
+    release_firmware(fw);
     return retval;
   }
 
@@ -3275,114 +3322,206 @@ int max9296_loadfw(struct i2c_client *client) {
   printk(KERN_NOTICE "[%s:%d][%s:%d] loaded %s firmware (%d bytes)", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, get_fw_name(client),
          size);
-  sensor->state.firmware = MAX9296_STATE_DONE;
-
   return 0;
 }
 
 MODULE_FIRMWARE(MAX9296_FIRMWARE);
 
-//-------------------------------------------------------------------------------------
-static void max9296_fw_work_handler(struct work_struct *work) {
-  struct max9296_dev *sensor = container_of(work, struct max9296_dev, fw_work);
+/* Resolve the requested format to the exact register table that will be
+ * programmed.  The right-hand single-channel tables share their public mode
+ * ids with the left-hand tables, so current_mode alone is not a complete
+ * hardware identity. */
+static const struct max9296_mode_info *
+max9296_resolve_prepare_mode_locked(const struct max9296_dev *sensor) {
+  const struct max9296_mode_info *mode = sensor->current_mode;
 
-  if (debug)
-    printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
-           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+  if (!mode)
+    return NULL;
 
-  if (max9296_loadfw(sensor->i2c_client) != 0)
-    sensor->state.firmware = MAX9296_STATE_DONE;
-
-  wake_up(&sensor->fw_wait);
+  switch (mode->id) {
+  case MAX9296_MODE_1280x720:
+    return sensor->enable == 0x02 ? &max9296_mode_data_HD_R
+                                  : &max9296_mode_data[MAX9296_MODE_1280x720];
+  case MAX9296_MODE_1920x1080:
+    return sensor->enable == 0x02
+               ? &max9296_mode_data_FHD_R
+               : &max9296_mode_data[MAX9296_MODE_1920x1080];
+  case MAX9296_MODE_2560x720:
+    return &max9296_mode_data[MAX9296_MODE_2560x720];
+  case MAX9296_MODE_3840x1080:
+    return &max9296_mode_data[MAX9296_MODE_3840x1080];
+  default:
+    return NULL;
+  }
 }
 
-//-------------------------------------------------------------------------
-static int max9296_load_firmware(struct v4l2_subdev *sd) {
-  struct max9296_dev *sensor = to_max9296_dev(sd);
-  struct workqueue_struct *q;
-  char str[64] = {
-      0,
-  };
-  if (debug)
-    printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
-           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+static int max9296_normalize_fingerprint_locked(
+    const struct max9296_dev *sensor, struct max9296_hw_fingerprint *fingerprint) {
+  const struct max9296_mode_info *mode;
 
-  DEFINE_WAIT(wait);
+  mode = max9296_resolve_prepare_mode_locked(sensor);
+  if (!mode)
+    return -EINVAL;
 
-  INIT_WORK(&sensor->fw_work, max9296_fw_work_handler);
-  init_waitqueue_head(&sensor->fw_wait);
-  snprintf(str, sizeof(str), "max9296_fw_%s",
-           dev_name(&sensor->i2c_client->dev));
-  q = create_singlethread_workqueue(str);
-  if (q) {
-    prepare_to_wait(&sensor->fw_wait, &wait, TASK_UNINTERRUPTIBLE);
-    queue_work(q, &sensor->fw_work);
-    schedule();
-    finish_wait(&sensor->fw_wait, &wait);
-    destroy_workqueue(q);
-  }
+  fingerprint->mode = mode;
+  fingerprint->width = mode->width;
+  fingerprint->height = mode->height;
+  fingerprint->code = sensor->fmt.code;
+  fingerprint->fps = sensor->fps;
+  fingerprint->enable = sensor->enable;
 
   return 0;
 }
 
-//-------------------------------------------------------------------------
-static int max9296_set_mode(struct max9296_dev *sensor) {
-  const struct max9296_mode_info *mode = sensor->current_mode;
-  int ret = 0;
+static bool max9296_prepare_matches_locked(
+    const struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint) {
+  const struct max9296_hw_fingerprint *initialized =
+      &sensor->initialized_fingerprint;
+
+  return initialized->mode == fingerprint->mode &&
+         initialized->width == fingerprint->width &&
+         initialized->height == fingerprint->height &&
+         initialized->code == fingerprint->code &&
+         initialized->fps == fingerprint->fps &&
+         initialized->enable == fingerprint->enable;
+}
+
+static int max9296_set_mode(
+    struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint) {
+  const struct max9296_mode_info *mode = fingerprint->mode;
+  int ret;
+
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s width:%d, height:%d, enable:0x%02x",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-           __FUNCTION__, mode->width, mode->height, sensor->enable);
+           __FUNCTION__, mode->width, mode->height, fingerprint->enable);
   sensor->state.init = MAX9296_STATE_RUNNING;
-
-  if (sensor->enable == 0x02) {
-    if (debug)
-      printk(KERN_NOTICE "[%s:%d][%s:%d] mode change : right", KEYWORD,
-             sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-    if (mode->width == 1280 && mode->height == 720) {
-      sensor->current_mode = &max9296_mode_data_HD_R;
-    } else if (mode->width == 1920 && mode->height == 1080) {
-      sensor->current_mode = &max9296_mode_data_FHD_R;
-    }
-  }
-  mode = sensor->current_mode;
   sensor->last_mode = mode;
 
   ret = max9296_load_regs(sensor, mode);
 
-  sensor->state.init = MAX9296_STATE_DONE;
+  sensor->state.init = ret ? MAX9296_STATE_FAILED : MAX9296_STATE_DONE;
 
   return ret;
 }
 
-//-------------------------------------------------------------------------
-static int max9296_fw_init(void *data) {
-  struct max9296_dev *sensor = (struct max9296_dev *)data;
-  if (debug)
-    printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
-           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  while (!kthread_should_stop()) {
-    set_current_state(TASK_INTERRUPTIBLE);
+/* Program the registers that historically followed firmware completion in
+ * s_stream().  Keep this separate from stream commit: it must not enable MIPI,
+ * start FSYNC, publish stream_on, or mark the subdevice streaming. */
+static int max9296_post_firmware_program_locked(
+    struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint) {
+  int ret;
 
-    if (sensor->state.firmware == MAX9296_STATE_DONE) {
-      schedule();
-      continue;
-    }
+  sensor->state.enable = MAX9296_STATE_RUNNING;
 
-    if (sensor->state.firmware == MAX9296_STATE_IDLE)
-      sensor->state.firmware = MAX9296_STATE_RUNNING;
+  if (fingerprint->mode->id != MAX9296_MODE_3840x1080 &&
+      fingerprint->mode->id != MAX9296_MODE_1920x1080) {
+    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0001, 2, 2);
+    if (ret)
+      goto failed;
+    usleep_range(10000, 11000);
 
-    max9296_load_firmware(&sensor->sd);
+    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x2000, 0x0500, 2, 2);
+    if (ret)
+      goto failed;
+    usleep_range(10000, 11000);
 
-    if (sensor->state.firmware != MAX9296_STATE_DONE)
-      msleep(300);
+    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x2002, 0x02d0, 2, 2);
+    if (ret)
+      goto failed;
+    usleep_range(10000, 11000);
+
+    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0013, 2, 2);
+    if (ret)
+      goto failed;
+    usleep_range(10000, 11000);
+
+    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x1010, 0x0140, 2, 2);
+    if (ret)
+      goto failed;
+    usleep_range(10000, 11000);
   }
+
+  ret = maxim_ops_i2c_write(sensor, 0x3c, 0x1186, 0x038a, 2, 2);
+  if (ret)
+    goto failed;
+
+  if (fingerprint->mode->id == MAX9296_MODE_2560x720 ||
+      fingerprint->mode->id == MAX9296_MODE_3840x1080) {
+    ret = maxim_ops_i2c_write(sensor, 0x00, 0x0471, 0x83, 2, 1);
+    if (ret)
+      goto failed;
+    msleep(500);
+  }
+
+  sensor->state.enable = MAX9296_STATE_DONE;
+  return 0;
+
+failed:
+  sensor->state.enable = MAX9296_STATE_FAILED;
+  return ret;
+}
+
+/*
+ * Synchronous, truthful initialization shared by the legacy STREAMON path and
+ * the forthcoming pre-GStreamer prepare command.  sensor->lock is held by the
+ * caller.  A fingerprint is published only after every hardware step succeeds.
+ */
+static int max9296_prepare_hardware_locked(
+    struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint) {
+  int ret;
+
+  sensor->hardware_valid = false;
+  sensor->initialized_epoch = 0;
+  sensor->stream_commit_epoch = 0;
+  sensor->ctrl_cache.firmware_ready = false;
+  sensor->state.firmware = MAX9296_STATE_IDLE;
+  sensor->state.enable = MAX9296_STATE_IDLE;
+
+  ret = max9296_set_mode(sensor, fingerprint);
+  if (ret)
+    return ret;
+
+  sensor->state.firmware = MAX9296_STATE_RUNNING;
+  ret = max9296_loadfw(sensor->i2c_client);
+  if (ret) {
+    sensor->state.firmware = MAX9296_STATE_FAILED;
+    return ret;
+  }
+  sensor->state.firmware = MAX9296_STATE_DONE;
+
+  ret = max9296_post_firmware_program_locked(sensor, fingerprint);
+  if (ret)
+    return ret;
+
+  sensor->initialized_fingerprint = *fingerprint;
+  sensor->initialized_epoch = READ_ONCE(max9296_hw_epoch);
+  sensor->hardware_valid = true;
 
   return 0;
 }
 
+static void max9296_stream_commit_locked(struct max9296_dev *sensor) {
+  /* Preserve the old quick-restart control behaviour without using restart as
+   * evidence that firmware survived a board power transition. */
+  if (sensor->restart && sensor->ctrl_cache.firmware_ready) {
+    sensor->ctrl_cache.pending = true;
+    max9296_apply_cached_controls(sensor);
+  }
+
+  sensor->stream_commit_epoch = READ_ONCE(max9296_hw_epoch);
+  sensor->stream_on = 1;
+  sensor->restart = 0;
+}
+
 static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
+  struct max9296_hw_fingerprint fingerprint;
+  u64 epoch;
   int ret = 0;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s (%d)", KEYWORD,
@@ -3392,67 +3531,25 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
   mutex_lock(&sensor->lock);
 
   if (enable) {
-    // init deserializer & serializer, load firmware
+    ret = max9296_normalize_fingerprint_locked(sensor, &fingerprint);
+    if (ret)
+      goto out;
 
-    if ((sensor->restart == 0)) {
-      ret = max9296_set_mode(sensor);
-      if (ret < 0) {
-        printk(KERN_CRIT "[%s:%d][%s:%d] %s fail!", KEYWORD,
-               sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-        // goto out;
-      }
-
-      sensor->thread_fw_init =
-          kthread_run(max9296_fw_init, sensor, "max9296_fw_init");
-      if (IS_ERR(sensor->thread_fw_init)) {
-        printk(KERN_CRIT "[%s:%d][%s:%d] %s goto", KEYWORD,
-               sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+    epoch = READ_ONCE(max9296_hw_epoch);
+    if (sensor->hardware_valid && sensor->initialized_epoch == epoch) {
+      if (!max9296_prepare_matches_locked(sensor, &fingerprint)) {
+        /* Switching dual/left/right programming without a board reset is not
+         * safe: a dual table may have remapped a serializer to 0x60. */
+        ret = -ESTALE;
         goto out;
       }
-
-      while (sensor->state.firmware != MAX9296_STATE_DONE)
-        msleep(100);
-
-      sensor->state.enable = MAX9296_STATE_RUNNING;
-
-      if ((sensor->current_mode->id != MAX9296_MODE_3840x1080) &&
-          (sensor->current_mode->id != MAX9296_MODE_1920x1080)) {
-        maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0001, 2, 2);
-        usleep_range(10000, 11000);
-        maxim_ops_i2c_write(sensor, 0x3c, 0x2000, 0x0500, 2, 2);
-        usleep_range(10000, 11000);
-        maxim_ops_i2c_write(sensor, 0x3c, 0x2002, 0x02d0, 2, 2);
-        usleep_range(10000, 11000);
-        maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0013, 2, 2);
-        usleep_range(10000, 11000);
-        maxim_ops_i2c_write(sensor, 0x3c, 0x1010, 0x0140, 2, 2);
-        usleep_range(10000, 11000);
-      }
-      // maxim_ops_i2c_write(sensor, 0x3c, 0x2012, 0x0040, 2, 2); //format
-      // RGB888 default YUV422 maxim_ops_i2c_write(sensor, 0x3c, 0x2012, 0x0041,
-      // 2, 2, 100); //format RGB565 default YUV422
-
-      maxim_ops_i2c_write(sensor, 0x3c, 0x1186, 0x038A, 2, 2);
-
-      if ((sensor->current_mode->id == MAX9296_MODE_2560x720) ||
-          (sensor->current_mode->id == MAX9296_MODE_3840x1080)) {
-        maxim_ops_i2c_write(sensor, 0x00, 0x0471, 0x83, 2, 1);
-        msleep(500);
-      }
-
-      sensor->state.enable = MAX9296_STATE_DONE;
-
-      sensor->stream_on = 1;
     } else {
-      /* Stream restart: reapply V4L2 controls */
-      if (sensor->ctrl_cache.firmware_ready) {
-        sensor->ctrl_cache.pending = true; /* Force re-apply */
-        max9296_apply_cached_controls(sensor);
-      }
-
-      sensor->stream_on = 1;
-      sensor->restart = 0;
+      ret = max9296_prepare_hardware_locked(sensor, &fingerprint);
+      if (ret)
+        goto out;
     }
+
+    max9296_stream_commit_locked(sensor);
   } else {
     ret = max9296_set_stream_mipi(sensor, enable);
 
@@ -3467,6 +3564,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * streaming. Cancel the request here instead.
      */
     sensor->stream_on = 0;
+    sensor->stream_commit_epoch = 0;
 
     sensor->state.fsync = MAX9296_STATE_IDLE;
 
@@ -4442,10 +4540,6 @@ static int max9296_probe(struct i2c_client *client) {
     }
   }
 
-  // max9296_set_power(sensor, 1);
-  // sensor->thread_fw_init = kthread_run(max9296_fw_init, sensor,
-  // "max9296_fw_init");
-
   mutex_lock(&max9296_shared_lock);
   v4l2_i2c_subdev_init(&sensor->sd, client, &max9296_subdev_ops);
   mutex_unlock(&max9296_shared_lock);
@@ -4707,10 +4801,6 @@ static int max9296_remove(struct i2c_client *client) {
   if (sensor->thread_fsync && !IS_ERR(sensor->thread_fsync)) {
     kthread_stop(sensor->thread_fsync);
     sensor->thread_fsync = NULL;
-  }
-  if (sensor->thread_fw_init && !IS_ERR(sensor->thread_fw_init)) {
-    kthread_stop(sensor->thread_fw_init);
-    sensor->thread_fw_init = NULL;
   }
   if (sensor->shared.thread_shared_init &&
       !IS_ERR(sensor->shared.thread_shared_init)) {
