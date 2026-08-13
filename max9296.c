@@ -1624,6 +1624,159 @@ static u64 max9296_calc_pixel_rate(struct max9296_dev *sensor) {
   return rate;
 }
 
+/*
+ * Board power is a global resource, not a per-deserializer one: a single RESET
+ * net feeds every deserializer and camera module, and max9296_power() always
+ * drives both PWDN lines together. The sequence must therefore run exactly once
+ * for the first user and once for the last, whichever video node opens first.
+ *
+ * The previous handshake gated on the peer's state.power, but max9296_s_power()
+ * cleared both channels' state.power to IDLE on every close - including the
+ * closes where the sequence had been skipped precisely because the peer was
+ * still up. Reopening that channel then saw the peer as IDLE and re-ran the
+ * whole power-on: global RESET asserted ~2 s and both PWDN pulled for ~4 s,
+ * killing a peer that was mid-stream. A plain refcount removes the state
+ * handshake entirely.
+ *
+ * max9296_power_lock also serializes the sequence itself, so a concurrent open,
+ * close, or reset-GPIO probe cannot race a second reset onto the same pins.
+ */
+static DEFINE_MUTEX(max9296_power_lock);
+/* Serializes one shared-FSYNC configuration transaction across both instances.
+ * It is held only for power acquisition plus the short cadence reservation;
+ * firmware downloads remain parallel. */
+static DEFINE_MUTEX(max9296_fsync_config_lock);
+/* Protects peer publication/lifetime admission and short peer propagation. */
+static DEFINE_MUTEX(max9296_shared_lock);
+/* The shared.sensor links are raw devm pointers.  Serialize device removal so
+ * one instance cannot free its storage while its sibling stops peer threads. */
+static DEFINE_MUTEX(max9296_remove_lock);
+static int max9296_power_users;
+/*
+ * Identifies one continuous board-power lifetime.  Fingerprints programmed in
+ * an older lifetime must never be used to skip initialization.  All writers
+ * hold max9296_power_lock; readers use READ_ONCE while holding sensor->lock.
+ */
+static u64 max9296_hw_epoch = 1;
+
+/* The DTS declares the active-low board reset only on max9296_0.  Keep its
+ * descriptor available to either instance's first/last-user transition without
+ * depending on the asynchronous raw-peer publication.  The pointer is used and
+ * withdrawn only under max9296_power_lock, before devres releases the GPIO. */
+static struct gpio_desc *max9296_board_reset_gpio;
+static struct max9296_dev *max9296_board_reset_owner;
+
+static void max9296_put_orphaned_reset_gpio_locked(void) {
+  struct gpio_desc *reset_gpio;
+
+  lockdep_assert_held(&max9296_power_lock);
+  if (max9296_power_users > 0 || max9296_board_reset_owner ||
+      !max9296_board_reset_gpio)
+    return;
+
+  reset_gpio = max9296_board_reset_gpio;
+  max9296_board_reset_gpio = NULL;
+  gpiod_put(reset_gpio);
+}
+
+static void max9296_release_board_reset_gpio(void *data) {
+  struct max9296_dev *sensor = data;
+
+  mutex_lock(&max9296_power_lock);
+  if (max9296_board_reset_owner == sensor) {
+    max9296_board_reset_owner = NULL;
+    sensor->reset_gpio = NULL;
+    /* Keep the non-devm request across a one-sided active unbind.  This
+     * preserves mux, direction, and value until a rebind adopts it or the real
+     * last user has asserted reset and releases the orphan. */
+    if (max9296_power_users > 0)
+      goto unlock;
+    max9296_put_orphaned_reset_gpio_locked();
+  }
+unlock:
+  mutex_unlock(&max9296_power_lock);
+}
+
+/* Requesting GPIOD_OUT_HIGH asserts an active-low reset immediately.  That is
+ * the safe cold-probe state, but it is destructive when the reset owner is
+ * rebound while its sibling keeps the board powered.  Serialize the users
+ * snapshot through the descriptor request: active-domain rebind uses ASIS and
+ * the next real power transition explicitly establishes output direction. */
+static int max9296_acquire_reset_gpio(struct max9296_dev *sensor) {
+  struct device *dev = &sensor->i2c_client->dev;
+  struct gpio_desc *reset_gpio;
+  enum gpiod_flags flags;
+  bool newly_requested = false;
+  int ret = 0;
+
+  if (!of_property_read_bool(dev->of_node, "reset-gpios"))
+    return 0;
+
+  mutex_lock(&max9296_power_lock);
+  if (max9296_board_reset_owner) {
+    ret = -EBUSY;
+    goto unlock;
+  }
+  reset_gpio = max9296_board_reset_gpio;
+  if (!reset_gpio) {
+    flags = max9296_power_users > 0 ? GPIOD_ASIS : GPIOD_OUT_HIGH;
+    reset_gpio = gpiod_get_optional(dev, "reset", flags);
+    if (IS_ERR(reset_gpio)) {
+      ret = PTR_ERR(reset_gpio);
+      goto unlock;
+    }
+    if (!reset_gpio)
+      goto unlock;
+    newly_requested = true;
+  }
+
+  /* Only the cleanup action is devm-managed.  The GPIO request itself must
+   * survive an active owner unbind, otherwise ASIS rebind cannot promise line
+   * continuity across the unrequested window. */
+  ret = devm_add_action(dev, max9296_release_board_reset_gpio, sensor);
+  if (ret) {
+    if (newly_requested) {
+      if (max9296_power_users > 0)
+        max9296_board_reset_gpio = reset_gpio;
+      else
+        gpiod_put(reset_gpio);
+    }
+    goto unlock;
+  }
+  sensor->reset_gpio = reset_gpio;
+  max9296_board_reset_gpio = reset_gpio;
+  max9296_board_reset_owner = sensor;
+
+unlock:
+  mutex_unlock(&max9296_power_lock);
+  return ret;
+}
+
+/* GPIOD_ASIS deliberately leaves an active peer's reset untouched at probe.
+ * Every actual first-on/last-off transition calls this under the epoch lock,
+ * making the descriptor an output with logical 1 (physical low/asserted) before
+ * the existing reset sequence toggles it. */
+static int max9296_prepare_reset_gpio_locked(
+    struct max9296_dev *sensor, struct gpio_desc **reset_gpio) {
+  int ret;
+
+  lockdep_assert_held(&max9296_power_lock);
+
+  *reset_gpio = max9296_board_reset_gpio;
+  if (!*reset_gpio)
+    *reset_gpio = sensor->reset_gpio;
+  if (!*reset_gpio)
+    return 0;
+
+  ret = gpiod_direction_output(*reset_gpio, 1);
+  if (ret) {
+    dev_err(&sensor->i2c_client->dev,
+            "failed to configure shared reset GPIO: %d\n", ret);
+    *reset_gpio = NULL;
+  }
+  return ret;
+}
+
 static void max9296_power(struct max9296_dev *sensor, bool enable) {
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s (pwdn %s)", "RST",
@@ -1641,17 +1794,18 @@ static void max9296_power(struct max9296_dev *sensor, bool enable) {
   usleep_range(10000, 11000);
 }
 
-static void max9296_reset(struct max9296_dev *sensor) {
+static int max9296_reset(struct max9296_dev *sensor) {
   struct gpio_desc *reset_gpio;
+  int ret;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", "RST",
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
-  if (sensor->shared.sensor != NULL)
-    reset_gpio = (sensor->reset_gpio ? sensor->reset_gpio
-                                     : sensor->shared.sensor->reset_gpio);
-  else
-    reset_gpio = sensor->reset_gpio;
+  ret = max9296_prepare_reset_gpio_locked(sensor, &reset_gpio);
+  if (ret) {
+    max9296_power(sensor, false);
+    return ret;
+  }
 
   max9296_power(sensor, false);
   ssleep(1);
@@ -1680,29 +1834,30 @@ static void max9296_reset(struct max9296_dev *sensor) {
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+  return 0;
 }
 
 static int max9296_set_power_on(struct max9296_dev *sensor) {
+  int ret;
+
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", "RST",
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
   usleep_range(10000, 11000);
-  max9296_reset(sensor);
+  ret = max9296_reset(sensor);
   usleep_range(10000, 11000);
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  return 0;
+  return ret;
 }
 
-static void max9296_set_power_off(struct max9296_dev *sensor) {
+static int max9296_set_power_off(struct max9296_dev *sensor) {
   struct gpio_desc *reset_gpio;
+  int ret;
+
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s start", "RST",
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
-  if (sensor->shared.sensor != NULL)
-    reset_gpio = (sensor->reset_gpio ? sensor->reset_gpio
-                                     : sensor->shared.sensor->reset_gpio);
-  else
-    reset_gpio = sensor->reset_gpio;
+  ret = max9296_prepare_reset_gpio_locked(sensor, &reset_gpio);
 
   if (reset_gpio) {
     if (debug)
@@ -1717,43 +1872,8 @@ static void max9296_set_power_off(struct max9296_dev *sensor) {
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+  return ret;
 }
-
-/*
- * Board power is a global resource, not a per-deserializer one: a single RESET
- * net feeds every deserializer and camera module, and max9296_power() always
- * drives both PWDN lines together. The sequence must therefore run exactly once
- * for the first user and once for the last, whichever video node opens first.
- *
- * The previous handshake gated on the peer's state.power, but max9296_s_power()
- * cleared both channels' state.power to IDLE on every close - including the
- * closes where the sequence had been skipped precisely because the peer was
- * still up. Reopening that channel then saw the peer as IDLE and re-ran the
- * whole power-on: global RESET asserted ~2 s and both PWDN pulled for ~4 s,
- * killing a peer that was mid-stream. A plain refcount removes the state
- * handshake entirely.
- *
- * max9296_power_lock also serializes the sequence itself, so a concurrent open
- * on the other channel waits for it instead of racing a second reset onto the
- * same pins.
- */
-static DEFINE_MUTEX(max9296_power_lock);
-/* Serializes one shared-FSYNC configuration transaction across both instances.
- * It is held only for power acquisition plus the short cadence reservation;
- * firmware downloads remain parallel. */
-static DEFINE_MUTEX(max9296_fsync_config_lock);
-/* Protects peer publication/lifetime admission and short peer propagation. */
-static DEFINE_MUTEX(max9296_shared_lock);
-/* The shared.sensor links are raw devm pointers.  Serialize device removal so
- * one instance cannot free its storage while its sibling stops peer threads. */
-static DEFINE_MUTEX(max9296_remove_lock);
-static int max9296_power_users;
-/*
- * Identifies one continuous board-power lifetime.  Fingerprints programmed in
- * an older lifetime must never be used to skip initialization.  All writers
- * hold max9296_power_lock; readers use READ_ONCE while holding sensor->lock.
- */
-static u64 max9296_hw_epoch = 1;
 
 /* Resolve the DT-declared sibling independently of shared.sensor.  The I2C
  * device reference is owned by sensor->shared.client and released exactly once
@@ -1916,11 +2036,29 @@ static int max9296_set_power(struct max9296_dev *sensor, bool on) {
     if (on)
       ret = max9296_set_power_on(sensor);
     else
-      max9296_set_power_off(sensor);
+      ret = max9296_set_power_off(sensor);
 
-    sensor->state.power = on ? MAX9296_STATE_DONE : MAX9296_STATE_IDLE;
+    /* A failed first-user transition never publishes an owner.  The reset
+     * helper has already forced PWDN low, and the advanced epoch remains as the
+     * fail-closed record that any partial physical sequence invalidated old
+     * fingerprints.  Last-off likewise relinquishes the final logical owner;
+     * PWDN was disabled even if reset direction setup failed. */
+    if (ret && on) {
+      WARN_ON(max9296_power_users != 1);
+      max9296_power_users = 0;
+      /* Direction setup may have failed before the reset helper could establish
+       * a safe line state.  Do not call that helper again; PWDN has already
+       * been driven inactive, and the next first-user attempt will retry it. */
+      max9296_power(sensor, false);
+    }
+    sensor->state.power = ret ? MAX9296_STATE_FAILED
+                              : (on ? MAX9296_STATE_DONE
+                                    : MAX9296_STATE_IDLE);
 
     if (!on)
+      max9296_put_orphaned_reset_gpio_locked();
+
+    if (!on || ret)
       ssleep(5); /* settle before any subsequent global power-on */
   }
 
@@ -3765,7 +3903,6 @@ static int max9296_prepare_request_locked(
   mutex_lock(&max9296_fsync_config_lock);
   ret = max9296_set_power(sensor, true);
   if (ret) {
-    max9296_set_power(sensor, false);
     mutex_unlock(&max9296_fsync_config_lock);
     return ret;
   }
@@ -4050,6 +4187,7 @@ static void max9296_prepare_lease_timeout(struct work_struct *work) {
   struct max9296_dev *sensor =
       container_of(to_delayed_work(work), struct max9296_dev,
                    prepare_lease_timeout);
+  int ret;
 
   mutex_lock(&sensor->lock);
   if (max9296_prepare_lease_can_arm_locked(
@@ -4058,7 +4196,8 @@ static void max9296_prepare_lease_timeout(struct work_struct *work) {
     sensor->prepare_lease_held = false;
     sensor->prepare_lease_generation = 0;
     sensor->prepare_state = MAX9296_PREP_EXPIRED;
-    max9296_set_power(sensor, false);
+    ret = max9296_set_power(sensor, false);
+    sensor->prepare_errno = ret;
     sensor->prepare_releasing = false;
   }
   mutex_unlock(&sensor->lock);
@@ -5474,12 +5613,12 @@ static int max9296_probe(struct i2c_client *client) {
     return PTR_ERR(sensor->pwdn_gpio);
   }
 
-  /* request optional reset pin */
-  sensor->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
-  if (IS_ERR(sensor->reset_gpio)) {
-    printk(KERN_CRIT "[%s:%d][%s:%d] reset gpio error", KEYWORD,
-           client->adapter->nr, _FILE_, __LINE__);
-    return PTR_ERR(sensor->reset_gpio);
+  /* Request the shared reset without disturbing an already-powered peer. */
+  ret = max9296_acquire_reset_gpio(sensor);
+  if (ret) {
+    printk(KERN_CRIT "[%s:%d][%s:%d] reset gpio error(%d)", KEYWORD,
+           client->adapter->nr, _FILE_, __LINE__, ret);
+    return ret;
   }
   if (!sensor->reset_gpio) {
     printk(KERN_WARNING "[%s:%d][%s:%d] warning reset gpio...", KEYWORD,
@@ -5783,6 +5922,7 @@ static int max9296_remove(struct i2c_client *client) {
         max9296_hw_epoch++;
     }
   }
+  max9296_put_orphaned_reset_gpio_locked();
   sensor->hardware_valid = false;
   sensor->initialized_epoch = 0;
   sensor->stream_commit_epoch = 0;

@@ -16,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "max9296.c"
+DTS = ROOT / "docs" / "imx8mp-evk.dts"
 
 
 def parse_prepare_command(text: str) -> tuple[int, ...]:
@@ -54,6 +55,11 @@ class Board:
     des_writes: int = 0
     epoch_guarded: bool = False
     cameras: list[Camera] = field(default_factory=list)
+    reset_owner_bound: bool = False
+    reset_requested: bool = False
+    reset_direction: str = "input"
+    reset_asserted: bool = False
+    reset_direction_output_calls: int = 0
 
     def target_epoch(self) -> int:
         return self.epoch + (1 if self.users == 0 else 0)
@@ -86,19 +92,48 @@ class Board:
 
     def get(self) -> None:
         if self.users == 0:
+            self._configure_reset_for_transition()
             self.epoch += 1
             self.resets += 1
+            self.reset_asserted = False
         self.users += 1
 
     def put(self) -> None:
         assert self.users > 0
         self.users -= 1
         if self.users == 0:
+            self._configure_reset_for_transition()
             self.epoch += 1
+            if not self.reset_owner_bound:
+                self.reset_requested = False
 
     def invalidate(self) -> None:
         assert not self.epoch_guarded
         self.epoch += 1
+
+    def probe_reset_owner(self) -> None:
+        """Cold probe asserts reset; an active-domain rebind requests ASIS."""
+        if self.users == 0:
+            self.reset_direction = "output"
+            self.reset_asserted = True
+            self.reset_direction_output_calls += 1
+        self.reset_requested = True
+        self.reset_owner_bound = True
+
+    def probe_non_owner(self) -> None:
+        """The DTS non-owner has no reset descriptor and cannot change the net."""
+        return
+
+    def unbind_reset_owner(self) -> None:
+        self.reset_owner_bound = False
+        if self.users == 0:
+            self.reset_requested = False
+
+    def _configure_reset_for_transition(self) -> None:
+        if self.reset_requested:
+            self.reset_direction = "output"
+            self.reset_asserted = True
+            self.reset_direction_output_calls += 1
 
 
 @dataclass
@@ -693,6 +728,70 @@ def check_model(failures: list[str]) -> None:
     if peer.set_frame_interval(60) != "estale" or (owner.fps, peer.fps) != before:
         failures.append("bound shared cadence must reject conflicting V4L2 FPS")
 
+    # GPIO1_IO01 is one active-low board reset owned only by max9296_0.  A cold
+    # probe may assert it, but rebinding that owner while the peer keeps the
+    # board powered must acquire the descriptor ASIS and preserve both the
+    # physical value and the hardware epoch.
+    board = Board()
+    owner, peer = Camera(board), Camera(board)
+    board.probe_reset_owner()
+    if (
+        board.reset_direction,
+        board.reset_asserted,
+        board.epoch,
+        board.reset_direction_output_calls,
+    ) != ("output", True, 0, 1):
+        failures.append("cold reset-owner probe must safely assert reset without an epoch")
+    peer.prepare(generation=100, fingerprint=common_30)
+    peer_epoch = board.epoch
+    owner_epoch = owner.initialized_epoch
+    reset_state = (board.reset_direction, board.reset_asserted)
+    board.unbind_reset_owner()
+    if not board.reset_requested:
+        failures.append("active owner unbind must retain the requested reset descriptor")
+    board.probe_reset_owner()
+    if (
+        board.epoch != peer_epoch
+        or (board.reset_direction, board.reset_asserted) != reset_state
+        or not peer.hardware_current()
+    ):
+        failures.append("active reset-owner rebind must preserve reset, epoch, and peer hardware")
+    if owner.initialized_epoch != owner_epoch:
+        failures.append("reset-owner rebind must not fabricate a local hardware epoch")
+
+    # The non-owner has no reset-gpios property, so its rebind is a physical
+    # no-op.  Once the real last-off/first-on transition occurs, an ASIS-acquired
+    # descriptor is explicitly made output and the epoch invalidates old
+    # fingerprints before any later fast path.
+    before_non_owner = (
+        board.reset_direction,
+        board.reset_asserted,
+        board.epoch,
+        board.reset_direction_output_calls,
+    )
+    board.probe_non_owner()
+    if (
+        board.reset_direction,
+        board.reset_asserted,
+        board.epoch,
+        board.reset_direction_output_calls,
+    ) != before_non_owner:
+        failures.append("non-owner rebind must not touch the shared reset net")
+    peer.begin_timeout()
+    peer.finish_timeout()
+    if board.users != 0 or not board.reset_asserted:
+        failures.append("last-off must configure and assert an ASIS reset descriptor")
+    direction_calls_after_off = board.reset_direction_output_calls
+    board.get()
+    if (
+        board.reset_direction != "output"
+        or board.reset_asserted
+        or board.reset_direction_output_calls != direction_calls_after_off + 1
+    ):
+        failures.append("first-on must configure and toggle an ASIS reset descriptor")
+    if peer.hardware_current():
+        failures.append("a real shared reset must invalidate the peer hardware fast path")
+
 
 def function(source: str, name: str) -> str:
     start = -1
@@ -763,6 +862,14 @@ def check_source(source: str, failures: list[str]) -> None:
     set_interval = function(code, "max9296_s_frame_interval")
     enable_store = function(code, "sysfs_enable_store")
     probe = function(code, "max9296_probe")
+    acquire_reset = function(code, "max9296_acquire_reset_gpio")
+    release_reset = function(code, "max9296_release_board_reset_gpio")
+    put_orphaned_reset = function(code, "max9296_put_orphaned_reset_gpio_locked")
+    prepare_reset = function(code, "max9296_prepare_reset_gpio_locked")
+    reset = function(code, "max9296_reset")
+    set_power_on = function(code, "max9296_set_power_on")
+    set_power_off = function(code, "max9296_set_power_off")
+    board_power = function(code, "max9296_set_power")
 
     request_scaffolding = (
         "MAX9296_PREP_IDLE",
@@ -1363,6 +1470,129 @@ def check_source(source: str, failures: list[str]) -> None:
         failures.append("firmware worker still reports failure as DONE")
     if loadfw and loadfw.count("release_firmware(fw)") < 3:
         failures.append("firmware error exits do not all release the image")
+
+    # Reset GPIO acquisition is itself part of the board-global power
+    # transaction.  The users==0 decision, descriptor request, and publication
+    # must share the same lock so a concurrent first/last user cannot change the
+    # required GPIOD flags between observation and request.
+    acquire_lock = acquire_reset.find("mutex_lock(&max9296_power_lock)")
+    acquire_users = acquire_reset.find("max9296_power_users", acquire_lock)
+    acquire_asis = acquire_reset.find("GPIOD_ASIS", acquire_users)
+    acquire_cold = acquire_reset.find("GPIOD_OUT_HIGH", acquire_users)
+    acquire_gpio = acquire_reset.find("gpiod_get_optional", acquire_users)
+    acquire_action = acquire_reset.find("devm_add_action", acquire_gpio)
+    acquire_publish = acquire_reset.rfind("max9296_board_reset_gpio")
+    acquire_unlock = acquire_reset.find("mutex_unlock(&max9296_power_lock)")
+    if not (
+        0 <= acquire_lock < acquire_users
+        and acquire_users < acquire_asis < acquire_gpio
+        and acquire_users < acquire_cold < acquire_gpio
+        and acquire_gpio < acquire_action < acquire_publish < acquire_unlock
+    ):
+        failures.append(
+            "reset GPIO probe must lock users decision, ASIS/cold request, "
+            "devm cleanup, and publication"
+        )
+    if "devm_gpiod_get_optional" in acquire_reset:
+        failures.append(
+            "active owner unbind must not devm-release the shared reset descriptor"
+        )
+    if "gpiod_get_optional(dev" not in acquire_reset:
+        failures.append("shared reset acquisition is not persistently owned")
+    action_failure = acquire_reset.find("if (ret)", acquire_action)
+    failure_active_users = acquire_reset.find(
+        "max9296_power_users > 0", action_failure
+    )
+    failure_retain = acquire_reset.find(
+        "max9296_board_reset_gpio = reset_gpio", failure_active_users
+    )
+    failure_put = acquire_reset.find("gpiod_put(reset_gpio)", failure_retain)
+    if not (
+        0 <= acquire_action < action_failure < failure_active_users
+        < failure_retain < failure_put < acquire_publish
+    ):
+        failures.append(
+            "cleanup-action allocation failure can unrequest an active shared reset"
+        )
+    if "max9296_acquire_reset_gpio(sensor)" not in probe:
+        failures.append("probe bypasses serialized shared-reset acquisition")
+    if 'devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH)' in probe:
+        failures.append("probe still unconditionally asserts shared reset on rebind")
+    if (
+        "mutex_lock(&max9296_power_lock)" not in release_reset
+        or "max9296_power_users > 0" not in release_reset
+        or "max9296_board_reset_owner = NULL" not in release_reset
+        or "max9296_put_orphaned_reset_gpio_locked" not in release_reset
+        or "gpiod_put" not in put_orphaned_reset
+    ):
+        failures.append(
+            "reset-owner detach does not retain active ownership or release idle GPIO"
+        )
+    if code.find("static DEFINE_MUTEX(max9296_power_lock)") > code.find(
+        "static int max9296_acquire_reset_gpio"
+    ):
+        failures.append("reset acquisition is defined before its board lock")
+
+    reset_lock_assert = prepare_reset.find("lockdep_assert_held(&max9296_power_lock)")
+    reset_lookup = prepare_reset.find("max9296_board_reset_gpio", reset_lock_assert)
+    reset_direction = prepare_reset.find("gpiod_direction_output", reset_lookup)
+    reset_error = prepare_reset.find("return ret", reset_direction)
+    if not (0 <= reset_lock_assert < reset_lookup < reset_direction < reset_error):
+        failures.append(
+            "actual power transitions must make the ASIS reset descriptor output "
+            "and propagate direction errors"
+        )
+    if "max9296_prepare_reset_gpio_locked" not in reset:
+        failures.append("first power-on/reset does not prepare the ASIS descriptor")
+    if "return ret" not in set_power_on:
+        failures.append("power-on hides shared reset direction/setup errors")
+    if (
+        "max9296_prepare_reset_gpio_locked" not in set_power_off
+        or "return ret" not in set_power_off
+    ):
+        failures.append("last power-off hides shared reset direction/setup errors")
+
+    board_lock = board_power.find("mutex_lock(&max9296_power_lock)")
+    epoch_advance = board_power.find("max9296_hw_epoch++", board_lock)
+    physical_on = board_power.find("max9296_set_power_on(sensor)", epoch_advance)
+    physical_off = board_power.find("max9296_set_power_off(sensor)", epoch_advance)
+    board_unlock = board_power.rfind("mutex_unlock(&max9296_power_lock)")
+    if not (
+        0 <= board_lock < epoch_advance < physical_on < board_unlock
+        and epoch_advance < physical_off < board_unlock
+    ):
+        failures.append(
+            "a real reset/power transition can occur without epoch invalidation "
+            "under the board lock"
+        )
+    failed_on = board_power.find("if (ret && on)", physical_off)
+    failed_owner_clear = board_power.find("max9296_power_users = 0", failed_on)
+    failed_power_safe = board_power.find(
+        "max9296_power(sensor, false)", failed_owner_clear
+    )
+    if not (
+        0 <= physical_on < failed_on < failed_owner_clear < failed_power_safe
+        < board_unlock
+    ):
+        failures.append(
+            "failed reset direction/setup must release first-user ownership and "
+            "fail closed with PWDN inactive"
+        )
+    if "max9296_put_orphaned_reset_gpio_locked" not in board_power:
+        failures.append("last-off does not release an orphaned persistent reset GPIO")
+    if "max9296_put_orphaned_reset_gpio_locked" not in remove:
+        failures.append("final remove accounting leaks an orphaned persistent reset GPIO")
+
+    dts_code = code_only(DTS.read_text(encoding="utf-8"))
+    owner_node = dts_code.find("max9296_0:")
+    peer_node = dts_code.find("max9296_1:", owner_node)
+    peer_end = dts_code.find("};", peer_node)
+    if not (
+        0 <= owner_node < peer_node < peer_end
+        and "reset-gpios" in dts_code[owner_node:peer_node]
+        and "reset-gpios" not in dts_code[peer_node:peer_end]
+    ):
+        failures.append("DTS shared-reset ownership is no longer max9296_0-only")
 
     status_fields = (
         "state=%s generation=%llu epoch=%llu",
