@@ -4,11 +4,87 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "max9296.c"
+
+
+@dataclass
+class PeerEndpoint:
+    name: str
+    declared: PeerEndpoint | None = None
+    published: PeerEndpoint | None = None
+    ready: bool = True
+    clientdata_live: bool = True
+    workers_running: bool = True
+    freed: bool = False
+    stale_raw_uses: int = 0
+
+    def worker_step(self) -> None:
+        if not self.workers_running or self.published is None:
+            return
+        if self.published.freed:
+            self.stale_raw_uses += 1
+
+
+@dataclass
+class SerializedRemoval:
+    active: bool = False
+    history: list[str] = field(default_factory=list)
+
+    def remove(self, endpoint: PeerEndpoint) -> None:
+        """Model lookup by the declared client, not the local raw pointer."""
+        assert not self.active
+        self.active = True
+        self.history.append(f"enter:{endpoint.name}")
+
+        peer = endpoint.declared
+        if peer is not None and (not peer.clientdata_live or not peer.ready):
+            peer = None
+        endpoint.ready = False
+
+        if peer is not None and peer.published is endpoint:
+            peer.workers_running = False
+            peer.published = None
+
+        endpoint.clientdata_live = False
+        endpoint.freed = True
+        self.history.append(f"exit:{endpoint.name}")
+        self.active = False
+
+
+def publish_reciprocal(endpoint: PeerEndpoint) -> bool:
+    peer = endpoint.declared
+    if (
+        not endpoint.ready
+        or not endpoint.clientdata_live
+        or peer is None
+        or not peer.ready
+        or not peer.clientdata_live
+        or peer.declared is not endpoint
+    ):
+        return False
+    endpoint.published = peer
+    peer.published = endpoint
+    return True
+
+
+def function(source: str, name: str) -> str:
+    signatures = (
+        f"static int {name}(",
+        f"static void {name}(",
+        f"static bool {name}(",
+        f"static struct max9296_dev *{name}(",
+    )
+    for signature in signatures:
+        start = source.find(signature)
+        if start >= 0:
+            next_static = source.find("\nstatic ", start + 8)
+            return source[start:] if next_static < 0 else source[start:next_static]
+    return ""
 
 
 def main() -> int:
@@ -19,12 +95,149 @@ def main() -> int:
     probe_end = source.index("static int max9296_remove(", probe_start)
     probe = source[probe_start:probe_end]
     shared_init = source[shared_init_start:shared_cleanup_start]
+    declared_peer = function(source, "max9296_declared_shared_peer_locked")
+    ready_peer = function(source, "max9296_ready_shared_peer_locked")
+    remove = function(source, "max9296_remove")
 
     register_call = probe.index("v4l2_async_register_subdev_sensor_common")
     first_worker = probe.index("if (sensor->fsync_gpio")
     health_attr = probe.index("device_create_file(&client->dev, &dev_attr_health_raw)")
     prepare_attr = probe.index("device_create_file(&client->dev, &dev_attr_prepare)")
     failures: list[str] = []
+
+    # A resolver that runs before its own probe commit must keep polling rather
+    # than publish a half-probed devm pointer. Once both reciprocal probes are
+    # committed, either resolver atomically installs both raw directions.
+    early_a = PeerEndpoint("early-A", ready=False)
+    early_b = PeerEndpoint("early-B")
+    early_a.declared = early_b
+    early_b.declared = early_a
+    if publish_reciprocal(early_a) or early_a.published or early_b.published:
+        failures.append("resolver published a peer before both probe commits")
+    early_a.ready = True
+    if not publish_reciprocal(early_a) or not (
+        early_a.published is early_b and early_b.published is early_a
+    ):
+        failures.append("committed reciprocal probes were not linked atomically")
+
+    failed = PeerEndpoint("failed", ready=False, clientdata_live=False, freed=True)
+    survivor = PeerEndpoint("survivor")
+    failed.declared = survivor
+    survivor.declared = failed
+    if publish_reciprocal(survivor) or survivor.published is not None:
+        failures.append("peer probe failure left a published raw devm pointer")
+
+    absent = PeerEndpoint("absent")
+    absent.declared = None
+    if publish_reciprocal(absent) or absent.published is not None:
+        failures.append("absent declared peer must remain single-side")
+
+    # The resolver can historically publish only B -> A. Removing A must find
+    # B from A's declared phandle/client even when A's raw pointer is NULL,
+    # stop every B worker that can retain A, and clear B before A is freed.
+    a = PeerEndpoint("A")
+    b = PeerEndpoint("B")
+    a.declared = b
+    b.declared = a
+    a.published = None
+    b.published = a
+    removal = SerializedRemoval()
+    removal.remove(a)
+    b.worker_step()
+    if b.workers_running or b.published is not None or b.stale_raw_uses:
+        failures.append(
+            "asymmetric B->A publication survives A clientdata/devm withdrawal"
+        )
+    removal.remove(b)
+    if removal.history != ["enter:A", "exit:A", "enter:B", "exit:B"]:
+        failures.append("concurrent peer removes are not serialized as whole callbacks")
+
+    for required in (
+        "lockdep_assert_held(&max9296_shared_lock)",
+        "sensor->shared.np",
+        "of_find_i2c_device_by_node(sensor->shared.np)",
+        "i2c_get_clientdata(sensor->shared.client)",
+        "to_max9296_dev(sd)",
+    ):
+        if required not in declared_peer:
+            failures.append(f"declared peer lookup missing: {required}")
+
+    for required in (
+        "READ_ONCE(sensor->shared.probe_ready)",
+        "READ_ONCE(sensor->dying)",
+        "max9296_declared_shared_peer_locked(sensor)",
+        "READ_ONCE(peer->shared.probe_ready)",
+        "READ_ONCE(peer->dying)",
+        "peer->shared.np != sensor->i2c_client->dev.of_node",
+        "WRITE_ONCE(sensor->shared.sensor, peer)",
+        "WRITE_ONCE(peer->shared.sensor, sensor)",
+    ):
+        if required not in ready_peer:
+            failures.append(f"atomic reciprocal peer publication missing: {required}")
+
+    local_ready = ready_peer.find("READ_ONCE(sensor->shared.probe_ready)")
+    declared_lookup = ready_peer.find("max9296_declared_shared_peer_locked(sensor)")
+    peer_ready = ready_peer.find("READ_ONCE(peer->shared.probe_ready)")
+    reciprocal = ready_peer.find(
+        "peer->shared.np != sensor->i2c_client->dev.of_node"
+    )
+    local_publish = ready_peer.find("WRITE_ONCE(sensor->shared.sensor, peer)")
+    reverse_publish = ready_peer.find("WRITE_ONCE(peer->shared.sensor, sensor)")
+    if not (
+        0 <= local_ready < declared_lookup < peer_ready < reciprocal
+        < local_publish < reverse_publish
+    ):
+        failures.append(
+            "peer publication must validate both committed reciprocal probes "
+            "before atomically linking them"
+        )
+
+    remove_lock = remove.find("mutex_lock(&max9296_remove_lock)")
+    remove_dying = remove.find("WRITE_ONCE(sensor->dying, true)", remove_lock)
+    remove_shared_lock = remove.find(
+        "mutex_lock(&max9296_shared_lock)", remove_dying
+    )
+    remove_declared_lookup = remove.find(
+        "max9296_declared_shared_peer_locked(sensor)", remove_shared_lock
+    )
+    remove_ready_withdraw = remove.find(
+        "WRITE_ONCE(sensor->shared.probe_ready, false)", remove_declared_lookup
+    )
+    remove_shared_unlock = remove.find(
+        "mutex_unlock(&max9296_shared_lock)", remove_ready_withdraw
+    )
+    peer_fsync_stop = remove.find("kthread_stop(peer->thread_fsync)")
+    peer_enable_stop = remove.find("kthread_stop(peer->thread_en)")
+    detach_power_lock = remove.find(
+        "mutex_lock(&max9296_power_lock)", peer_enable_stop
+    )
+    detach_shared_lock = remove.find(
+        "mutex_lock(&max9296_shared_lock)", detach_power_lock
+    )
+    reverse_clear = remove.find("WRITE_ONCE(peer->shared.sensor, NULL)")
+    detach_shared_unlock = remove.find(
+        "mutex_unlock(&max9296_shared_lock)", reverse_clear
+    )
+    detach_power_unlock = remove.find(
+        "mutex_unlock(&max9296_power_lock)", detach_shared_unlock
+    )
+    clientdata_withdraw = remove.find("i2c_set_clientdata(client, NULL)")
+    remove_unlock = remove.rfind("mutex_unlock(&max9296_remove_lock)")
+    if not (
+        0 <= remove_lock < remove_dying < remove_shared_lock
+        < remove_declared_lookup < remove_ready_withdraw < remove_shared_unlock
+        < peer_fsync_stop < peer_enable_stop < detach_power_lock
+        < detach_shared_lock < reverse_clear < detach_shared_unlock
+        < detach_power_unlock
+        < clientdata_withdraw < remove_unlock
+    ):
+        failures.append(
+            "remove does not detach an independently resolved reverse peer before free"
+        )
+    if "peer = READ_ONCE(sensor->shared.sensor)" in remove:
+        failures.append("remove still relies only on its possibly-missing raw peer link")
+    if "peer->" in remove[clientdata_withdraw:]:
+        failures.append("raw peer access remains after clientdata withdrawal")
 
     subdev_init = probe.index("v4l2_i2c_subdev_init(")
     lock_call = "mutex_lock(&max9296_shared_lock);"
@@ -90,9 +303,7 @@ def main() -> int:
 
     for required in (
         lock_call,
-        "i2c_get_clientdata(sensor->shared.client)",
-        "READ_ONCE(peer->shared.probe_ready)",
-        "WRITE_ONCE(sensor->shared.sensor, peer)",
+        "max9296_ready_shared_peer_locked(sensor)",
         unlock_call,
     ):
         if required not in shared_init:
@@ -100,9 +311,7 @@ def main() -> int:
 
     resolver_order = (
         shared_init.find(lock_call),
-        shared_init.find("i2c_get_clientdata(sensor->shared.client)"),
-        shared_init.find("READ_ONCE(peer->shared.probe_ready)"),
-        shared_init.find("WRITE_ONCE(sensor->shared.sensor, peer)"),
+        shared_init.find("max9296_ready_shared_peer_locked(sensor)"),
         shared_init.find(unlock_call),
     )
     if any(position < 0 for position in resolver_order) or list(

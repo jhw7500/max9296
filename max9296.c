@@ -1750,23 +1750,20 @@ static int max9296_power_users;
  */
 static u64 max9296_hw_epoch = 1;
 
-/* Resolve the configured sibling while the publication lock excludes probe
- * unwind/removal admission changes.  This also closes the short window where
- * both probes are committed but the background resolver has not published the
- * raw shared.sensor pointer yet. */
-static struct max9296_dev *
-max9296_ready_shared_peer_locked(struct max9296_dev *sensor) {
-  struct max9296_dev *peer = READ_ONCE(sensor->shared.sensor);
+/* Resolve the DT-declared sibling independently of shared.sensor.  The I2C
+ * device reference is owned by sensor->shared.client and released exactly once
+ * by the probe-failure or normal-remove cleanup path.  It keeps the device
+ * object present; max9296_shared_lock and the ready/dying protocol below, not
+ * that reference, protect the peer's devm private storage. */
+static struct max9296_dev *max9296_declared_shared_peer_locked(
+    struct max9296_dev *sensor) {
   struct v4l2_subdev *sd;
+  struct max9296_dev *peer;
 
   lockdep_assert_held(&max9296_shared_lock);
 
-  if (peer && peer != sensor &&
-      READ_ONCE(peer->shared.probe_ready) && !READ_ONCE(peer->dying))
-    return peer;
   if (!sensor->shared.np)
     return NULL;
-
   if (!sensor->shared.client)
     sensor->shared.client = of_find_i2c_device_by_node(sensor->shared.np);
   if (!sensor->shared.client)
@@ -1776,12 +1773,33 @@ max9296_ready_shared_peer_locked(struct max9296_dev *sensor) {
   if (!sd)
     return NULL;
   peer = to_max9296_dev(sd);
-  if (peer == sensor || !READ_ONCE(peer->shared.probe_ready) ||
-      READ_ONCE(peer->dying))
+  return peer == sensor ? NULL : peer;
+}
+
+/* Publish a peer only after both probes committed and both DT endpoints name
+ * each other.  Both raw links are installed in the same critical section, so
+ * ordinary operation cannot create the historical B->A / A->NULL state.
+ * Removal still resolves the declaration independently to clean up such a
+ * state defensively. */
+static struct max9296_dev *max9296_ready_shared_peer_locked(
+    struct max9296_dev *sensor) {
+  struct max9296_dev *peer;
+
+  lockdep_assert_held(&max9296_shared_lock);
+
+  if (!READ_ONCE(sensor->shared.probe_ready) || READ_ONCE(sensor->dying))
     return NULL;
 
-  sensor->shared.sd = sd;
+  peer = max9296_declared_shared_peer_locked(sensor);
+  if (!peer || !READ_ONCE(peer->shared.probe_ready) ||
+      READ_ONCE(peer->dying) ||
+      peer->shared.np != sensor->i2c_client->dev.of_node)
+    return NULL;
+
+  sensor->shared.sd = &peer->sd;
   WRITE_ONCE(sensor->shared.sensor, peer);
+  peer->shared.sd = &sensor->sd;
+  WRITE_ONCE(peer->shared.sensor, sensor);
   return peer;
 }
 
@@ -4547,24 +4565,8 @@ static int max9296_shared_init(void *data) {
     if (kthread_should_stop())
       break;
 
-    resolved = false;
     mutex_lock(&max9296_shared_lock);
-    if (sensor->shared.client == NULL)
-      sensor->shared.client = of_find_i2c_device_by_node(sensor->shared.np);
-
-    if (sensor->shared.client != NULL) {
-      struct v4l2_subdev *sd = i2c_get_clientdata(sensor->shared.client);
-
-      if (sd != NULL) {
-        struct max9296_dev *peer = to_max9296_dev(sd);
-
-        if (peer != sensor && READ_ONCE(peer->shared.probe_ready)) {
-          sensor->shared.sd = sd;
-          WRITE_ONCE(sensor->shared.sensor, peer);
-          resolved = true;
-        }
-      }
-    }
+    resolved = max9296_ready_shared_peer_locked(sensor) != NULL;
     mutex_unlock(&max9296_shared_lock);
 
     if (resolved)
@@ -5623,6 +5625,7 @@ static int max9296_remove(struct i2c_client *client) {
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
   struct max9296_dev *peer;
+  bool peer_references_sensor;
   bool accounted;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
@@ -5640,7 +5643,17 @@ static int max9296_remove(struct i2c_client *client) {
   mutex_unlock(&max9296_power_lock);
 
   mutex_lock(&max9296_shared_lock);
-  peer = READ_ONCE(sensor->shared.sensor);
+  /* shared.sensor may legitimately still be NULL while the reciprocal raw
+   * link is already live. Resolve the declared client under the same lock that
+   * publishes/withdraws clientdata, then validate the committed reciprocal
+   * relationship before retaining the raw devm pointer under remove_lock. */
+  peer = max9296_declared_shared_peer_locked(sensor);
+  if (peer && (!READ_ONCE(peer->shared.probe_ready) ||
+               READ_ONCE(peer->dying) ||
+               peer->shared.np != sensor->i2c_client->dev.of_node))
+    peer = NULL;
+  peer_references_sensor =
+      peer && READ_ONCE(peer->shared.sensor) == sensor;
   WRITE_ONCE(sensor->shared.probe_ready, false);
   mutex_unlock(&max9296_shared_lock);
 
@@ -5693,7 +5706,7 @@ static int max9296_remove(struct i2c_client *client) {
    * NULL+offset. While the threads are still running the pointer is valid:
    * nothing of ours has been freed yet at this point in remove().
    */
-  if (peer && peer->shared.sensor == sensor) {
+  if (peer_references_sensor) {
     if (peer->thread_fsync && !IS_ERR(peer->thread_fsync)) {
       kthread_stop(peer->thread_fsync);
       peer->thread_fsync = NULL;
@@ -5702,10 +5715,17 @@ static int max9296_remove(struct i2c_client *client) {
       kthread_stop(peer->thread_en);
       peer->thread_en = NULL;
     }
+    /* Non-worker peer paths (power/reset and STREAMOFF) dereference the same
+     * raw link under max9296_power_lock. Wait for any admitted path, then
+     * withdraw under the established power -> shared order. */
+    mutex_lock(&max9296_power_lock);
     mutex_lock(&max9296_shared_lock);
-    if (READ_ONCE(peer->shared.sensor) == sensor)
+    if (READ_ONCE(peer->shared.sensor) == sensor) {
       WRITE_ONCE(peer->shared.sensor, NULL);
+      peer->shared.sd = NULL;
+    }
     mutex_unlock(&max9296_shared_lock);
+    mutex_unlock(&max9296_power_lock);
   }
 
   /* Phase 2: Stop our own threads */
@@ -5725,7 +5745,10 @@ static int max9296_remove(struct i2c_client *client) {
   sensor->shared.thread_shared_init = NULL;
 
   /* Phase 3: Clean up shared references */
-  sensor->shared.sensor = NULL;
+  mutex_lock(&max9296_shared_lock);
+  WRITE_ONCE(sensor->shared.sensor, NULL);
+  sensor->shared.sd = NULL;
+  mutex_unlock(&max9296_shared_lock);
   if (sensor->shared.client) {
     put_device(&sensor->shared.client->dev);
     sensor->shared.client = NULL;

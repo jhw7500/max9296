@@ -1041,17 +1041,19 @@ def check_source(source: str, failures: list[str]) -> None:
             failures.append(f"remove lease reconciliation missing: {token}")
 
     remove_serial_lock = remove.find("mutex_lock(&max9296_remove_lock)")
-    remove_peer_snapshot = remove.find("peer = READ_ONCE(sensor->shared.sensor)")
-    remove_peer_use = remove.find("peer->shared.sensor", remove_peer_snapshot)
+    remove_peer_lookup = remove.find(
+        "peer = max9296_declared_shared_peer_locked(sensor)"
+    )
+    remove_peer_use = remove.find("peer->shared.sensor", remove_peer_lookup)
     remove_clientdata_clear = remove.find("i2c_set_clientdata(client, NULL)")
     remove_serial_unlock = remove.rfind("mutex_unlock(&max9296_remove_lock)")
     if not (
         "static DEFINE_MUTEX(max9296_remove_lock)" in code
-        and 0 <= remove_serial_lock < remove_peer_snapshot < remove_peer_use
+        and 0 <= remove_serial_lock < remove_peer_lookup < remove_peer_use
         < remove_clientdata_clear < remove_serial_unlock
     ):
         failures.append(
-            "remove must serialize raw-peer snapshot/use through clientdata withdrawal"
+            "remove must serialize declared-peer detach through clientdata withdrawal"
         )
 
     fresh_arm_check = request.find(
