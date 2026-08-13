@@ -72,19 +72,39 @@ IDLE -> PREPARING -> READY -> CONSUMED
 READY/STALE -> EXPIRED
 ```
 
-The prepared fingerprint consists of the resolved register-table identity
-(including left versus right single-channel table), width, height, media-bus
-code, fps, enable mask, opaque generation, and board hardware epoch.
+Request identity and hardware identity are separate.  The request record owns
+the orchestration `generation` and command state.  The hardware fingerprint
+owns the resolved register-table identity (including left versus right
+single-channel table), width, height, media-bus code, fps, enable mask, and
+board hardware epoch.  `s_stream()` receives no generation, so it compares
+only hardware identity.
 
-The board-global epoch advances whenever the driver actually executes a
-global power-on reset or final power-off.  `READY` is usable only while the
-epoch and hardware-relevant fingerprint match.  An ACTIVE format, FPS, or
-enable change marks an unused/consumed preparation stale; TRY formats do not.
-Because changing between dual and single tables without a reset is unsafe, a
-same-epoch structural mismatch after explicit prepare is rejected rather than
-silently loading an incompatible table.  A launch without explicit prepare,
-or one after its lease expired and power cycled, uses the legacy synchronous
+The board-global epoch advances before an actual global power-on reset or
+final power-off; removal also invalidates the epoch before binding-owned state
+can be reused.  Request expiry does not itself erase hardware validity: when a
+peer retains power, releasing this instance's lease leaves the epoch and
+initialized hardware unchanged.  Hardware validity, fingerprint, and
+`initialized_epoch` are therefore separate from request state.
+
+An ACTIVE format, FPS, or enable write invalidates only when its normalized
+hardware value changes; repeated GStreamer writes of the prepared values are
+no-ops.  TRY formats never invalidate.  A same-epoch hardware tuple mismatch
+returns `-ESTALE` because dual/single table changes require a camera-domain
+reset.  Never-initialized or stale-epoch hardware uses the common synchronous
 fallback.
+
+The stream decision table is:
+
+| Condition | Result |
+| --- | --- |
+| dying | `-ENODEV` |
+| request PREPARING or lease RELEASING | `-EBUSY` |
+| current initialized epoch and normalized tuple match | fast stream commit |
+| current initialized epoch and tuple differs | `-ESTALE` |
+| never initialized or initialized epoch stale | common synchronous helper, then commit |
+
+The legacy `restart` flag is no longer initialization truth.  It may retain
+its FSYNC-settling meaning, but firmware-skip decisions use this table.
 
 ## Power ownership
 
@@ -95,10 +115,13 @@ Further opens only increment the local count.  The final close returns the one
 global user as before.
 
 An unused READY or STALE lease expires after 60 seconds.  Expiry never aborts
-PREPARING hardware I/O; it only withdraws an idle lease after rechecking state
-and generation.  A failed prepare returns its lease immediately.  `prepare=0`,
-expiry, probe removal, and V4L2 close may each release only the ownership they
-currently hold.
+PREPARING hardware I/O.  It rechecks request state/generation and returns the
+global user atomically under the permitted lock order, so a new command cannot
+adopt an ownership token while it is being released.  If a peer still owns
+power the hardware fingerprint stays valid; final power-off advances the epoch
+and makes it stale.  A failed prepare returns its lease immediately.
+`prepare=0`, expiry, probe removal, and V4L2 close may each release only the
+ownership they currently hold.
 
 The lock order is always:
 
@@ -129,15 +152,24 @@ prepare lease from generating a nominal live stream.
 
 ## Removal and invalidation
 
-Removal first marks the instance dying, removes the new command surface and
-unregisters V4L2, synchronously drains only its lease-expiry work outside
-`sensor->lock`, waits for an already admitted synchronous prepare, and then
-reconciles its lease and local power ownership exactly once before existing
-worker/media cleanup.
+Before probe commit, the prepare callback returns `-EAGAIN`; after teardown
+admission closes it returns `-ENODEV`.  `probe_ready` remains false until final
+V4L2 async registration succeeds.
+
+Removal commits `dying=true` and `probe_ready=false`, removes the prepare sysfs
+file to drain admitted callbacks, unregisters V4L2, synchronously drains lease
+expiry outside `sensor->lock`, then reconciles lease/local power ownership
+exactly once before existing cleanup.  Probe-error unwind removes/drains the
+attribute before withdrawing clientdata or destroying the instance.  Normal
+removal preserves the current no-active-rail-toggle policy, but invalidates the
+logical epoch if it withdraws the final accounted user.
 
 Hard reset, module removal, a real global power transition, and failed
-initialization invalidate fast-path readiness.  FSYNC and output-enable paths
-must not treat stale DONE bits from a previous hardware epoch as current.
+initialization invalidate fast-path readiness.  An instance records
+`initialized_epoch` only after full initialization and `stream_commit_epoch`
+only at stream commit.  FSYNC and output-enable require `streaming` plus both
+epochs equal to the current global epoch; stale DONE bits can never drive the
+FSYNC GPIO or DES `0x0313`.
 
 ## Validation
 
@@ -155,4 +187,3 @@ The board gate is intentionally separate:
 3. Exercise single-left, single-right, dual-wide, one-link failure, firmware
    failure, expiry, explicit cancel, SIGTERM, module removal, and 100 cold
    cycles.
-

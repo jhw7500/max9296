@@ -4,7 +4,7 @@
 
 **Goal:** Add a safe per-MAX9296 pre-GStreamer initialization command whose two CSI instances can run concurrently while preserving the existing V4L2 fallback.
 
-**Architecture:** A synchronous per-instance prepare helper owns mode-table, AP1302 firmware, and post-firmware programming. A sysfs command temporarily owns one board-global power lease; the first V4L2 power-on atomically consumes it, and a fingerprint plus global hardware epoch prevents stale fast starts.
+**Architecture:** A synchronous per-instance prepare helper owns mode-table, AP1302 firmware, and post-firmware programming. A sysfs command temporarily owns one board-global power lease; the first V4L2 power-on atomically consumes it. Request generation, hardware fingerprint/validity, power ownership, and global epoch remain separate axes.
 
 **Tech Stack:** Linux 5.10 V4L2 subdevice driver, I2C, sysfs device attributes, mutex/delayed-work primitives, Python static/model regression tests, ARM64 kernel-module cross-build.
 
@@ -45,9 +45,11 @@ remove with lease, with V4L2 owner, and with neither
 ```
 
 Add source assertions that `s_stream` and sysfs call one common synchronous
-helper; READY matching skips it; no-prepare calls it; firmware failures remain
-failures; prepare attr setup/unwind/remove are paired; timeout sync-cancel is
-outside `sensor->lock`.
+helper; current-epoch hardware matching skips it; never-initialized/stale-epoch
+state calls it; a same-epoch tuple mismatch returns `-ESTALE`; firmware errors
+remain errors; prepare attr setup/unwind/remove are paired; pre-commit/dying
+callbacks return `-EAGAIN`/`-ENODEV`; timeout sync-cancel is outside
+`sensor->lock`; and stale epochs cannot pass FSYNC/output gates.
 
 - [ ] **Step 2: Run the test and confirm RED**
 
@@ -99,10 +101,11 @@ Do not set `stream_on`, FSYNC RUNNING, output enable, or `streaming` here.
 
 - [ ] **Step 4: Preserve the compatibility path**
 
-When no explicit preparation exists, `s_stream(1)` calls the common helper
-synchronously and then commits the stream.  A matching explicit preparation
-skips the helper.  A same-epoch structural mismatch returns `-ESTALE`; an
-expired preparation has already power-cycled and follows the legacy helper.
+Use hardware validity rather than explicit request state: a current-epoch
+matching tuple skips the helper; never-initialized or stale-epoch state runs it;
+a current-epoch tuple mismatch returns `-ESTALE`.  Request expiry alone does
+not imply a power cycle because a peer may retain the global domain.  Remove
+`restart` as the firmware-skip truth source.
 
 - [ ] **Step 5: Run focused and existing tests**
 
@@ -135,33 +138,46 @@ Expected: FAIL on missing epoch, lease transfer, expiry, and remove accounting.
 
 - [ ] **Step 2: Implement exact ownership transitions**
 
-Increment the hardware epoch only for an actually executed global power-on
-reset or final power-off.  A successful prepare owns one global user.  On the
-first local `s_power(1)`, clear `lease_held`, cancel expiry non-synchronously,
-set `power_count=1`, and do not increment the global count.  Reject local
-power-count underflow.
+Increment the hardware epoch before an actually executed global power-on reset
+or final power-off; invalidate it when removal withdraws the final accounted
+user without actively toggling rails.  Keep request generation/state,
+`hardware_valid` plus fingerprint/`initialized_epoch`, and lease/local power
+ownership in separate fields.  A successful prepare owns one global user.  On
+the first local `s_power(1)`, clear `lease_held`, cancel expiry
+non-synchronously, set `power_count=1`, and do not increment the global count.
+Reject local power-count underflow.
 
 - [ ] **Step 3: Implement safe expiry**
 
-The delayed worker records state/generation under `sensor->lock`, clears only
-an unused READY/STALE lease, unlocks, and then returns the global user.  It
-never modifies PREPARING and never cancels firmware I/O.
+The delayed worker rechecks state/generation and returns only an unused
+READY/STALE lease atomically under `sensor->lock -> max9296_power_lock`.  It
+never modifies PREPARING or cancels firmware I/O.  Peer-retained power leaves
+the initialized fingerprint valid; final power-off makes it stale by epoch.
 
 - [ ] **Step 4: Integrate removal**
 
-Mark the instance dying, withdraw sysfs/V4L2 admission, call
-`cancel_delayed_work_sync()` outside `sensor->lock`, then reconcile exactly one
-global user for either a lease or positive local `power_count`.  Preserve the
-existing probe-failure publication handshake and reverse sysfs unwind.
+Commit `dying=true` and `probe_ready=false`, remove/drain prepare sysfs, then
+unregister V4L2.  Call `cancel_delayed_work_sync()` outside `sensor->lock`, then
+reconcile exactly one global user for either a lease or positive local
+`power_count`.  Preserve the existing probe-failure publication handshake and
+reverse sysfs unwind.
 
-- [ ] **Step 5: Run regression tests**
+- [ ] **Step 5: Gate FSYNC and output by epoch**
+
+Record `initialized_epoch` only on full helper success and
+`stream_commit_epoch` only at stream commit.  Require `streaming` and both
+epochs to equal the current global epoch before FSYNC GPIO pulses or DES
+`0x0313` writes.  Test that stale DONE bits after an epoch advance produce no
+such writes.
+
+- [ ] **Step 6: Run regression tests**
 
 Run: `rtk tests/run_health_tests.sh`
 
 Expected: all tests PASS without ownership-model underflow or static-order
 failures.
 
-- [ ] **Step 6: Commit lease ownership**
+- [ ] **Step 7: Commit lease ownership**
 
 ```bash
 git add max9296.c tests/max9296_prepare_test.py
@@ -190,9 +206,11 @@ absent.
 
 Accept only `0` or six fields for command 1.  Require non-zero generation,
 exact supported tuple/mask combinations, fps `1..120`, non-streaming state,
-and no V4L2 power owner.  Same READY generation/fingerprint is idempotent;
-same generation with another tuple returns `-ESTALE`; other busy transitions
-return `-EBUSY`.
+and no V4L2 power owner.  Before probe commit return `-EAGAIN`; after teardown
+admission closes return `-ENODEV`.  Same request generation/tuple is
+idempotent; a different generation with the same hardware tuple renews the
+request/lease; any same-epoch hardware mismatch returns `-ESTALE`; other busy
+transitions return `-EBUSY`.
 
 - [ ] **Step 3: Implement status output**
 
@@ -201,9 +219,11 @@ mode/table side, width, height, fps, code, enable, errno, lease, and match.
 
 - [ ] **Step 4: Pair sysfs lifecycle paths**
 
-Create `prepare` before final async V4L2 registration.  Add reverse-order probe
-unwind, normal remove, and update the probe-cleanup test so registration
-remains the final fallible operation.
+Create `prepare` before final async V4L2 registration, but gate callbacks on
+`probe_ready && !dying`.  Add reverse-order probe unwind and normal removal
+order `close admission -> remove/drain prepare sysfs -> unregister -> cancel
+expiry -> reconcile ownership`.  Keep registration as the final fallible
+operation.
 
 - [ ] **Step 5: Document operator usage**
 
@@ -270,4 +290,3 @@ and successful single/dual 100-cycle tests.
 git add max9296.c tests docs
 git commit -m "test: validate max9296 parallel prepare lifecycle"
 ```
-

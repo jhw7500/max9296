@@ -43,14 +43,20 @@ class Camera:
     state: str = "idle"
     lease: bool = False
     power_count: int = 0
+    generation: int = 0
+    initialized_epoch: int = 0
+    hardware_valid: bool = False
 
-    def prepare(self, succeeds: bool = True) -> None:
+    def prepare(self, succeeds: bool = True, generation: int = 1) -> None:
         assert not self.lease and self.power_count == 0
         self.board.get()
         self.lease = True
+        self.generation = generation
         self.state = "preparing"
         if succeeds:
             self.state = "ready"
+            self.initialized_epoch = self.board.epoch
+            self.hardware_valid = True
         else:
             self.state = "failed"
             self.lease = False
@@ -76,6 +82,9 @@ class Camera:
             self.lease = False
             self.state = state
             self.board.put()
+
+    def hardware_current(self) -> bool:
+        return self.hardware_valid and self.initialized_epoch == self.board.epoch
 
     def remove(self) -> None:
         if self.lease:
@@ -113,10 +122,14 @@ def check_model(failures: list[str]) -> None:
     if (board.users, board.resets) != (2, 1):
         failures.append("two prepares must share one reset and own two users")
     left.release_lease("expired")
+    if not left.hardware_current():
+        failures.append("peer-retained power must preserve expired hardware validity")
     right.power_on()
     if board.users != 1:
         failures.append("expiry must not power off a peer-owned camera domain")
     right.power_off()
+    if left.hardware_current():
+        failures.append("final power-off epoch must invalidate expired hardware")
 
     board = Board()
     failed = Camera(board)
@@ -158,10 +171,14 @@ def function(source: str, name: str) -> str:
 
 def check_source(source: str, failures: list[str]) -> None:
     required = (
-        "enum max9296_prepare_state",
-        "struct max9296_prepare_fingerprint",
+        "enum max9296_prepare_request_state",
+        "struct max9296_hw_fingerprint",
         "struct delayed_work prepare_lease_timeout",
         "bool prepare_lease_held",
+        "bool hardware_valid",
+        "u64 prepare_generation",
+        "u64 initialized_epoch",
+        "u64 stream_commit_epoch",
         "max9296_prepare_hardware_locked",
         "max9296_prepare_matches_locked",
         "max9296_prepare_lease_timeout",
@@ -185,6 +202,9 @@ def check_source(source: str, failures: list[str]) -> None:
         failures.append("legacy s_stream does not use the common prepare helper")
     if "max9296_prepare_matches_locked" not in stream:
         failures.append("s_stream has no prepared fingerprint fast path")
+    for token in ("initialized_epoch", "max9296_hw_epoch", "-ESTALE"):
+        if token not in stream:
+            failures.append(f"s_stream decision table missing: {token}")
     if "max9296_prepare_hardware_locked" not in store:
         failures.append("sysfs prepare does not use the common prepare helper")
 
@@ -219,6 +239,22 @@ def check_source(source: str, failures: list[str]) -> None:
         if attr_lifecycle not in source:
             failures.append(f"prepare sysfs lifecycle missing: {attr_lifecycle}")
 
+    for admission in (
+        "READ_ONCE(sensor->shared.probe_ready)",
+        "sensor->dying",
+        "-EAGAIN",
+        "-ENODEV",
+    ):
+        if admission not in store:
+            failures.append(f"prepare callback admission missing: {admission}")
+
+    fsync = function(source, "max9296_fsync")
+    enable = function(source, "max9296_enable")
+    for name, body in (("fsync", fsync), ("enable", enable)):
+        for gate in ("sensor->streaming", "initialized_epoch", "stream_commit_epoch"):
+            if gate not in body:
+                failures.append(f"{name} lacks current-epoch stream gate: {gate}")
+
     if "kthread_run(max9296_fw_init" in stream:
         failures.append("s_stream still creates the serial firmware waiter thread")
     if "sensor->state.firmware = MAX9296_STATE_DONE" in function(
@@ -228,7 +264,7 @@ def check_source(source: str, failures: list[str]) -> None:
     if loadfw and loadfw.count("release_firmware(fw)") < 3:
         failures.append("firmware error exits do not all release the image")
 
-    if not re.search(r"state=.*generation=.*epoch=.*errno=.*lease=.*match=", source):
+    if "state=%s generation=%llu epoch=%llu" not in source or "lease=%u match=%u" not in source:
         failures.append("prepare read ABI has no stable key=value status line")
 
 
