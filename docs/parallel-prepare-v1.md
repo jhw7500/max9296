@@ -75,13 +75,18 @@ cat /sys/bus/i2c/devices/3-0048/prepare
 Status is one newline-terminated key/value line:
 
 ```text
-state=READY generation=123 epoch=7 mode=dual-wide table=dual width=2560 height=720 fps=30 code=0x2006 enable=3 errno=0 lease=1 match=1
+state=READY generation=123 epoch=7 mode=dual-wide table=dual width=2560 height=720 fps=30 code=0x2006 enable=3 errno=0 worker_errno=0 lease=1 match=1
 ```
 
 Treat field order and names as the v1 machine-readable contract. `lease=1`
 means the driver still owns the temporary power reference. `match=1` means the
 current runtime tuple and initialized hardware fingerprint still agree in the
 current board-power epoch.
+
+`worker_errno=0` means the local enable worker and the current physical FSYNC
+owner worker are available. A negative value is a durable output-path
+diagnostic; STREAMON fails with that error even though a prior `READY` still
+means its firmware/config preparation completed successfully.
 
 ## Handoff, expiry, and cancel
 

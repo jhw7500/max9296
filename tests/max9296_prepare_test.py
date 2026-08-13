@@ -1367,7 +1367,7 @@ def check_source(source: str, failures: list[str]) -> None:
     status_fields = (
         "state=%s generation=%llu epoch=%llu",
         "mode=%s table=%s width=%u height=%u fps=%u code=0x%x enable=%u ",
-        "errno=%d lease=%u match=%u\\n",
+        "errno=%d worker_errno=%d lease=%u match=%u\\n",
     )
     if any(field not in source for field in status_fields):
         failures.append("prepare read ABI has no stable key=value status line")

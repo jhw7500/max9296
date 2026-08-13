@@ -57,8 +57,11 @@ Cancel an unused lease:
 
 Reading `prepare` returns one machine-parseable line containing state,
 generation, hardware epoch, resolved mode/table, format, fps, enable mask,
-last errno, lease ownership, and whether the current runtime fingerprint still
-matches.  Invalid syntax/tuple/generation returns `-EINVAL`; an active stream,
+last prepare errno, durable output-worker errno, lease ownership, and whether
+the current runtime fingerprint still matches. `worker_errno` does not change
+READY semantics: it diagnoses whether STREAMON can currently reach the local
+enable worker and physical FSYNC owner. Invalid syntax/tuple/generation returns
+`-EINVAL`; an active stream,
 V4L2 power owner, or concurrent prepare returns `-EBUSY`; hardware operations
 return their original negative errno.
 

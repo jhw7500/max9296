@@ -416,6 +416,10 @@ struct max9296_dev {
   struct gpio_desc *fsync_gpio;
   struct task_struct *thread_fsync;
   struct task_struct *thread_en;
+  /* Durable background-worker/topology failure.  -EAGAIN is the transient
+   * detach admission gate; other non-zero values block STREAMON until the
+   * worker set or reciprocal FSYNC owner is restored. */
+  int worker_errno;
 
   // state
   /*
@@ -517,6 +521,7 @@ static bool max9296_fingerprint_equal(
     const struct max9296_hw_fingerprint *left,
     const struct max9296_hw_fingerprint *right);
 static void max9296_mark_prepare_stale_locked(struct max9296_dev *sensor);
+static void max9296_refresh_worker_status_locked(struct max9296_dev *sensor);
 
 static inline struct max9296_dev *to_max9296_dev(struct v4l2_subdev *sd) {
   return container_of(sd, struct max9296_dev, sd);
@@ -1800,6 +1805,8 @@ static struct max9296_dev *max9296_ready_shared_peer_locked(
   WRITE_ONCE(sensor->shared.sensor, peer);
   peer->shared.sd = &sensor->sd;
   WRITE_ONCE(peer->shared.sensor, sensor);
+  max9296_refresh_worker_status_locked(sensor);
+  max9296_refresh_worker_status_locked(peer);
   return peer;
 }
 
@@ -4132,6 +4139,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
   struct max9296_hw_fingerprint fingerprint;
   u64 epoch;
+  int worker_errno;
   int ret = 0;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s (%d)", KEYWORD,
@@ -4147,6 +4155,9 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     if (READ_ONCE(sensor->prepare_state) == MAX9296_PREP_PREPARING ||
         READ_ONCE(sensor->prepare_releasing))
       return -EBUSY;
+    worker_errno = READ_ONCE(sensor->worker_errno);
+    if (worker_errno)
+      return worker_errno;
     if (!mutex_trylock(&sensor->prepare_request_lock))
       return READ_ONCE(sensor->dying) ? -ENODEV : -EBUSY;
     if (READ_ONCE(sensor->dying)) {
@@ -4173,6 +4184,11 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
   }
 
   if (enable) {
+    worker_errno = READ_ONCE(sensor->worker_errno);
+    if (worker_errno) {
+      ret = worker_errno;
+      goto out;
+    }
     ret = max9296_normalize_fingerprint_locked(sensor, &fingerprint);
     if (ret)
       goto out;
@@ -4552,6 +4568,95 @@ static int max9296_enable(void *data) {
 }
 
 //-------------------------------------------------------------------------
+#define MAX9296_WORKER_FSYNC 0x1U
+#define MAX9296_WORKER_ENABLE 0x2U
+#define MAX9296_WORKER_ALL (MAX9296_WORKER_FSYNC | MAX9296_WORKER_ENABLE)
+
+/* max9296_shared_lock pins every raw peer inspected here.  The per-instance
+ * enable worker is always required.  FSYNC is supplied either by this device
+ * or by its published GPIO-owning peer. */
+static int max9296_worker_status_locked(struct max9296_dev *sensor) {
+  struct max9296_dev *owner;
+  int worker_errno;
+
+  lockdep_assert_held(&max9296_shared_lock);
+
+  worker_errno = READ_ONCE(sensor->worker_errno);
+  if (!sensor->thread_en || IS_ERR(sensor->thread_en))
+    return worker_errno < 0 ? worker_errno : -ENODEV;
+
+  if (sensor->fsync_gpio) {
+    owner = sensor;
+  } else {
+    owner = READ_ONCE(sensor->shared.sensor);
+    if (!owner || !READ_ONCE(owner->shared.probe_ready) ||
+        READ_ONCE(owner->dying) || !owner->fsync_gpio)
+      return worker_errno < 0 && worker_errno != -EAGAIN ? worker_errno
+                                                         : -ENODEV;
+  }
+
+  if (!owner->thread_fsync || IS_ERR(owner->thread_fsync)) {
+    int owner_errno;
+
+    owner_errno = READ_ONCE(owner->worker_errno);
+
+    if (owner_errno < 0 && owner_errno != -EAGAIN)
+      return owner_errno;
+    return worker_errno < 0 && worker_errno != -EAGAIN ? worker_errno
+                                                         : -ENODEV;
+  }
+
+  return 0;
+}
+
+static void max9296_refresh_worker_status_locked(struct max9296_dev *sensor) {
+  int worker_errno;
+
+  lockdep_assert_held(&max9296_shared_lock);
+  worker_errno = max9296_worker_status_locked(sensor);
+  WRITE_ONCE(sensor->worker_errno, worker_errno);
+}
+
+/* Start only the requested missing workers.  A live task pointer is never
+ * replaced, so reciprocal relink and retry cannot create duplicates.  On a
+ * partial failure the already-started worker remains owned by the sensor and
+ * the normal probe/remove cleanup stops it exactly once. */
+static int max9296_start_workers(struct max9296_dev *sensor,
+                                 unsigned int workers) {
+  struct task_struct *task;
+  char name[64];
+  int ret;
+
+  /* Probe and serialized peer detach are the only callers.  Neither can race
+   * another start for this sensor, so a NULL slot remains private until the
+   * validated live task is published below. */
+  if ((workers & MAX9296_WORKER_FSYNC) && sensor->fsync_gpio &&
+      !sensor->thread_fsync) {
+    task = kthread_run(max9296_fsync, sensor, "max9296_fsync");
+    if (IS_ERR(task)) {
+      ret = PTR_ERR(task);
+      WRITE_ONCE(sensor->worker_errno, ret);
+      return ret;
+    }
+    WRITE_ONCE(sensor->thread_fsync, task);
+  }
+
+  if ((workers & MAX9296_WORKER_ENABLE) && !sensor->thread_en) {
+    snprintf(name, sizeof(name), "max9296_enable_%s",
+             dev_name(&sensor->i2c_client->dev));
+    task = kthread_run(max9296_enable, sensor, name);
+    if (IS_ERR(task)) {
+      ret = PTR_ERR(task);
+      WRITE_ONCE(sensor->worker_errno, ret);
+      return ret;
+    }
+    WRITE_ONCE(sensor->thread_en, task);
+  }
+
+  return 0;
+}
+
+//-------------------------------------------------------------------------
 static int max9296_shared_init(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
   bool resolved;
@@ -4766,7 +4871,7 @@ static ssize_t sysfs_prepare_show(struct device *dev,
   const char *state_name, *mode, *table;
   u64 generation, epoch;
   unsigned int lease, match = 0;
-  int last_errno;
+  int last_errno, worker_errno;
 
   if (READ_ONCE(sensor->dying))
     return -ENODEV;
@@ -4792,6 +4897,7 @@ static ssize_t sysfs_prepare_show(struct device *dev,
   epoch = max9296_hw_epoch;
   lease = sensor->prepare_lease_held;
   last_errno = sensor->prepare_errno;
+  worker_errno = READ_ONCE(sensor->worker_errno);
   if (sensor->hardware_valid && sensor->initialized_epoch == epoch &&
       !max9296_normalize_fingerprint_locked(sensor, &runtime) &&
       max9296_fingerprint_equal(&runtime, &prepared) &&
@@ -4802,11 +4908,11 @@ static ssize_t sysfs_prepare_show(struct device *dev,
 
   state_name = max9296_prepare_state_name(state);
   max9296_prepare_mode_names(&prepared, &mode, &table);
-  return scnprintf(buf, PAGE_SIZE, "state=%s generation=%llu epoch=%llu mode=%s table=%s width=%u height=%u fps=%u code=0x%x enable=%u errno=%d lease=%u match=%u\n",
+  return scnprintf(buf, PAGE_SIZE, "state=%s generation=%llu epoch=%llu mode=%s table=%s width=%u height=%u fps=%u code=0x%x enable=%u errno=%d worker_errno=%d lease=%u match=%u\n",
                    state_name, (unsigned long long)generation,
                    (unsigned long long)epoch, mode, table, prepared.width,
                    prepared.height, prepared.fps, prepared.code,
-                   prepared.enable, last_errno, lease, match);
+                   prepared.enable, last_errno, worker_errno, lease, match);
 }
 
 static ssize_t sysfs_prepare_store(struct device *dev,
@@ -5273,9 +5379,6 @@ static int max9296_probe(struct i2c_client *client) {
   struct fwnode_handle *endpoint;
   struct max9296_dev *sensor;
   struct v4l2_mbus_framefmt *fmt;
-  char str[128] = {
-      0,
-  };
   int ret;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] max9296 version : %s", KEYWORD,
@@ -5519,25 +5622,15 @@ static int max9296_probe(struct i2c_client *client) {
            sensor->ctrl_cache.ch1.gain, sensor->ctrl_cache.ch1.hflip,
            sensor->ctrl_cache.ch1.vflip, sensor->ctrl_cache.exposure);
 
-  if (sensor->fsync_gpio != NULL) {
-    sensor->thread_fsync = kthread_run(max9296_fsync, sensor, "max9296_fsync");
-    if (IS_ERR(sensor->thread_fsync)) {
-      printk(KERN_CRIT "[%s:%d][%s:%d] sensor thread fsync error", KEYWORD,
-             client->adapter->nr, _FILE_, __LINE__);
-      ret = PTR_ERR(sensor->thread_fsync);
-      goto free_ctrls;
-    }
-  }
-
-  snprintf(str, sizeof(str), "max9296_enable_%s",
-           dev_name(&sensor->i2c_client->dev));
-  sensor->thread_en = kthread_run(max9296_enable, sensor, str);
-  if (IS_ERR(sensor->thread_en)) {
-    printk(KERN_CRIT "[%s:%d][%s:%d] sensor thread enable error", KEYWORD,
-           client->adapter->nr, _FILE_, __LINE__);
-    ret = PTR_ERR(sensor->thread_en);
+  ret = max9296_start_workers(sensor, MAX9296_WORKER_ALL);
+  if (ret) {
+    printk(KERN_CRIT "[%s:%d][%s:%d] sensor worker start error(%d)", KEYWORD,
+           client->adapter->nr, _FILE_, __LINE__, ret);
     goto free_ctrls;
   }
+  mutex_lock(&max9296_shared_lock);
+  max9296_refresh_worker_status_locked(sensor);
+  mutex_unlock(&max9296_shared_lock);
   if (device_create_file(&client->dev, &dev_attr_rotate) != 0) {
     printk(KERN_CRIT "[%s:%d][%s:%d] sysfs rotate entry failed", KEYWORD,
            client->adapter->nr, _FILE_, __LINE__);
@@ -5583,6 +5676,7 @@ static int max9296_probe(struct i2c_client *client) {
   /* Final non-failing commit: sibling resolvers may publish us only now. */
   mutex_lock(&max9296_shared_lock);
   WRITE_ONCE(sensor->shared.probe_ready, true);
+  max9296_ready_shared_peer_locked(sensor);
   mutex_unlock(&max9296_shared_lock);
 
   if (debug)
@@ -5625,8 +5719,10 @@ static int max9296_remove(struct i2c_client *client) {
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
   struct max9296_dev *peer;
+  unsigned int peer_workers_stopped = 0;
   bool peer_references_sensor;
   bool accounted;
+  int worker_errno;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
@@ -5707,14 +5803,20 @@ static int max9296_remove(struct i2c_client *client) {
    * nothing of ours has been freed yet at this point in remove().
    */
   if (peer_references_sensor) {
+    /* Close nonblocking STREAMON admission before waiting for an already
+     * admitted request.  prepare_request_lock is not used by either worker,
+     * so joining below cannot deadlock on it. */
+    if (!READ_ONCE(peer->worker_errno))
+      WRITE_ONCE(peer->worker_errno, -EAGAIN);
+    mutex_lock(&peer->prepare_request_lock);
+
     if (peer->thread_fsync && !IS_ERR(peer->thread_fsync)) {
       kthread_stop(peer->thread_fsync);
       peer->thread_fsync = NULL;
+      peer_workers_stopped |= MAX9296_WORKER_FSYNC;
     }
-    if (peer->thread_en && !IS_ERR(peer->thread_en)) {
-      kthread_stop(peer->thread_en);
-      peer->thread_en = NULL;
-    }
+    /* thread_en has no raw-peer access: keep it live instead of creating an
+     * unnecessary stop/restart failure window. */
     /* Non-worker peer paths (power/reset and STREAMOFF) dereference the same
      * raw link under max9296_power_lock. Wait for any admitted path, then
      * withdraw under the established power -> shared order. */
@@ -5726,6 +5828,43 @@ static int max9296_remove(struct i2c_client *client) {
     }
     mutex_unlock(&max9296_shared_lock);
     mutex_unlock(&max9296_power_lock);
+
+    /* kthread_run must stay outside power/shared locks: the new FSYNC worker
+     * immediately enters paths that take max9296_power_lock.  The stopped mask
+     * also makes this a no-op for the non-GPIO peer and prevents duplicates. */
+    worker_errno = max9296_start_workers(peer, peer_workers_stopped);
+    mutex_lock(&max9296_shared_lock);
+    if (!worker_errno) {
+      max9296_refresh_worker_status_locked(peer);
+      if (READ_ONCE(peer->shared.sensor))
+        max9296_refresh_worker_status_locked(
+            READ_ONCE(peer->shared.sensor));
+    }
+    worker_errno = READ_ONCE(peer->worker_errno);
+    mutex_unlock(&max9296_shared_lock);
+
+    if (worker_errno) {
+      bool was_streaming;
+
+      /* A missing GPIO owner or failed worker restart must not leave status
+       * claiming output is live.  Serialize with the enable worker and use the
+       * established request -> sensor -> board lock order. */
+      mutex_lock(&peer->lock);
+      mutex_lock(&max9296_power_lock);
+      was_streaming = peer->streaming;
+      peer->streaming = false;
+      peer->stream_on = 0;
+      peer->stream_commit_epoch = 0;
+      peer->state.fsync = MAX9296_STATE_IDLE;
+      if (was_streaming)
+        max9296_disable_stream_mipi(peer);
+      mutex_unlock(&max9296_power_lock);
+      mutex_unlock(&peer->lock);
+      printk(KERN_CRIT
+             "[%s:%d][%s:%d] survivor worker/FSYNC unavailable(%d)", KEYWORD,
+             peer->i2c_client->adapter->nr, _FILE_, __LINE__, worker_errno);
+    }
+    mutex_unlock(&peer->prepare_request_lock);
   }
 
   /* Phase 2: Stop our own threads */
