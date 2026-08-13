@@ -33,6 +33,7 @@
 #include <linux/of_device.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/workqueue.h>
 #include <media/v4l2-async.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -258,6 +259,16 @@ enum max9296_state {
   MAX9296_STATE_MAX,
 };
 
+enum max9296_prepare_request_state {
+  MAX9296_PREP_IDLE = 0,
+  MAX9296_PREP_PREPARING,
+  MAX9296_PREP_READY,
+  MAX9296_PREP_STALE,
+  MAX9296_PREP_CONSUMED,
+  MAX9296_PREP_FAILED,
+  MAX9296_PREP_EXPIRED,
+};
+
 struct max9296_pixfmt {
   u32 code;
   u32 colorspace;
@@ -440,8 +451,22 @@ struct max9296_dev {
 
   /* lock to protect all members below */
   struct mutex lock;
+  /* Serializes the drain -> sensor lock -> rearm lease protocol. */
+  struct mutex prepare_request_lock;
 
   int power_count;
+
+  /* Userspace request identity and driver-owned power are separate from the
+   * hardware fingerprint below.  Task 4 will expose these through sysfs. */
+  enum max9296_prepare_request_state prepare_state;
+  struct max9296_hw_fingerprint prepare_fingerprint;
+  struct delayed_work prepare_lease_timeout;
+  bool prepare_lease_held;
+  bool prepare_releasing;
+  bool dying;
+  u64 prepare_generation;
+  u64 prepare_lease_generation;
+  int prepare_errno;
 
   struct v4l2_mbus_framefmt fmt;
   bool pending_fmt_change;
@@ -1528,20 +1553,13 @@ static int max9296_set_autogain(struct max9296_dev *sensor, bool on) {
   return 0;
 }
 
-static int max9296_set_stream_mipi(struct max9296_dev *sensor, bool on) {
+static int max9296_disable_stream_mipi(struct max9296_dev *sensor) {
   int ret;
   if (1)
-    printk(KERN_NOTICE "[%s:%d][%s:%d] %s (%s)", KEYWORD,
-           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
-           on ? "on" : "off");
-  if (on) {
-    if (sensor->current_mode->id == MAX9296_MODE_1280x720)
-      ret = maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1);
-    else
-      ret = maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1);
-  } else {
-    ret = maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x00, 2, 1);
-  }
+    printk(KERN_NOTICE "[%s:%d][%s:%d] %s (off)", KEYWORD,
+           sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
+
+  ret = maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x00, 2, 1);
 
   msleep(100);
 
@@ -1769,26 +1787,44 @@ static int max9296_s_power(struct v4l2_subdev *sd, int on) {
 
   mutex_lock(&sensor->lock);
 
+  if (READ_ONCE(sensor->dying)) {
+    ret = -ENODEV;
+    goto out;
+  }
+
   /*
    * Update the power count. The global refcount inside max9296_set_power()
    * decides whether the hardware sequence actually runs, so this function must
    * not touch state.power - and above all must never write the peer's, which
    * used to erase the marker protecting a still-streaming channel.
-   */
+  */
   if (on) {
-    if (sensor->power_count == 0)
-      ret = max9296_set_power(sensor, 1);
-
+    if (sensor->power_count == 0) {
+      if (sensor->prepare_lease_held) {
+        /* Transfer the one existing global user; do not acquire a second. */
+        sensor->prepare_lease_held = false;
+        cancel_delayed_work(&sensor->prepare_lease_timeout);
+        sensor->prepare_lease_generation = 0;
+        sensor->prepare_state = MAX9296_PREP_CONSUMED;
+      } else {
+        ret = max9296_set_power(sensor, true);
+        if (ret)
+          goto out;
+      }
+    }
     sensor->power_count++;
   } else {
+    if (WARN_ON(sensor->power_count <= 0)) {
+      ret = -EINVAL;
+      goto out;
+    }
     sensor->power_count--;
 
-    WARN_ON(sensor->power_count < 0);
-
     if (sensor->power_count == 0)
-      ret = max9296_set_power(sensor, 0);
+      ret = max9296_set_power(sensor, false);
   }
 
+out:
   mutex_unlock(&sensor->lock);
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end(%d)", "RST",
@@ -3505,6 +3541,232 @@ static int max9296_prepare_hardware_locked(
   return 0;
 }
 
+/*
+ * Start one driver-owned prepare while sensor->lock is held.  The sysfs ABI is
+ * deliberately added by Task 4; keeping ownership here makes that caller a
+ * parser/admission layer rather than a second power-accounting implementation.
+ */
+static int __maybe_unused max9296_prepare_request_locked(
+    struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint, u64 generation) {
+  int ret;
+
+  sensor->prepare_state = MAX9296_PREP_PREPARING;
+  sensor->prepare_generation = generation;
+  sensor->prepare_lease_generation = 0;
+  sensor->prepare_fingerprint = *fingerprint;
+  sensor->prepare_errno = 0;
+
+  ret = max9296_set_power(sensor, true);
+  if (ret) {
+    max9296_set_power(sensor, false);
+    goto failed;
+  }
+  sensor->prepare_lease_held = true;
+
+  ret = max9296_prepare_hardware_locked(sensor, fingerprint);
+  if (ret)
+    goto release_failed_lease;
+
+  sensor->prepare_state = MAX9296_PREP_READY;
+  sensor->prepare_lease_generation = generation;
+  return 0;
+
+release_failed_lease:
+  sensor->prepare_releasing = true;
+  sensor->prepare_lease_held = false;
+  max9296_set_power(sensor, false);
+  sensor->prepare_releasing = false;
+failed:
+  sensor->prepare_errno = ret;
+  sensor->prepare_state = MAX9296_PREP_FAILED;
+  return ret;
+}
+
+static bool max9296_prepare_lease_can_arm_locked(
+    const struct max9296_dev *sensor, u64 generation) {
+  return !READ_ONCE(sensor->dying) && sensor->prepare_lease_held &&
+         sensor->power_count == 0 &&
+         (sensor->prepare_state == MAX9296_PREP_READY ||
+          sensor->prepare_state == MAX9296_PREP_STALE) &&
+         sensor->prepare_generation == generation &&
+         sensor->prepare_lease_generation == generation;
+}
+
+/*
+ * A single delayed_work object cannot carry an immutable per-arm generation:
+ * changing fields before an already-running callback has drained lets that old
+ * callback observe and release the new lease.  Serialize request/rearm callers,
+ * synchronously drain the one work item without sensor->lock, then take the
+ * sensor lock, revalidate the current ownership, and queue a fresh invocation.
+ */
+static int __maybe_unused max9296_prepare_request(
+    struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint, u64 generation) {
+  int ret;
+
+  mutex_lock(&sensor->prepare_request_lock);
+  cancel_delayed_work_sync(&sensor->prepare_lease_timeout);
+
+  mutex_lock(&sensor->lock);
+  if (READ_ONCE(sensor->dying)) {
+    ret = -ENODEV;
+    goto unlock;
+  }
+  if (sensor->prepare_state == MAX9296_PREP_PREPARING ||
+      sensor->prepare_releasing) {
+    ret = -EBUSY;
+    goto unlock;
+  }
+  if (sensor->prepare_lease_held || sensor->power_count > 0 ||
+      sensor->streaming) {
+    /* This is the fresh-request path.  Preserve the old lease's expiry if a
+     * caller should have routed an idempotent renewal to rearm instead. */
+    if (max9296_prepare_lease_can_arm_locked(
+            sensor, sensor->prepare_generation))
+      WARN_ON(!queue_delayed_work(system_wq,
+                                  &sensor->prepare_lease_timeout, 60 * HZ));
+    ret = -EBUSY;
+    goto unlock;
+  }
+
+  ret = max9296_prepare_request_locked(sensor, fingerprint, generation);
+  if (ret)
+    goto unlock;
+
+  if (!max9296_prepare_lease_can_arm_locked(sensor, generation) ||
+      WARN_ON(!queue_delayed_work(system_wq,
+                                  &sensor->prepare_lease_timeout, 60 * HZ))) {
+    sensor->prepare_lease_held = false;
+    sensor->prepare_lease_generation = 0;
+    sensor->prepare_errno = -EBUSY;
+    sensor->prepare_state = MAX9296_PREP_FAILED;
+    sensor->prepare_releasing = true;
+    max9296_set_power(sensor, false);
+    sensor->prepare_releasing = false;
+    ret = READ_ONCE(sensor->dying) ? -ENODEV : -EBUSY;
+  }
+
+unlock:
+  mutex_unlock(&sensor->lock);
+  mutex_unlock(&sensor->prepare_request_lock);
+  return ret;
+}
+
+/* Extend an already validated READY/STALE lease without allowing a previous
+ * callback invocation to observe mutable fields from the renewed arm. */
+static int __maybe_unused max9296_rearm_prepare_lease(
+    struct max9296_dev *sensor, u64 generation) {
+  int ret = 0;
+
+  mutex_lock(&sensor->prepare_request_lock);
+  cancel_delayed_work_sync(&sensor->prepare_lease_timeout);
+
+  mutex_lock(&sensor->lock);
+  if (READ_ONCE(sensor->dying) || !sensor->prepare_lease_held ||
+      sensor->power_count != 0 ||
+      (sensor->prepare_state != MAX9296_PREP_READY &&
+       sensor->prepare_state != MAX9296_PREP_STALE)) {
+    ret = READ_ONCE(sensor->dying) ? -ENODEV : -ESTALE;
+    goto unlock;
+  }
+
+  /* Mutation happens only after the old invocation is fully gone. */
+  sensor->prepare_generation = generation;
+  sensor->prepare_lease_generation = generation;
+  if (WARN_ON(!max9296_prepare_lease_can_arm_locked(sensor, generation))) {
+    ret = -ESTALE;
+    goto unlock;
+  }
+
+  if (WARN_ON(!queue_delayed_work(system_wq, &sensor->prepare_lease_timeout,
+                                  60 * HZ)))
+    ret = -EBUSY;
+
+unlock:
+  mutex_unlock(&sensor->lock);
+  mutex_unlock(&sensor->prepare_request_lock);
+  return ret;
+}
+
+/* An expiry never waits for or cancels initialization.  A worker admitted for
+ * an older request also cannot return the ownership of a newer generation. */
+static void max9296_prepare_lease_timeout(struct work_struct *work) {
+  struct max9296_dev *sensor =
+      container_of(to_delayed_work(work), struct max9296_dev,
+                   prepare_lease_timeout);
+
+  mutex_lock(&sensor->lock);
+  if (max9296_prepare_lease_can_arm_locked(
+          sensor, sensor->prepare_lease_generation)) {
+    sensor->prepare_releasing = true;
+    sensor->prepare_lease_held = false;
+    sensor->prepare_lease_generation = 0;
+    sensor->prepare_state = MAX9296_PREP_EXPIRED;
+    max9296_set_power(sensor, false);
+    sensor->prepare_releasing = false;
+  }
+  mutex_unlock(&sensor->lock);
+}
+
+static bool max9296_stream_epoch_current(const struct max9296_dev *sensor) {
+  u64 epoch = READ_ONCE(max9296_hw_epoch);
+
+  return READ_ONCE(sensor->streaming) && READ_ONCE(sensor->hardware_valid) &&
+         READ_ONCE(sensor->initialized_epoch) == epoch &&
+         READ_ONCE(sensor->stream_commit_epoch) == epoch;
+}
+
+/* Final FSYNC authority.  max9296_power_lock is also the epoch mutation lock,
+ * so no power transition/removal invalidation can land between the predicate
+ * and either edge of a pulse.  Callers pass the stream(s) whose current epoch
+ * authorizes this one shared-board pulse. */
+static bool max9296_fsync_pulse_current(
+    struct max9296_dev *gpio_owner, struct max9296_dev *primary,
+    struct max9296_dev *secondary, unsigned int high, unsigned int low) {
+  bool pulse;
+
+  mutex_lock(&max9296_power_lock);
+  pulse = !READ_ONCE(gpio_owner->dying) &&
+          !READ_ONCE(primary->dying) &&
+          max9296_stream_epoch_current(primary) &&
+          (!secondary ||
+           (!READ_ONCE(secondary->dying) &&
+            max9296_stream_epoch_current(secondary)));
+  if (pulse) {
+    gpiod_set_value_cansleep(gpio_owner->fsync_gpio, 1);
+    usleep_range(high, high);
+    gpiod_set_value_cansleep(gpio_owner->fsync_gpio, 0);
+  }
+  mutex_unlock(&max9296_power_lock);
+
+  if (pulse)
+    usleep_range(low, low);
+  return pulse;
+}
+
+/* sensor->lock makes STREAMOFF atomic with this output commit; the nested
+ * board lock makes epoch invalidation atomic with every executable 0x0313
+ * write. */
+static bool max9296_enable_output_locked(struct max9296_dev *sensor) {
+  bool enabled = false;
+
+  lockdep_assert_held(&sensor->lock);
+  mutex_lock(&max9296_power_lock);
+  if (!sensor->dying && max9296_stream_epoch_current(sensor) &&
+      sensor->state.fsync == MAX9296_STATE_RUNNING) {
+    sensor->stream_on = 0;
+    if (sensor->current_mode->id == MAX9296_MODE_1280x720)
+      maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1);
+    else
+      maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1);
+    enabled = true;
+  }
+  mutex_unlock(&max9296_power_lock);
+
+  return enabled;
+}
+
 static void max9296_stream_commit_locked(struct max9296_dev *sensor) {
   /* Preserve the old quick-restart control behaviour without using restart as
    * evidence that firmware survived a board power transition. */
@@ -3528,7 +3790,39 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
          enable);
 
-  mutex_lock(&sensor->lock);
+  /* PREPARING holds sensor->lock across seconds of firmware I/O.  Do not make
+   * STREAMON disappear into that wait: sample the published state, try the
+   * lock, then repeat every admission check while locked before acting. */
+  if (enable) {
+    if (READ_ONCE(sensor->dying))
+      return -ENODEV;
+    if (READ_ONCE(sensor->prepare_state) == MAX9296_PREP_PREPARING ||
+        READ_ONCE(sensor->prepare_releasing))
+      return -EBUSY;
+    if (!mutex_trylock(&sensor->prepare_request_lock))
+      return READ_ONCE(sensor->dying) ? -ENODEV : -EBUSY;
+    if (READ_ONCE(sensor->dying)) {
+      mutex_unlock(&sensor->prepare_request_lock);
+      return -ENODEV;
+    }
+    if (!mutex_trylock(&sensor->lock)) {
+      ret = READ_ONCE(sensor->dying) ? -ENODEV : -EBUSY;
+      mutex_unlock(&sensor->prepare_request_lock);
+      return ret;
+    }
+  } else {
+    mutex_lock(&sensor->lock);
+  }
+
+  if (READ_ONCE(sensor->dying)) {
+    ret = -ENODEV;
+    goto out;
+  }
+  if (sensor->prepare_state == MAX9296_PREP_PREPARING ||
+      sensor->prepare_releasing) {
+    ret = -EBUSY;
+    goto out;
+  }
 
   if (enable) {
     ret = max9296_normalize_fingerprint_locked(sensor, &fingerprint);
@@ -3549,38 +3843,46 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
         goto out;
     }
 
+    /* Removal publishes dying under this same epoch/ownership lock.  Recheck
+     * after any multi-second fallback initialization and make the final
+     * admission plus stream commit one atomic action. */
+    mutex_lock(&max9296_power_lock);
+    if (READ_ONCE(sensor->dying)) {
+      mutex_unlock(&max9296_power_lock);
+      ret = -ENODEV;
+      goto out;
+    }
+    if (!sensor->streaming)
+      memset(sensor->health.hinf_valid, 0,
+             sizeof(sensor->health.hinf_valid));
     max9296_stream_commit_locked(sensor);
+    sensor->streaming = true;
+    mutex_unlock(&max9296_power_lock);
   } else {
-    ret = max9296_set_stream_mipi(sensor, enable);
-
-    sensor->restart = 1;
-
-    /*
-     * stream_on is a one-shot request to max9296_enable(), and only that thread
-     * cleared it - at best a few seconds after STREAMON, once FSYNC is running.
-     * A stream shorter than that (failed negotiation, single-frame probe, quick
-     * source switch) used to leave it set, and the thread would later act on the
-     * stale request and turn the CSI output back on for a deserializer nobody is
-     * streaming. Cancel the request here instead.
-     */
+    /* Stop authorizing FSYNC before the physical output-disable write.  The
+     * board lock makes this transition atomic with a pulse in progress. */
+    mutex_lock(&max9296_power_lock);
+    if (sensor->streaming)
+      memset(sensor->health.hinf_valid, 0,
+             sizeof(sensor->health.hinf_valid));
+    sensor->streaming = false;
     sensor->stream_on = 0;
     sensor->stream_commit_epoch = 0;
-
     sensor->state.fsync = MAX9296_STATE_IDLE;
-
-    if (sensor->shared.sensor != NULL) {
+    if (sensor->shared.sensor != NULL)
       sensor->shared.sensor->state.fsync = MAX9296_STATE_IDLE;
-    }
-  }
+    ret = max9296_disable_stream_mipi(sensor);
+    mutex_unlock(&max9296_power_lock);
 
-  if (sensor->streaming != enable)
-    memset(sensor->health.hinf_valid, 0, sizeof(sensor->health.hinf_valid));
-  sensor->streaming = enable;
+    sensor->restart = 1;
+  }
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 out:
   mutex_unlock(&sensor->lock);
+  if (enable)
+    mutex_unlock(&sensor->prepare_request_lock);
   return ret;
 }
 
@@ -3664,7 +3966,8 @@ static int max9296_fsync(void *data) {
 
     // single mode
     if (sensor->shared.sensor == NULL) {
-      if (sensor->state.enable == MAX9296_STATE_DONE) {
+      if (sensor->state.enable == MAX9296_STATE_DONE &&
+          max9296_stream_epoch_current(sensor)) {
         if (sensor->state.fsync != MAX9296_STATE_RUNNING)
           usleep_range(1000000, 1000000);
 
@@ -3677,10 +3980,8 @@ static int max9296_fsync(void *data) {
                  __FUNCTION__, low_fps, low, high);
         }
 
-        gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
-        usleep_range(high, high);
-        gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
-        usleep_range(low, low);
+        if (!max9296_fsync_pulse_current(sensor, sensor, NULL, high, low))
+          continue;
         sensor->state.fsync = MAX9296_STATE_RUNNING;
       } else {
         usleep_range(10000, 11000);
@@ -3689,7 +3990,9 @@ static int max9296_fsync(void *data) {
     {
       /* dual mode init */
       if ((sensor->state.init == MAX9296_STATE_DONE) &&
-          (sensor->shared.sensor->state.init == MAX9296_STATE_DONE)) {
+          (sensor->shared.sensor->state.init == MAX9296_STATE_DONE) &&
+          max9296_stream_epoch_current(sensor) &&
+          max9296_stream_epoch_current(sensor->shared.sensor)) {
         if ((sensor->state.enable == MAX9296_STATE_DONE) &&
             (sensor->shared.sensor->state.enable == MAX9296_STATE_DONE)) {
           if (sensor->state.fsync != MAX9296_STATE_RUNNING)
@@ -3707,10 +4010,9 @@ static int max9296_fsync(void *data) {
                    __FUNCTION__, low_fps, low, high);
           }
 
-          gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
-          usleep_range(high, high);
-          gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
-          usleep_range(low, low);
+          if (!max9296_fsync_pulse_current(
+                  sensor, sensor, sensor->shared.sensor, high, low))
+            continue;
           sensor->shared.sensor->state.fsync = sensor->state.fsync =
               MAX9296_STATE_RUNNING;
         } else {
@@ -3741,13 +4043,15 @@ static int max9296_fsync(void *data) {
          * only ever programs its own deserializer now.
          */
         if ((sensor->state.init == MAX9296_STATE_DONE) &&
-            (sensor->state.enable == MAX9296_STATE_DONE)) {
+            (sensor->state.enable == MAX9296_STATE_DONE) &&
+            max9296_stream_epoch_current(sensor)) {
           fsync_state = &sensor->state.fsync;
           fps = sensor->fps;
           start = 1;
         } else if ((sensor->shared.sensor->state.init == MAX9296_STATE_DONE) &&
                    (sensor->shared.sensor->state.enable ==
-                    MAX9296_STATE_DONE)) {
+                    MAX9296_STATE_DONE) &&
+                   max9296_stream_epoch_current(sensor->shared.sensor)) {
           fsync_state = &sensor->shared.sensor->state.fsync;
           fps = sensor->shared.sensor->fps;
           start = 1;
@@ -3768,10 +4072,14 @@ static int max9296_fsync(void *data) {
                    __FUNCTION__, low_fps, low, high);
           }
 
-          gpiod_set_value_cansleep(sensor->fsync_gpio, 1);
-          usleep_range(high, high);
-          gpiod_set_value_cansleep(sensor->fsync_gpio, 0);
-          usleep_range(low, low);
+          if (fsync_state == &sensor->state.fsync)
+            start = max9296_fsync_pulse_current(
+                sensor, sensor, NULL, high, low);
+          else
+            start = max9296_fsync_pulse_current(
+                sensor, sensor->shared.sensor, NULL, high, low);
+          if (!start)
+            continue;
           *fsync_state = MAX9296_STATE_RUNNING;
         }
       }
@@ -3800,7 +4108,8 @@ static int max9296_enable(void *data) {
       break;
 
     if ((sensor->stream_on == 1) &&
-        (sensor->state.fsync == MAX9296_STATE_RUNNING)) {
+        (sensor->state.fsync == MAX9296_STATE_RUNNING) &&
+        max9296_stream_epoch_current(sensor)) {
       // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
       // __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
 
@@ -3838,8 +4147,9 @@ static int max9296_enable(void *data) {
        * cleared by the same stream-off path.
        */
       mutex_lock(&sensor->lock);
-      if (sensor->streaming &&
-          (sensor->state.fsync == MAX9296_STATE_RUNNING)) {
+      if (sensor->streaming && max9296_stream_epoch_current(sensor) &&
+          (sensor->state.fsync == MAX9296_STATE_RUNNING) &&
+          max9296_enable_output_locked(sensor)) {
         /*
          * Consume the request here - only on a pass that actually serves it.
          *
@@ -3857,15 +4167,7 @@ static int max9296_enable(void *data) {
          * in which case this pass is the one that serves it, or lands after we
          * drop it and leaves the flag raised for the next iteration.
          */
-        sensor->stream_on = 0;
-
-        if (sensor->current_mode->id == MAX9296_MODE_1280x720) {
-          maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1);
-          usleep_range(10000, 11000);
-        } else {
-          maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1);
-          usleep_range(10000, 11000);
-        }
+        usleep_range(10000, 11000);
 
         // ae
         maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2);
@@ -4407,8 +4709,12 @@ static int max9296_probe(struct i2c_client *client) {
    * Initialised up front, not just before max9296_init_controls(), so that
    * every error path below can reach the common cleanup tail: mutex_destroy()
    * on a still-zeroed mutex trips a CONFIG_DEBUG_MUTEXES magic check.
-   */
+  */
   mutex_init(&sensor->lock);
+  mutex_init(&sensor->prepare_request_lock);
+  INIT_DELAYED_WORK(&sensor->prepare_lease_timeout,
+                    max9296_prepare_lease_timeout);
+  sensor->prepare_state = MAX9296_PREP_IDLE;
 
   sensor->state.init = MAX9296_STATE_IDLE;
   sensor->state.firmware = MAX9296_STATE_IDLE;
@@ -4720,6 +5026,7 @@ entity_cleanup:
   max9296_release_probe_shared(sensor);
 
   media_entity_cleanup(&sensor->sd.entity);
+  mutex_destroy(&sensor->prepare_request_lock);
   mutex_destroy(&sensor->lock);
   return ret;
 }
@@ -4728,46 +5035,57 @@ static int max9296_remove(struct i2c_client *client) {
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
   struct max9296_dev *peer = sensor->shared.sensor;
+  bool accounted;
 
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
-  /*
-   * Phase 0: stop new s_power() callers, then hand back this instance's share
-   * of the board-global power count. remove() never goes through
-   * max9296_s_power(), so without this an unbind with the node still open would
-   * leave max9296_power_users stuck above zero: a later rebind would see a
-   * non-zero count and skip the power-on sequence entirely, and the count could
-   * never fall back to zero. The per-device state this replaced was
-   * re-initialised at probe, so the leak is specific to module-global state.
-   *
-   * This must run BEFORE the kthreads are stopped. max9296_s_stream() holds
-   * sensor->lock while it waits for the firmware kthread, and Phase 2 kills
-   * that kthread - taking sensor->lock afterwards would block here forever,
-   * wedging the unbind in D state with the driver-core device_lock held.
-   *
-   * The rails are deliberately left up rather than calling
-   * max9296_set_power_off() here. A teardown-time power-down buys nothing: the
-   * next probe requests every GPIO as GPIOD_OUT_HIGH, which with the DT's
-   * GPIO_ACTIVE_LOW flags drives all three rails off again, and the first
-   * s_power(1) after that runs the full sequence. It would also be unreliable:
-   * in a two-device teardown the peer's Phase 1 has already NULLed our
-   * shared.sensor, so max9296_1 - which has no reset-gpios of its own - could
-   * not reach the board-wide camera-module rail on GPIO1_IO01 and would drop
-   * only its own deserializer. Leaving everything energised matches pre-patch
-   * behaviour in every ordering.
-   */
+  /* Phase 0: withdraw every admission point before waiting on admitted work.
+   * Task 4 inserts prepare-attribute removal between these commits and V4L2
+   * unregistration. */
+  /* The board lock is the final FSYNC/output authority too: removal becomes
+   * visible atomically before any later pulse or non-zero output write. */
+  mutex_lock(&max9296_power_lock);
+  WRITE_ONCE(sensor->dying, true);
+  mutex_unlock(&max9296_power_lock);
+
+  mutex_lock(&max9296_shared_lock);
+  WRITE_ONCE(sensor->shared.probe_ready, false);
+  mutex_unlock(&max9296_shared_lock);
+
   v4l2_async_unregister_subdev(&sensor->sd);
 
+  /* Exclude fresh prepare/renewal and wait for any already admitted request.
+   * The expiry worker does not take prepare_request_lock, so it remains safe to
+   * sync-drain here; sensor->lock is intentionally not held. */
+  mutex_lock(&sensor->prepare_request_lock);
+  cancel_delayed_work_sync(&sensor->prepare_lease_timeout);
+
+  /* A lease and a positive local power_count are two forms of the same single
+   * per-instance global user.  Reconcile it exactly once.  Removal deliberately
+   * does not toggle rails: if this was the final accounted user, advance the
+   * epoch explicitly so peer fingerprints cannot survive the implicit reset
+   * caused by unbind/rebind GPIO setup. */
   mutex_lock(&sensor->lock);
   mutex_lock(&max9296_power_lock);
-  if (sensor->power_count > 0) {
-    sensor->power_count = 0;
-    if (!WARN_ON(max9296_power_users == 0))
+  WARN_ON(sensor->prepare_lease_held && sensor->power_count > 0);
+  accounted = sensor->prepare_lease_held || sensor->power_count > 0;
+  sensor->prepare_lease_held = false;
+  sensor->prepare_lease_generation = 0;
+  sensor->power_count = 0;
+  if (accounted) {
+    if (!WARN_ON(max9296_power_users == 0)) {
       max9296_power_users--;
+      if (max9296_power_users == 0)
+        max9296_hw_epoch++;
+    }
   }
+  sensor->hardware_valid = false;
+  sensor->initialized_epoch = 0;
+  sensor->stream_commit_epoch = 0;
   mutex_unlock(&max9296_power_lock);
   mutex_unlock(&sensor->lock);
+  mutex_unlock(&sensor->prepare_request_lock);
 
   /*
    * Phase 1: Stop peer threads that reference our memory.
@@ -4826,6 +5144,7 @@ static int max9296_remove(struct i2c_client *client) {
   device_remove_file(&client->dev, &dev_attr_rotate);
   media_entity_cleanup(&sensor->sd.entity);
   v4l2_ctrl_handler_free(&sensor->ctrls.handler);
+  mutex_destroy(&sensor->prepare_request_lock);
   mutex_destroy(&sensor->lock);
 
   return 0;
