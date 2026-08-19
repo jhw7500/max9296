@@ -105,9 +105,7 @@ fi
 for F in $FPS_LIST; do
 	for K in $CASES; do
 		NODES=$(case_nodes "$K")
-		set -- $(case_wh "$K")
-		W=$1
-		H=$2
+		read -r W H <<<"$(case_wh "$K")"
 		echo
 		echo "------------------------------------------------------------------------"
 		echo " [케이스 $K] $(case_desc "$K")   요청 ${F}fps"

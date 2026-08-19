@@ -137,10 +137,9 @@ for N in $NODES; do
 	media-ctl -V "\"$(map_subdev "$N")\":0 [fmt:UYVY8_2X8/${WIDTH}x${HEIGHT}@1/${FPS}]" 2>/dev/null
 done
 
-declare -A ISI0 CSI0
+declare -A ISI0
 for N in $NODES; do
 	ISI0[$N]=$(irq_of "$(map_isiirq "$N")")
-	CSI0[$N]=$(irq_of "$(map_csiirq "$N")")
 done
 
 T0=$(date +%s%N)
@@ -157,10 +156,9 @@ ELAPSED=$(awk -v a="$T0" -v b="$T1" 'BEGIN{printf "%.2f", (b-a)/1e9}')
 
 sleep 1 # STREAMOFF 로그가 dmesg 에 실릴 시간
 
-declare -A ISI1 CSI1
+declare -A ISI1
 for N in $NODES; do
 	ISI1[$N]=$(irq_of "$(map_isiirq "$N")")
-	CSI1[$N]=$(irq_of "$(map_csiirq "$N")")
 done
 
 dmesg >/tmp/fps_probe_dmesg.txt 2>/dev/null
