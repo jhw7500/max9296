@@ -22,3 +22,11 @@ tmp/
 
 # Compound Engineering (local agent tooling — not committed to driver repo)
 .compound-engineering/
+
+# Python health exporter/test artifacts
+__pycache__/
+*.py[cod]
+.ruff_cache/
+
+# AI session handoff notes (internal host/path details — keep out of the driver repo)
+HANDOFF.*.md
