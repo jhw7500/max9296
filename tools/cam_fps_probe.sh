@@ -89,7 +89,6 @@ done
 #   video4 = mxc_isi.1 <- mxc-mipi-csi2.1 <- max9296 2-0048 (i2c2, ch0/ch1)
 map_subdev() { case "$1" in 3) echo "max9296 1-0048" ;; 4) echo "max9296 2-0048" ;; *) echo "" ;; esac }
 map_csiname() { case "$1" in 3) echo "mxc-mipi-csi2.0" ;; 4) echo "mxc-mipi-csi2.1" ;; *) echo "" ;; esac }
-map_csiirq() { case "$1" in 3) echo "32e40000.csi" ;; 4) echo "32e50000.csi" ;; *) echo "" ;; esac }
 map_isiirq() { case "$1" in 3) echo "32e00000.isi" ;; 4) echo "32e02000.isi" ;; *) echo "" ;; esac }
 map_label() { case "$1" in 3) echo "ch2/ch3 (i2c1)" ;; 4) echo "ch0/ch1 (i2c2)" ;; *) echo "?" ;; esac }
 
