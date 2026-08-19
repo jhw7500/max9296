@@ -19,6 +19,16 @@ The blocking read/write attribute is:
 /sys/bus/i2c/devices/<bus>-0048/prepare
 ```
 
+`<bus>` is the Linux i2c adapter number, which is one less than the
+device-tree node name because `imx8mp.dtsi` declares `i2c1 = &i2c2` and
+`i2c2 = &i2c3`. Do not copy the device-tree node number into the path. The
+current board mapping is:
+
+| Device-tree node | prepare node | Channels | Video node |
+| --- | --- | --- | --- |
+| `max9296_0` (`&i2c2`) | `/sys/bus/i2c/devices/1-0048/prepare` | ch2/ch3 | `/dev/video3` |
+| `max9296_1` (`&i2c3`) | `/sys/bus/i2c/devices/2-0048/prepare` | ch0/ch1 | `/dev/video4` |
+
 Mode is `0664`. Start syntax is exactly:
 
 ```text
@@ -49,10 +59,10 @@ wait for both. For example:
 ```sh
 gen="$(date +%s)"
 printf '1 %s 2560 720 30 3\n' "$gen" \
-  > /sys/bus/i2c/devices/2-0048/prepare &
+  > /sys/bus/i2c/devices/1-0048/prepare &
 pid0=$!
 printf '1 %s 2560 720 30 3\n' "$gen" \
-  > /sys/bus/i2c/devices/3-0048/prepare &
+  > /sys/bus/i2c/devices/2-0048/prepare &
 pid1=$!
 
 wait "$pid0" || exit $?
@@ -68,8 +78,8 @@ Width, height, and enable remain per-CSI-domain values.
 After both writes succeed, read status before starting the application:
 
 ```sh
+cat /sys/bus/i2c/devices/1-0048/prepare
 cat /sys/bus/i2c/devices/2-0048/prepare
-cat /sys/bus/i2c/devices/3-0048/prepare
 ```
 
 Status is one newline-terminated key/value line:
@@ -104,7 +114,7 @@ real power transition invalidates it and initialization runs again.
 Cancel an unused lease with:
 
 ```sh
-printf '0\n' > /sys/bus/i2c/devices/2-0048/prepare
+printf '0\n' > /sys/bus/i2c/devices/1-0048/prepare
 ```
 
 Cancel never powers down a lease already consumed by V4L2 and never stops an
