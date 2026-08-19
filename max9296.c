@@ -3887,6 +3887,38 @@ static void max9296_apply_prepare_fingerprint_locked(
 }
 
 /*
+ * Reclassify a leaked V4L2 power reference as this prepare's lease.
+ *
+ * The vendor ISI capture driver takes a subdev power reference when it builds
+ * the pipeline and never returns it: imx8-isi-cap.c contains a single
+ * s_power call (on), and its release path reaches only s_stream(0).  An idle
+ * instance therefore keeps references that no owner will ever hand back, which
+ * used to make every later prepare fail with -EBUSY until the i2c device was
+ * rebound.  Measured on pim-camera-v016: s_power(1) 14, s_power(0) 0.
+ *
+ * A reference nobody owns is exactly what a lease is, so adopt it rather than
+ * acquiring a second one.  Every outstanding local reference is backed by one
+ * global user, so folding them into the lease leaves max9296_power_users
+ * unchanged, keeps the board free of a power transition, and preserves the
+ * retained hardware fingerprint for warm reuse.  It also maintains the
+ * "lease xor power_count" invariant the removal path reconciles.
+ *
+ * Callers must have rejected an actively streaming owner first.
+ *
+ * Returns true when a reference was adopted, false when the caller still has to
+ * acquire one.
+ */
+static bool max9296_prepare_adopt_power_locked(struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+
+  if (sensor->power_count <= 0)
+    return false;
+
+  sensor->power_count = 0;
+  return true;
+}
+
+/*
  * Start one driver-owned prepare while sensor->lock is held.  The sysfs ABI is
  * deliberately added by Task 4; keeping ownership here makes that caller a
  * parser/admission layer rather than a second power-accounting implementation.
@@ -3895,13 +3927,15 @@ static int max9296_prepare_request_locked(
     struct max9296_dev *sensor,
     const struct max9296_hw_fingerprint *fingerprint, u64 generation) {
   u64 epoch;
+  bool adopted;
   int ret;
 
   /* Keep power acquisition and the first FSYNC reservation in one short
    * transaction.  This closes the gap where a legacy frame-interval write
    * could land after reset but before a prepare published its cadence. */
   mutex_lock(&max9296_fsync_config_lock);
-  ret = max9296_set_power(sensor, true);
+  adopted = max9296_prepare_adopt_power_locked(sensor);
+  ret = adopted ? 0 : max9296_set_power(sensor, true);
   if (ret) {
     mutex_unlock(&max9296_fsync_config_lock);
     return ret;
@@ -4039,7 +4073,12 @@ static int max9296_prepare_request(
     ret = -EBUSY;
     goto unlock;
   }
-  if (sensor->power_count > 0 || sensor->streaming) {
+  /* power_count is not evidence of a live owner on this BSP.  The vendor
+   * capture driver never returns its s_power(1) reference, so an idle instance
+   * keeps a count that no close will ever clear.  Only an actively streaming
+   * owner may reject a prepare; a leaked idle reference is folded into the
+   * lease by max9296_prepare_adopt_power_locked(). */
+  if (sensor->streaming) {
     ret = -EBUSY;
     goto unlock;
   }

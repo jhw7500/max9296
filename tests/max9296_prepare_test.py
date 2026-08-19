@@ -201,9 +201,9 @@ class Camera:
         fingerprint: tuple[int, int, int, int] = (2560, 720, 30, 3),
     ) -> None:
         self.drain_timeout_sync()
-        assert not self.lease and self.power_count == 0
+        assert not self.lease
         assert self.board.configure_fsync(self, fingerprint[2], bind=True)
-        self.board.get()
+        self.adopt_or_acquire()
         self.lease = True
         self.generation = generation
         self.lease_generation = generation
@@ -233,7 +233,7 @@ class Camera:
         self.drain_timeout_sync()
         if self.dying:
             return "enodev"
-        if self.streaming or self.power_count or self.releasing:
+        if self.streaming or self.releasing:
             return "ebusy"
         if (
             self.generation == generation
@@ -254,7 +254,7 @@ class Camera:
             return "estale"
 
         if not self.lease:
-            self.board.get()
+            self.adopt_or_acquire()
             self.lease = True
         self.generation = generation
         self.lease_generation = generation
@@ -322,6 +322,22 @@ class Camera:
             else:
                 self.board.get()
         self.power_count += 1
+
+    def adopt_or_acquire(self) -> bool:
+        """Take the lease, adopting a leaked V4L2 power reference if present.
+
+        The vendor ISI capture driver calls s_power(1) but never s_power(0)
+        (imx8-isi-cap.c has no s_power,0 call at all), so an idle instance can
+        hold references that nobody will ever release.  Such a reference has no
+        owner, so prepare reclassifies it as its own lease instead of adding a
+        second global user - the board never sees a power transition and the
+        retained hardware stays valid for warm reuse.
+        """
+        if self.power_count:
+            self.power_count = 0
+            return True
+        self.board.get()
+        return False
 
     def power_off(self) -> None:
         assert self.power_count > 0
@@ -478,6 +494,29 @@ def check_model(failures: list[str]) -> None:
     cam.power_off()
     if board.users != 0:
         failures.append("last local close must return exactly one global user")
+
+    board = Board()
+    leaked = Camera(board)
+    leaked.prepare()
+    leaked.power_on()
+    if (board.users, leaked.power_count, leaked.lease) != (1, 1, False):
+        failures.append("model precondition: transfer must leave one V4L2 reference")
+    if leaked.request_prepare(9, (2560, 720, 30, 3)) == "ebusy":
+        failures.append("an idle leaked power reference must not reject prepare")
+    if board.users != 1:
+        failures.append("adoption must not add a second global user")
+    if leaked.power_count != 0 or not leaked.lease:
+        failures.append("adoption must convert the leaked reference into the lease")
+    if leaked.firmware_loads != 1:
+        failures.append("adoption keeps the epoch, so it must not reload firmware")
+
+    board = Board()
+    busy = Camera(board)
+    busy.prepare()
+    busy.power_on()
+    busy.streaming = True
+    if busy.request_prepare(10, (2560, 720, 30, 3)) != "ebusy":
+        failures.append("an actively streaming owner must still reject prepare")
 
     board = Board()
     left, right = Camera(board), Camera(board)
@@ -897,6 +936,21 @@ def check_source(source: str, failures: list[str]) -> None:
     ):
         if token not in request_locked:
             failures.append(f"prepare request ownership transition missing: {token}")
+
+    # The vendor capture driver leaks s_power(1) references, so power_count is
+    # not evidence of a live owner.  Only real streaming may reject a prepare.
+    if "sensor->power_count > 0 || sensor->streaming" in request:
+        failures.append(
+            "prepare must not reject an idle instance solely for a leaked power reference"
+        )
+    if "sensor->streaming" not in request:
+        failures.append("prepare must still reject a streaming owner")
+    if "max9296_prepare_adopt_power_locked" not in request_locked:
+        failures.append("prepare must adopt a leaked power reference instead of duplicating it")
+    adopt = function(code, "max9296_prepare_adopt_power_locked")
+    for token in ("sensor->power_count", "lockdep_assert_held"):
+        if token not in adopt:
+            failures.append(f"power adoption helper missing: {token}")
 
     if "mod_delayed_work" in code:
         failures.append("mutable delayed work must not be requeued with mod_delayed_work")
