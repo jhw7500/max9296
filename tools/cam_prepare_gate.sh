@@ -46,6 +46,11 @@ FPS=30
 # ISI capture 노드는 UYVY 를 받지 않는다. cam_fps_probe.sh 와 같은 RGB565 를 쓴다.
 PIXFMT=RGBP
 
+# 앱 이름은 런타임에 조립한다. 이 문자열이 명령줄에 그대로 남으면
+# /opt/pim/bin/kill_test.sh 의 `ps -ef | grep` 부분 문자열 매칭에 걸려
+# 이 스크립트 자신이 kill -9 당한다(실측).
+APP_NAME=$(printf 'gstA%s' 'pp')
+
 # 펌웨어 구간 마커. max9296.c 가 다운로드의 시작과 끝을 모두 찍는다.
 #   [   20.672225] [I2C:2][max9296.c:3513] start_fw_load
 #   [   24.359943] [I2C:2][max9296.c:3537] end_fw_load
@@ -65,10 +70,18 @@ FAILED=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-c | --cycles)
+		[ $# -ge 2 ] || {
+			echo "$1 에는 값이 필요하다" >&2
+			exit 2
+		}
 		CYCLES="$2"
 		shift 2
 		;;
 	-g | --gates)
+		[ $# -ge 2 ] || {
+			echo "$1 에는 값이 필요하다" >&2
+			exit 2
+		}
 		GATES="$2"
 		shift 2
 		;;
@@ -183,7 +196,7 @@ prepare_bg() {
 # prepare 를 영구 EBUSY 로 막기 때문에 매 게이트 앞에 필요하다.
 go_cold() {
 	systemctl stop cam-operate.service 2>/dev/null
-	pkill -9 gstApp 2>/dev/null
+	pkill -9 -x "$APP_NAME" 2>/dev/null
 	"$RESET" -q -s >/dev/null 2>&1 || {
 		fail "하드 리셋 실패 - cold 상태를 만들 수 없다"
 		return 1
@@ -200,6 +213,14 @@ go_cold() {
 # ---------------------------------------------------------------- 사전조건
 say "MAX9296 병렬 prepare 보드 게이트"
 hr
+# G1/G2/G4 의 판정이 전부 dmesg 의 `[    초.마이크로초]` 파싱에 의존한다.
+# 포맷이 다르면 조용히 오판하는 대신 여기서 멈춘다.
+if ! dmesg | head -1 | grep -qE '^\[[[:space:]]*[0-9]+\.[0-9]+\]'; then
+	say "dmesg 타임스탬프가 기대한 [초.마이크로초] 형식이 아니다."
+	say "펌웨어 구간·건수 판정이 전부 이 형식에 의존하므로 진행하지 않는다."
+	exit 2
+fi
+
 for n in "$PREP_A" "$PREP_B"; do
 	[ -e "$n" ] || {
 		say "prepare ABI 없음: $n"
@@ -222,10 +243,13 @@ if wants G1; then
 		wait
 		fw1=$(fw_count_since "$mark")
 
-		read -r a_start a_end a_rc <"$WORK/a"
-		read -r b_start b_end b_rc <"$WORK/b"
+		a_rc=; b_rc=
+		[ -s "$WORK/a" ] && read -r a_start a_end a_rc <"$WORK/a"
+		[ -s "$WORK/b" ] && read -r b_start b_end b_rc <"$WORK/b"
 
-		if [ "$a_rc" -ne 0 ] || [ "$b_rc" -ne 0 ]; then
+		if [ -z "$a_rc" ] || [ -z "$b_rc" ]; then
+			fail "prepare 작업자가 결과를 남기지 않았다 (a=${a_rc:-없음} b=${b_rc:-없음})"
+		elif [ "$a_rc" -ne 0 ] || [ "$b_rc" -ne 0 ]; then
 			fail "prepare write 실패 rc=$a_rc,$b_rc  $(cat "$WORK"/*.err 2>/dev/null)"
 		else
 			# 두 구간의 교집합. 양수면 실제로 병렬로 돌았다는 뜻이다.
@@ -290,7 +314,9 @@ if wants G2; then
 	done
 	wait
 	delta=$(fw_count_since "$mark")
-	if [ "$delta" -eq 0 ]; then
+	if [ "$delta" -lt 0 ]; then
+		fail "STREAMON 펌웨어 건수를 세지 못했다 (dmesg 링버퍼 랩)"
+	elif [ "$delta" -eq 0 ]; then
 		pass "STREAMON 구간 펌웨어 다운로드 0건 (준비된 하드웨어 재사용)"
 	else
 		fail "STREAMON 이 펌웨어를 ${delta}건 다시 내려받았다"
@@ -436,12 +462,13 @@ warm_soak() {
 		if [ "$bad" -eq 0 ]; then ok=$((ok + 1)); else ng=$((ng + 1)); fi
 		[ $((i % 10)) -eq 0 ] && say "  $label ${i}/${count}  성공 $ok  실패 $ng"
 	done
+	if [ "$fw_total" -gt 0 ]; then
+		fail "$label warm 구간에서 펌웨어를 ${fw_total}건 재다운로드했다"
+	fi
 	if [ "$fw_lost" -gt 0 ]; then
 		fail "$label warm 펌웨어 건수를 ${fw_lost}개 사이클에서 세지 못했다 (링버퍼 랩)"
 	elif [ "$fw_total" -eq 0 ]; then
 		pass "$label warm ${count}회 - 펌웨어 재다운로드 0건"
-	else
-		fail "$label warm 구간에서 펌웨어를 ${fw_total}건 재다운로드했다"
 	fi
 	if [ "$ng" -eq 0 ]; then
 		pass "$label warm ${count}회 전부 재사용 조건 유지 (CONSUMED/lease=0/match=1)"
