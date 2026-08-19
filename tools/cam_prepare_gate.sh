@@ -90,7 +90,7 @@ while [ $# -gt 0 ]; do
 		shift
 		;;
 	-h | --help)
-		sed -n '2,30p' "$0"
+		awk 'NR > 1 { if (!/^#/) exit; print }' "$0"
 		exit 0
 		;;
 	*)
@@ -337,10 +337,11 @@ if wants G3; then
 	# G3-a cancel
 	if go_cold; then
 		gen=$(gen_new)
-		printf '1 %s %s %s %s %s\n' "$gen" "$SINGLE_W" "$SINGLE_H" "$FPS" "$SINGLE_EN" >"$PREP_A"
+		printf '1 %s %s %s %s %s\n' "$gen" "$SINGLE_W" "$SINGLE_H" "$FPS" "$SINGLE_EN" \
+			>"$PREP_A" 2>/dev/null
 		[ "$(stat_of "$PREP_A" state)" = "READY" ] ||
 			fail "cancel 전 prepare 가 READY 가 아니다"
-		printf '0\n' >"$PREP_A"
+		printf '0\n' >"$PREP_A" 2>/dev/null
 		s=$(stat_of "$PREP_A" state)
 		l=$(stat_of "$PREP_A" lease)
 		[ "$s" = "IDLE" ] && [ "$l" = "0" ] &&
@@ -350,7 +351,7 @@ if wants G3; then
 		printf '1 %s %s %s %s %s\n' "$(gen_new)" "$SINGLE_W" "$SINGLE_H" "$FPS" "$SINGLE_EN" >"$PREP_A" 2>"$WORK/recancel.err"
 		if [ "$(stat_of "$PREP_A" state)" = "READY" ]; then
 			pass "cancel 후 재 prepare 성공 (전원 누수 없음)"
-			printf '0\n' >"$PREP_A"
+			printf '0\n' >"$PREP_A" 2>/dev/null
 		else
 			fail "cancel 후 재 prepare 실패: $(cat "$WORK/recancel.err")"
 		fi
