@@ -27,3 +27,6 @@ tmp/
 __pycache__/
 *.py[cod]
 .ruff_cache/
+
+# AI session handoff notes (internal host/path details — keep out of the driver repo)
+HANDOFF.*.md
