@@ -65,7 +65,11 @@ CYCLES=100
 GATES=G1,G2,G3,G4
 KEEP_SERVICE=0
 WORK=/tmp/prepare_gate.$$
+LOCK=/run/lock/cam_prepare_gate.lock
 FAILED=0
+# cam-operate 를 이 실행이 직접 내렸을 때만 되살린다. 무조건 되살리면 운영자가
+# 의도적으로 내려둔 서비스를 켜버리고, 겹쳐 도는 다른 게이트의 시험도 망친다.
+SERVICE_STOPPED_BY_US=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -100,11 +104,24 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+# 두 인스턴스가 겹치면 한쪽의 cleanup 이 다른 쪽이 돌리는 시험을 망친다.
+# 2026-08-19 soak 이 정확히 그렇게 죽었다: 앞선 인스턴스가 종료하면서 EXIT trap 이
+# cam-operate 를 되살렸고, 되살아난 감시 데몬이 카메라를 가져간 뒤 start marker 가
+# 없다는 이유로 보드를 재부팅했다.
+exec 9>"$LOCK" || {
+	echo "락 파일을 열 수 없다: $LOCK" >&2
+	exit 2
+}
+if ! flock -n 9; then
+	echo "다른 게이트가 이미 실행 중이다 ($LOCK)" >&2
+	exit 2
+fi
+
 mkdir -p "$WORK"
 
 cleanup() {
 	rm -rf "$WORK"
-	if [ "$KEEP_SERVICE" -eq 0 ]; then
+	if [ "$KEEP_SERVICE" -eq 0 ] && [ "$SERVICE_STOPPED_BY_US" -eq 1 ]; then
 		echo "[정리] cam-operate.service 재기동"
 		systemctl start cam-operate.service 2>/dev/null
 	fi
@@ -195,6 +212,7 @@ prepare_bg() {
 # 하드 리셋으로 cold 상태를 만든다. 레거시 앱이 남긴 power_count 잔류가
 # prepare 를 영구 EBUSY 로 막기 때문에 매 게이트 앞에 필요하다.
 go_cold() {
+	systemctl is-active --quiet cam-operate.service && SERVICE_STOPPED_BY_US=1
 	systemctl stop cam-operate.service 2>/dev/null
 	pkill -9 -x "$APP_NAME" 2>/dev/null
 	"$RESET" -q -s >/dev/null 2>&1 || {
