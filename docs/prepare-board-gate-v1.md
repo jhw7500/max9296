@@ -125,6 +125,29 @@ Debian `watchdog` 데몬이 15초로 물고 있고(`pim-package` postinst 가 �
 (`wdt_check 70 10 0`). 둘 다 시스템이 물렸을 때 동작하는 것이지 스크립트 실행
 시간과는 무관하다.
 
+### 1-2. 순차 prepare 는 수락되지만 두 번째 도메인이 스트림하지 못한다
+
+dual 구성에서 두 노드에 **순차로** write 하면 양쪽 다 `state=READY` 를 돌려주고 펌웨어도
+2 건 정상인데, 두 번째 도메인의 스트림이 프레임을 거의 받지 못한다.
+
+```
+seq  prepare(READY,READY) fw=2  video3=0  video4=124  ISI0+11  ISI2+2
+par  prepare(READY,READY) fw=2  video3=0  video4=0    ISI0+11  ISI2+12
+seq  prepare(READY,READY) fw=2  video3=0  video4=124  ISI0+11  ISI2+1
+par  prepare(READY,READY) fw=2  video3=0  video4=0    ISI0+11  ISI2+13
+```
+
+재현율 100 percent 다. `docs/parallel-prepare-v1.md` 는 "두 도메인에 병렬 write 후
+wait" 를 규정하므로 순차 write 는 애초에 규정된 사용법이 아니지만, **ABI 가 그것을
+거부하지 않고 `READY` 를 돌려준다.** 상태는 정상인데 하드웨어는 아닌 조합이 하나 더
+있는 셈이다(1 번 D-PHY 와 같은 부류).
+
+원인은 미확인이다. 두 인스턴스가 물리 FSYNC 를 공유하고 첫 도메인이 cadence 를
+예약한 뒤 두 번째가 붙는 구조라 그 인계가 의심되지만 **검증하지 않았다.**
+
+게이트는 문서 규정대로 병렬 write 를 쓴다. 드라이버가 순차 write 를 거부해야 하는지,
+아니면 문서에 명시만 하면 되는지는 별건으로 남는다.
+
 ### 2. 사용자 공간에서 전원을 내릴 수 없다
 
 `v4l2-ctl` 이 종료해도 `s_power(0)` 이 호출되지 않는다. 벤더 캡처 드라이버

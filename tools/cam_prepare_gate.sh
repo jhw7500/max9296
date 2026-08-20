@@ -440,7 +440,7 @@ fi
 cold_soak() {
 	local label=$1 w=$2 h=$3 en=$4 count=$7 want_fw=$8
 	local -a nodes vids
-	local i n v gen mark st l m we bad ok ng cycle_fw vrc vp
+	local i n v gen mark st l m we bad ok ng cycle_fw vrc vp idx
 	local -a vpids
 
 	read -ra nodes <<<"$5"
@@ -458,17 +458,34 @@ cold_soak() {
 
 		mark=$(now_uptime)
 		gen=$(gen_new)
+
+		# 두 도메인에는 반드시 병렬로 쓴다. 순차로 쓰면 두 번째 도메인이 READY 를
+		# 받고 펌웨어도 정상인데 스트림이 프레임을 거의 못 받는다(2026-08-21 실측:
+		# seq 는 video4 가 ISI+1~2 에서 timeout, par 는 ISI+12~13 정상, 재현율 100%).
+		# docs/parallel-prepare-v1.md 가 규정한 사용법이기도 하다.
+		idx=0
 		for n in "${nodes[@]}"; do
-			if ! printf '1 %s %s %s %s %s\n' "$gen" "$w" "$h" "$FPS" "$en" >"$n" 2>/dev/null; then
+			(
+				printf '1 %s %s %s %s %s\n' "$gen" "$w" "$h" "$FPS" "$en" >"$n" 2>/dev/null
+				echo $? >"$WORK/prc.$idx"
+			) &
+			idx=$((idx + 1))
+		done
+		wait
+
+		idx=0
+		for n in "${nodes[@]}"; do
+			if [ "$(cat "$WORK/prc.$idx" 2>/dev/null)" != 0 ]; then
 				bad=1
 				say "  $label 사이클 $i: prepare write 실패 $n errno=$(stat_of "$n" errno)"
-				break
+			else
+				st=$(stat_of "$n" state)
+				[ "$st" = "READY" ] || {
+					bad=1
+					say "  $label 사이클 $i: $n state=$st (READY 이어야 한다)"
+				}
 			fi
-			st=$(stat_of "$n" state)
-			[ "$st" = "READY" ] || {
-				bad=1
-				say "  $label 사이클 $i: $n state=$st (READY 이어야 한다)"
-			}
+			idx=$((idx + 1))
 		done
 
 		# cold prepare 는 매번 펌웨어를 내려받아야 한다. 0 건이면 하드웨어가
