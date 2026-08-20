@@ -25,9 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 온타겟(pim-camera-v016): 누수 잔류 상태에서 prepare 성공, 그 구간 펌웨어
   다운로드 0건(`epoch` 불변 - warm 재사용 유지), cancel 후 재 prepare 성공,
   스트리밍 중에는 여전히 `-EBUSY`
-- 보드 게이트 G1~G3 통과. **G4 는 아직 닫히지 않았다** - dual 50/50 은 통과했고
-  single 은 10/50 에서 중단됐다. single 경로의 warm 재사용 회귀 확인에 40 사이클이
-  남아 있다 (`docs/prepare-board-gate-v1.md`)
+- 보드 게이트 **G1~G4 전부 통과**. G4 는 dual 50/50 + single 50/50 을 완주했고
+  양쪽 모두 펌웨어 재다운로드 0건, 전 사이클 재사용 조건 유지. 측정 구간 내내
+  `cam-operate` 가 정지 상태였음을 30초 간격 샘플 86건으로 확인 (`docs/prepare-board-gate-v1.md`)
 
 ## [2.4] - 2026-08-12
 
