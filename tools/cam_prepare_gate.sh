@@ -425,7 +425,8 @@ fi
 warm_soak() {
 	local label=$1 w=$2 h=$3 en=$4 count=$7 want_fw=$8
 	local -a nodes vids
-	local i n v fw1 gen mark st l m we bad ok ng cycle_fw fw_total fw_lost
+	local i n v fw1 gen mark st l m we bad ok ng cycle_fw fw_total fw_lost vrc vp
+	local -a vpids
 	read -ra nodes <<<"$5"
 	read -ra vids <<<"$6"
 
@@ -454,12 +455,20 @@ warm_soak() {
 	fw_lost=0
 	mark=$(now_uptime)
 	for i in $(seq 1 "$count"); do
+		# 스트림 결과를 버리면 안 된다. 사이클 판정이 prepare 상태 검사만 보게 되어,
+		# 스트림이 실제로 실패해도(예: 감시 데몬이 잠깐 되살아나 카메라를 가져간 경우)
+		# 성공으로 집계된다.
+		vpids=()
 		for v in "${vids[@]}"; do
 			timeout 25 v4l2-ctl -d "$v" \
 				--set-fmt-video=width="$w",height="$h",pixelformat="$PIXFMT" \
 				--stream-mmap --stream-count=10 >/dev/null 2>&1 &
+			vpids+=("$!")
 		done
-		wait
+		vrc=0
+		for vp in "${vpids[@]}"; do
+			wait "$vp" || vrc=1
+		done
 
 		# 사이클마다 짧은 창으로 세어 누적한다. 이 드라이버는 모든 i2c write 를
 		# KERN_NOTICE 로 찍어 링버퍼가 빨리 감기므로, soak 전체를 창 하나로 덮으면
@@ -473,6 +482,10 @@ warm_soak() {
 		mark=$(now_uptime)
 
 		bad=0
+		if [ "$vrc" -ne 0 ]; then
+			bad=1
+			say "  $label 사이클 $i: STREAMON 실패 (v4l2-ctl 비정상 종료)"
+		fi
 		for n in "${nodes[@]}"; do
 			st=$(stat_of "$n" state)
 			l=$(stat_of "$n" lease)
