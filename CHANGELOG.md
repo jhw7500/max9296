@@ -5,6 +5,26 @@ All notable changes to the MAX9296 driver will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5] - 2026-08-19
+
+### Fixed
+- prepare 가 벤더 ISI capture 드라이버의 반환되지 않는 V4L2 전원 참조를 lease 로
+  인수 (`0608424`). `imx8-isi-cap.c` 는 `s_power(1)` 만 호출하고 해제 경로가
+  `s_stream(0)` 까지만 가서 `power_count` 가 단조 증가한다. 그래서 첫 카메라 기동
+  이후의 모든 prepare 가 `-EBUSY` 로 막혔고 rebind 나 재부팅 외에 회복 경로가
+  없었다. 실측: `s_power(1)` 14회 / `s_power(0)` 0회.
+
+### Changed
+- prepare admission 게이트가 `power_count` 대신 실제 `streaming` 여부로만 거부한다.
+  이 BSP 에서 `power_count` 는 살아있는 소유자의 증거가 아니다.
+- 드라이버 버전 2.4 → 2.5
+
+### 검증
+- 온타겟(pim-camera-v016): 누수 잔류 상태에서 prepare 성공, 그 구간 펌웨어
+  다운로드 0건(`epoch` 불변 - warm 재사용 유지), cancel 후 재 prepare 성공,
+  스트리밍 중에는 여전히 `-EBUSY`
+- 보드 게이트 G1~G3 통과, G4 dual 50/50 (`docs/prepare-board-gate-v1.md`)
+
 ## [2.4] - 2026-08-12
 
 ### Added
