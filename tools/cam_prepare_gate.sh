@@ -123,7 +123,12 @@ cleanup() {
 	rm -rf "$WORK"
 	if [ "$KEEP_SERVICE" -eq 0 ] && [ "$SERVICE_STOPPED_BY_US" -eq 1 ]; then
 		echo "[정리] cam-operate.service 재기동"
-		systemctl start cam-operate.service 2>/dev/null
+		# 실패를 삼키지 않는다. 이 복원이 trap 의 존재 이유이고, 조용히 실패하면
+		# 보드가 녹화를 멈춘 채 남는데 아무도 모른다.
+		if ! systemctl start cam-operate.service; then
+			echo "[정리] 재기동 실패 - 카메라가 내려간 채로 남는다." >&2
+			echo "[정리] systemctl status cam-operate.service 로 확인하라." >&2
+		fi
 	fi
 }
 trap cleanup EXIT
