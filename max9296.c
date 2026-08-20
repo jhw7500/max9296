@@ -41,7 +41,7 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-#define SW_VERSION "2.4"
+#define SW_VERSION "2.5"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
