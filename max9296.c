@@ -41,7 +41,7 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-#define SW_VERSION "2.6"
+#define SW_VERSION "2.7"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
@@ -385,7 +385,6 @@ struct max9296_channel_ctrl {
 
 struct max9296_ctrl_cache {
   bool firmware_ready;
-  bool pending;
 
   /* Channel-specific settings */
   struct max9296_channel_ctrl ch0;
@@ -2447,7 +2446,6 @@ static int max9296_g_volatile_ctrl(struct v4l2_ctrl *ctrl) {
 
 static void max9296_cache_ctrl(struct max9296_dev *sensor,
                                struct v4l2_ctrl *ctrl) {
-  sensor->ctrl_cache.pending = true;
   switch (ctrl->id) {
   /* Shared controls */
   case V4L2_CID_EXP_TIME:
@@ -2692,9 +2690,6 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
   int i2c_nr = sensor->i2c_client->adapter->nr;
   const char *ch0_name, *ch1_name;
 
-  if (!sensor->ctrl_cache.pending)
-    return;
-
   /* Determine channel names based on I2C adapter number */
   if (i2c_nr == 1) {
     ch0_name = "ch2";
@@ -2745,7 +2740,6 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
                                    ser, host, wiper, single_name, "single");
   }
 
-  sensor->ctrl_cache.pending = false;
   sensor->ctrl_cache.firmware_ready = true;
 }
 
@@ -4304,7 +4298,6 @@ static void max9296_stream_commit_locked(struct max9296_dev *sensor) {
   /* Preserve the old quick-restart control behaviour without using restart as
    * evidence that firmware survived a board power transition. */
   if (sensor->restart && sensor->ctrl_cache.firmware_ready) {
-    sensor->ctrl_cache.pending = true;
     max9296_apply_cached_controls(sensor);
   }
 
@@ -4729,22 +4722,14 @@ static int max9296_enable(void *data) {
         maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
 
         /*
-         * Override hardcoded AE/AWB init with V4L2 cached controls.
-         *
-         * Raise pending first.  max9296_apply_cached_controls() returns early
-         * when the flag is clear and clears it on the way out, so whichever
-         * caller gets there first consumes it.  When s_stream(1) ->
-         * max9296_stream_commit_locked() had already applied, this restore
-         * became a no-op and the hardcoded AUTO written just above stayed as
-         * the final state.  A cold boot happened to run this side first and
-         * kept manual AE; a respawn ran the other side first and lost it - the
-         * same configuration behaving differently by start order.
-         *
-         * The writes above clobber those registers whatever the flag says, so
-         * the restore has to be unconditional.  stream_commit raises it the
-         * same way for its quick-restart path.
+         * Override the hardcoded AE/AWB init just written above with the V4L2
+         * cached controls.  Unconditional by construction: those writes
+         * clobber the registers on every pass, so the restore has to follow
+         * every pass.  This used to sit behind a consumable ctrl_cache.pending
+         * gate, which made the outcome depend on whether s_stream(1) had
+         * already spent the flag - a cold boot kept manual AE, a respawn lost
+         * it (#26).
          */
-        sensor->ctrl_cache.pending = true;
         max9296_apply_cached_controls(sensor);
       }
       mutex_unlock(&sensor->lock);
@@ -5602,7 +5587,6 @@ static int max9296_probe(struct i2c_client *client) {
   sensor->state.power = MAX9296_STATE_IDLE;
   sensor->stream_on = 0;
   sensor->ctrl_cache.firmware_ready = false;
-  sensor->ctrl_cache.pending = false;
   sensor->ctrl_cache.mcp4018_wiper = MCP4018_WIPER_DEFAULT;
   sensor->ctrl_cache.mcp4018_wiper_ch1 = MCP4018_WIPER_DEFAULT;
   sensor->ctrl_cache.mcp4018_power = 0;      /* OFF (MFP4 LOW) */
@@ -5801,7 +5785,6 @@ static int max9296_probe(struct i2c_client *client) {
 
   sensor->ctrl_cache.exposure =
       sensor->ctrls.exp_time ? sensor->ctrls.exp_time->val : 10000;
-  sensor->ctrl_cache.pending = true; /* Mark as having cached values */
 
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s cache initialized: ch0(ae:%d awb:%d "
