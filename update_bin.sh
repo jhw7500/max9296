@@ -60,9 +60,17 @@ dest="$PIM_PACKAGE_DIR/$DEST_REL"
 dest_dir="$(dirname "$dest")"
 [ -d "$dest_dir" ] || die "배포 경로가 없다: $dest_dir — pim-package 트리가 맞는지 확인한다"
 
+# 내용이 그대로면 출처 커밋도 건드리지 않는다. 재빌드 없이 돌리기만 해도
+# source.commit 이 밀려나면 의미 없는 diff 만 쌓인다.
+changed=1
+if [ -f "$dest" ] && cmp -s "$ARTIFACT" "$dest"; then
+    changed=0
+fi
+
 cp "$ARTIFACT" "$dest"
 echo "복사: $ARTIFACT"
 echo "  -> $dest"
+[ "$changed" -eq 1 ] || echo "  (내용 동일 — 출처 커밋은 그대로 둔다)"
 
 [ "$update_manifest" -eq 1 ] || exit 0
 
@@ -72,18 +80,23 @@ verifier="$PIM_PACKAGE_DIR/tools/verify_binaries.py"
 [ -f "$verifier" ] || die "대조기가 없다: $verifier (건너뛰려면 --no-manifest)"
 command -v python3 >/dev/null 2>&1 || die "python3 가 없다 (건너뛰려면 --no-manifest)"
 
-commit="$(git -C "$HERE" rev-parse --short=7 HEAD)"
+verify_args=(--update "$DEST_REL")
 
-# 작업트리가 더러우면 산출물이 HEAD 와 다를 수 있다. 그 상태로 HEAD 를 기록하면
-# 출처가 조용히 거짓이 된다. 막지는 않되 무엇이 빠졌는지 보여준다.
-dirty="$(git -C "$HERE" status --porcelain)"
-if [ -n "$dirty" ]; then
-    {
-        echo "경고: 작업트리가 깨끗하지 않다. 매니페스트에 기록할 커밋은 $commit 인데"
-        echo "      아래 변경은 그 커밋에 들어 있지 않다:"
-        while IFS= read -r line; do echo "        $line"; done <<<"$dirty"
-    } >&2
+if [ "$changed" -eq 1 ]; then
+    commit="$(git -C "$HERE" rev-parse --short=7 HEAD)"
+    verify_args+=(--set-commit "$commit")
+
+    # 작업트리가 더러우면 산출물이 HEAD 와 다를 수 있다. 막지는 않되 무엇이
+    # 그 커밋에 빠져 있는지 보여준다.
+    dirty="$(git -C "$HERE" status --porcelain)"
+    if [ -n "$dirty" ]; then
+        {
+            echo "경고: 작업트리가 깨끗하지 않다. 기록할 커밋은 $commit 인데"
+            echo "      아래 변경은 그 커밋에 들어 있지 않다:"
+            while IFS= read -r line; do echo "        $line"; done <<<"$dirty"
+        } >&2
+    fi
 fi
 
 echo
-python3 "$verifier" --update "$DEST_REL" --set-commit "$commit"
+python3 "$verifier" "${verify_args[@]}"
