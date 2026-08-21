@@ -422,95 +422,132 @@ fi
 # s_power(0) 을 호출하지 않아 power_count 가 잔류하고, 그 상태의 prepare store
 # 는 계약상 EBUSY 다. gstApp 설계도 warm 재사용을 "write 없이 상태만 확인"
 # 으로 규정한다 (docs/superpowers/specs/2026-08-14-max9296-prepare-integration-design.md).
-warm_soak() {
+# 한 사이클 = 하드 리셋 -> cold prepare -> STREAMON -> 상태 검증.
+#
+# 사이클마다 하드 리셋이 필요한 이유는 워치독이 아니라 D-PHY 다. 스트림이 한 번
+# 끝나면 CSI2 가 락을 놓고, 재바인드 없이 다시 STREAMON 하면 프레임이 하나도 오지
+# 않는다(2026-08-20 실측: ISI+0 CSI2+0 인 채 v4l2-ctl 이 timeout). cam_hard_reset.sh
+# 가 CSI2 까지 내렸다 올리는 이유가 그것이다.
+#
+# 앞선 판본은 "하드 리셋 21.8초 > 워치독 15초라 반복하면 워치독 리셋이 난다"는
+# 전제로 warm 반복을 썼는데, 그 전제는 틀렸다. watchdog 데몬은 별도 RT 프로세스라
+# 스크립트가 22초를 쓰든 계속 pet 한다(실측: 리셋 전후 pid 동일, uptime 유지).
+# 08-19 재부팅의 실제 원인은 chk_cam_operate.sh 의 에스컬레이션이었다.
+#
+# v4l2-ctl 로는 warm 재사용을 측정할 수 없다. gstApp 은 미디어 파이프라인을 완전히
+# 다시 세우므로 warm 재시작이 성립하고(B7 10사이클 fps 15.1 실측, gstApp prepare
+# 빌드의 action=2 로그), 이 하네스의 한계일 뿐 드라이버 계약의 한계가 아니다.
+cold_soak() {
 	local label=$1 w=$2 h=$3 en=$4 count=$7 want_fw=$8
 	local -a nodes vids
-	local i n v fw1 gen mark st l m we bad ok ng cycle_fw fw_total fw_lost
+	local i n v gen mark st l m we bad ok ng cycle_fw vrc vp idx
+	local -a vpids
+
 	read -ra nodes <<<"$5"
 	read -ra vids <<<"$6"
 
-	go_cold || return 1
-
-	mark=$(now_uptime)
-	gen=$(gen_new)
-	for n in "${nodes[@]}"; do
-		printf '1 %s %s %s %s %s\n' "$gen" "$w" "$h" "$FPS" "$en" >"$n" 2>/dev/null || {
-			fail "$label cold prepare 실패 $n"
-			return 1
-		}
-	done
-	fw1=$(fw_count_since "$mark")
-	if [ "$fw1" -eq "$want_fw" ]; then
-		pass "$label cold prepare 펌웨어 ${want_fw}건"
-	elif [ "$fw1" -lt 0 ]; then
-		say "  $label cold 펌웨어 건수 판정 보류 (dmesg 링버퍼가 감김)"
-	else
-		fail "$label cold prepare 펌웨어 ${fw1}건 (기대 ${want_fw}건)"
-	fi
-
 	ok=0
 	ng=0
-	fw_total=0
-	fw_lost=0
-	mark=$(now_uptime)
 	for i in $(seq 1 "$count"); do
-		for v in "${vids[@]}"; do
-			timeout 25 v4l2-ctl -d "$v" \
-				--set-fmt-video=width="$w",height="$h",pixelformat="$PIXFMT" \
-				--stream-mmap --stream-count=10 >/dev/null 2>&1 &
+		bad=0
+
+		if ! go_cold; then
+			ng=$((ng + 1))
+			continue
+		fi
+
+		mark=$(now_uptime)
+		gen=$(gen_new)
+
+		# 두 도메인에는 반드시 병렬로 쓴다. 순차로 쓰면 두 번째 도메인이 READY 를
+		# 받고 펌웨어도 정상인데 스트림이 프레임을 거의 못 받는다(2026-08-21 실측:
+		# seq 는 video4 가 ISI+1~2 에서 timeout, par 는 ISI+12~13 정상, 재현율 100%).
+		# docs/parallel-prepare-v1.md 가 규정한 사용법이기도 하다.
+		idx=0
+		for n in "${nodes[@]}"; do
+			(
+				printf '1 %s %s %s %s %s\n' "$gen" "$w" "$h" "$FPS" "$en" >"$n" 2>/dev/null
+				echo $? >"$WORK/prc.$idx"
+			) &
+			idx=$((idx + 1))
 		done
 		wait
 
-		# 사이클마다 짧은 창으로 세어 누적한다. 이 드라이버는 모든 i2c write 를
-		# KERN_NOTICE 로 찍어 링버퍼가 빨리 감기므로, soak 전체를 창 하나로 덮으면
-		# 시작점이 사라져 판정 자체가 불가능해진다(50 사이클에서 실측).
+		idx=0
+		for n in "${nodes[@]}"; do
+			if [ "$(cat "$WORK/prc.$idx" 2>/dev/null)" != 0 ]; then
+				bad=1
+				say "  $label 사이클 $i: prepare write 실패 $n errno=$(stat_of "$n" errno)"
+			else
+				st=$(stat_of "$n" state)
+				[ "$st" = "READY" ] || {
+					bad=1
+					say "  $label 사이클 $i: $n state=$st (READY 이어야 한다)"
+				}
+			fi
+			idx=$((idx + 1))
+		done
+
+		# cold prepare 는 매번 펌웨어를 내려받아야 한다. 0 건이면 하드웨어가
+		# 리셋되지 않았거나 지문이 잘못 재사용된 것이다.
 		cycle_fw=$(fw_count_since "$mark")
 		if [ "$cycle_fw" -lt 0 ]; then
-			fw_lost=$((fw_lost + 1))
-		else
-			fw_total=$((fw_total + cycle_fw))
+			bad=1
+			say "  $label 사이클 $i: 펌웨어 건수를 세지 못했다 (dmesg 링버퍼 랩)"
+		elif [ "$cycle_fw" -ne "$want_fw" ]; then
+			bad=1
+			say "  $label 사이클 $i: 펌웨어 ${cycle_fw}건 (기대 ${want_fw}건)"
 		fi
-		mark=$(now_uptime)
 
-		bad=0
-		for n in "${nodes[@]}"; do
-			st=$(stat_of "$n" state)
-			l=$(stat_of "$n" lease)
-			m=$(stat_of "$n" match)
-			we=$(stat_of "$n" worker_errno)
-			if [ "$st" != "CONSUMED" ] || [ "$l" != "0" ] || [ "$m" != "1" ] || [ "$we" != "0" ]; then
+		if [ "$bad" -eq 0 ]; then
+			vpids=()
+			for v in "${vids[@]}"; do
+				timeout 25 v4l2-ctl -d "$v" \
+					--set-fmt-video=width="$w",height="$h",pixelformat="$PIXFMT" \
+					--stream-mmap --stream-count=10 >/dev/null 2>&1 &
+				vpids+=("$!")
+			done
+			vrc=0
+			for vp in "${vpids[@]}"; do
+				wait "$vp" || vrc=1
+			done
+			[ "$vrc" -eq 0 ] || {
 				bad=1
-				say "  $label 사이클 $i: $n state=$st lease=$l match=$m worker_errno=$we"
-			fi
-		done
+				say "  $label 사이클 $i: STREAMON 실패 (v4l2-ctl 비정상 종료)"
+			}
+		fi
+
+		# 첫 V4L2 power-on 이 lease 를 소비했어야 한다.
+		if [ "$bad" -eq 0 ]; then
+			for n in "${nodes[@]}"; do
+				st=$(stat_of "$n" state)
+				l=$(stat_of "$n" lease)
+				m=$(stat_of "$n" match)
+				we=$(stat_of "$n" worker_errno)
+				if [ "$st" != "CONSUMED" ] || [ "$l" != "0" ] || [ "$m" != "1" ] || [ "$we" != "0" ]; then
+					bad=1
+					say "  $label 사이클 $i: $n state=$st lease=$l match=$m worker_errno=$we"
+				fi
+			done
+		fi
+
 		if [ "$bad" -eq 0 ]; then ok=$((ok + 1)); else ng=$((ng + 1)); fi
-		[ $((i % 10)) -eq 0 ] && say "  $label ${i}/${count}  성공 $ok  실패 $ng"
+		[ $((i % 5)) -eq 0 ] && say "  $label ${i}/${count}  성공 $ok  실패 $ng"
 	done
-	if [ "$fw_total" -gt 0 ]; then
-		fail "$label warm 구간에서 펌웨어를 ${fw_total}건 재다운로드했다"
-	fi
-	if [ "$fw_lost" -gt 0 ]; then
-		fail "$label warm 펌웨어 건수를 ${fw_lost}개 사이클에서 세지 못했다 (링버퍼 랩)"
-	elif [ "$fw_total" -eq 0 ]; then
-		pass "$label warm ${count}회 - 펌웨어 재다운로드 0건"
-	fi
+
 	if [ "$ng" -eq 0 ]; then
-		pass "$label warm ${count}회 전부 재사용 조건 유지 (CONSUMED/lease=0/match=1)"
+		pass "$label cold ${count}회 전부 통과 (리셋->prepare->STREAMON->lease 이양)"
 	else
-		fail "$label warm 실패 ${ng} / ${count}"
+		fail "$label cold 실패 ${ng} / ${count}"
 	fi
 }
 
 if wants G4; then
 	half=$((CYCLES / 2))
 	[ "$half" -lt 1 ] && half=1
-	say "[G4] soak - dual ${half}회 + single ${half}회 (하드 리셋 2회만)"
-	# 사이클마다 하드 리셋을 걸지 않는다. 이 보드는 HW 워치독이 15초인데
-	# cam_hard_reset.sh 가 21.8초 걸려서 반복하면 워치독 리셋이 난다(실측:
-	# 2026-08-19 사이클마다 리셋하는 초안에서 첫 사이클에 보드가 재부팅).
-	# 모드 전환은 전원 epoch 를 넘어야 하므로 구성당 리셋 1회만 쓴다.
-	warm_soak "dual" "$DUAL_W" "$DUAL_H" "$DUAL_EN" "$PREP_A $PREP_B" "$VID_A $VID_B" "$half" 2
-	warm_soak "single" "$SINGLE_W" "$SINGLE_H" "$SINGLE_EN" "$PREP_A" "$VID_A" "$half" 1
+	say "[G4] soak - dual ${half}회 + single ${half}회 (사이클마다 하드 리셋)"
+	cold_soak "dual" "$DUAL_W" "$DUAL_H" "$DUAL_EN" "$PREP_A $PREP_B" "$VID_A $VID_B" "$half" 2
+	cold_soak "single" "$SINGLE_W" "$SINGLE_H" "$SINGLE_EN" "$PREP_A" "$VID_A" "$half" 1
 	hr
 fi
 

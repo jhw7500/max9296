@@ -69,6 +69,22 @@ wait "$pid0" || exit $?
 wait "$pid1" || exit $?
 ```
 
+Both writes must be in flight at the same time. Issuing them one after the
+other is **not supported**: each write is accepted and reports `state=READY`
+with the expected firmware download, but the second domain then streams only
+one or two frames before stalling. Measured 2026-08-21, reproducing every
+time:
+
+```text
+sequential   prepare(READY,READY) fw=2   video3 ok   video4 timeout   ISI 11 / 2
+parallel     prepare(READY,READY) fw=2   video3 ok   video4 ok        ISI 11 / 12
+```
+
+The driver does not reject the sequential form, so a caller cannot detect the
+problem from the ABI - the status line looks correct while the hardware is
+not. The cause is not established; the shared FSYNC handover is the obvious
+suspect but has not been confirmed. Treat the parallel form as the contract.
+
 The two MAX9296 instances share one physical FSYNC signal, so both commands
 must request the same FPS. The first request reserves that cadence for the
 current board-power epoch and propagates it to the idle peer; a conflicting
