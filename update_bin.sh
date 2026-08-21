@@ -60,6 +60,17 @@ dest="$PIM_PACKAGE_DIR/$DEST_REL"
 dest_dir="$(dirname "$dest")"
 [ -d "$dest_dir" ] || die "배포 경로가 없다: $dest_dir — pim-package 트리가 맞는지 확인한다"
 
+# 매니페스트를 갱신할 참이면 필요한 것들을 복사 전에 확인한다. 복사 뒤에 죽으면
+# 바이너리는 새것이고 매니페스트는 헌것이라, 이 스크립트가 막으려던 불일치를
+# 스스로 만들게 된다.
+verifier="$PIM_PACKAGE_DIR/tools/verify_binaries.py"
+if [ "$update_manifest" -eq 1 ]; then
+    [ -f "$PIM_PACKAGE_DIR/.github/binary-manifest.json" ] \
+        || die "매니페스트가 없다: $PIM_PACKAGE_DIR/.github/binary-manifest.json (건너뛰려면 --no-manifest)"
+    [ -f "$verifier" ] || die "대조기가 없다: $verifier (건너뛰려면 --no-manifest)"
+    command -v python3 >/dev/null 2>&1 || die "python3 가 없다 (건너뛰려면 --no-manifest)"
+fi
+
 # 내용이 그대로면 출처 커밋도 건드리지 않는다. 재빌드 없이 돌리기만 해도
 # source.commit 이 밀려나면 의미 없는 diff 만 쌓인다.
 changed=1
@@ -73,12 +84,6 @@ echo "  -> $dest"
 [ "$changed" -eq 1 ] || echo "  (내용 동일 — 출처 커밋은 그대로 둔다)"
 
 [ "$update_manifest" -eq 1 ] || exit 0
-
-verifier="$PIM_PACKAGE_DIR/tools/verify_binaries.py"
-[ -f "$PIM_PACKAGE_DIR/.github/binary-manifest.json" ] \
-    || die "매니페스트가 없다: $PIM_PACKAGE_DIR/.github/binary-manifest.json (건너뛰려면 --no-manifest)"
-[ -f "$verifier" ] || die "대조기가 없다: $verifier (건너뛰려면 --no-manifest)"
-command -v python3 >/dev/null 2>&1 || die "python3 가 없다 (건너뛰려면 --no-manifest)"
 
 verify_args=(--update "$DEST_REL")
 
