@@ -5,6 +5,49 @@ All notable changes to the MAX9296 driver will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7] - 2026-08-21
+
+### Changed
+- `ctrl_cache.pending` 제거 (#28, #29). 2.6 이 고친 것은 증상이고, 원인은 이
+  플래그가 dirty 표시와 실행 게이트 두 뜻을 겸한 것이었다.
+
+  독자는 `max9296_apply_cached_controls()` 의 가드 하나뿐인데, 두 호출부
+  (`max9296_stream_commit_locked()`, `max9296_enable()`)가 **모두** 부르기 직전에
+  `pending = true` 로 세워 그 가드를 무력화하고 있었다. 게이트는 아무 역할도 하지
+  않으면서 "누가 먼저 소모했는가"로 동작을 가르는 함정만 남긴 셈이다 (#26).
+
+  캐시가 비어 있는데 apply 가 불릴 창은 존재하지 않는다 - probe 는 5749 행
+  `v4l2_ctrl_handler_setup()` 에서 `s_ctrl` 을 돌려 캐시를 채우고(이 시점
+  `firmware_ready` 가 false 라 하드웨어는 건드리지 않는다), subdev 등록은 그보다
+  뒤인 5862 행이다. apply 로 가는 두 경로는 모두 등록 이후에야 열린다. 따라서
+  가드는 무언가를 막고 있던 것이 아니라 도달 불가 구간을 지키고 있었다.
+
+  플래그를 없애면 apply 는 무조건 적용이 되고, 호출부가 dirty 상태를 거짓으로
+  세우는 관용구가 사라지며(#28), 읽기와 clear 사이에 동시 `s_ctrl` 이 유실될 창도
+  함께 사라진다(#29). `firmware_ready` 는 독자가 5 곳으로 실제 판단에 쓰이므로
+  그대로 둔다.
+
+- 드라이버 버전 2.6 -> 2.7
+
+### 검증
+- 빌드: `./make-for-imx8` exit 0, `srcversion` 19824075B55FFF0DB6EF7CA(2.6) ->
+  A490660F641EEB5577DD19B(2.7)
+- 온타겟 (2026-08-21, pim-camera-v016, 720p_4ch ch0 ae_off·gain 512).
+  2.6 과 같은 결정 신호로 회귀 없음을 확인했다:
+
+  |  | `0x5002` | `0x5006` |
+  | --- | --- | --- |
+  | 2.7 콜드 정착 후 | 0x0290 manual | 0x0200 |
+  | 2.7 respawn ×3 | 0x0290 manual | 0x0200 |
+  | 2.7 respawn 후 15/25/40/55s | 0x0290 유지 | 0x0200 유지 |
+
+  대조군 2.5 는 respawn 후 `0x0299`(AUTO)가 120 초 이상 유지되는 종착 상태다.
+
+- **측정 주의**: 콜드 경로는 정착에 약 25 초가 걸린다. 실측 샘플:
+  `t+10s 0x029c/0x0100` -> `t+15s 0x0290/0x0100` -> `t+25s 0x0290/0x0200`.
+  15 초 이내에 읽으면 전이 중인 값을 잡는다. 이 레지스터를 보는 검사는 콜드
+  기동 후 25 초 이상 기다려야 한다.
+
 ## [2.6] - 2026-08-21
 
 ### Fixed
