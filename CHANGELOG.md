@@ -5,6 +5,35 @@ All notable changes to the MAX9296 driver will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6] - 2026-08-21
+
+### Fixed
+- 수동 AE 설정의 실효 여부가 스트림 라이프사이클 순서에 따라 갈리던 것 (#26).
+  `max9296_enable()` 의 enable 스레드는 AE/AWB/LSC 를 하드코딩으로 초기화한 뒤
+  `max9296_apply_cached_controls()` 로 V4L2 캐시를 복원하는데, 그 복원 함수가
+  `ctrl_cache.pending` 을 게이트로 쓰고 스스로 소모한다. `s_stream(1)` ->
+  `max9296_stream_commit_locked()` 가 먼저 apply 해 pending 을 소모하면 이
+  복원이 통째로 no-op 이 되고, 바로 위에서 쓴 하드코딩 AUTO(`0x5002=0x299`)가
+  최종 상태로 남았다.
+
+  콜드부트는 이쪽이 먼저 돌아 설정값(manual)이 이기고, 앱 재기동(respawn)은
+  반대편이 먼저 돌아 설정이 소실됐다 - 같은 설정이 기동 순서에 따라 다르게
+  동작했다. pim-check smoke 의 fhd_4ch ch0(ae_off·manual gain) bitrate 검증이
+  콜드부트에서 백색 포화로 4/4 FAIL 한 원인이다.
+
+  복원은 멱등해야 하는 동작이므로 소모성 게이트를 걸 이유가 없다. 하드코딩
+  직전 상태와 무관하게 다시 적용하도록 `pending` 을 세우고 호출한다 -
+  `max9296_stream_commit_locked()` 의 quick-restart 경로가 쓰는 관용구와 같다.
+
+- 드라이버 버전 2.5 -> 2.6
+
+### 검증
+- 빌드: `./make-for-imx8` exit 0, `srcversion` 41D8E9E128B7BB8873D14D7(2.5) ->
+  19824075B55FFF0DB6EF7CA(2.6)
+- 온타겟 판정 신호(미실시): `pkill` -> respawn 후 ch0 AE_CTRL
+  (`bus2 @0x11 0x5002`) readback 이 `0x0299`(AUTO)로 뒤집히지 않고
+  `0x0290`(manual)을 유지해야 한다
+
 ## [2.5] - 2026-08-20
 
 ### Fixed

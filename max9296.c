@@ -41,7 +41,7 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-#define SW_VERSION "2.5"
+#define SW_VERSION "2.6"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
@@ -4728,7 +4728,23 @@ static int max9296_enable(void *data) {
         usleep_range(100000, 101000);
         maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
 
-        /* Override hardcoded AE/AWB init with V4L2 cached controls */
+        /*
+         * Override hardcoded AE/AWB init with V4L2 cached controls.
+         *
+         * Raise pending first.  max9296_apply_cached_controls() returns early
+         * when the flag is clear and clears it on the way out, so whichever
+         * caller gets there first consumes it.  When s_stream(1) ->
+         * max9296_stream_commit_locked() had already applied, this restore
+         * became a no-op and the hardcoded AUTO written just above stayed as
+         * the final state.  A cold boot happened to run this side first and
+         * kept manual AE; a respawn ran the other side first and lost it - the
+         * same configuration behaving differently by start order.
+         *
+         * The writes above clobber those registers whatever the flag says, so
+         * the restore has to be unconditional.  stream_commit raises it the
+         * same way for its quick-restart path.
+         */
+        sensor->ctrl_cache.pending = true;
         max9296_apply_cached_controls(sensor);
       }
       mutex_unlock(&sensor->lock);
