@@ -30,9 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 검증
 - 빌드: `./make-for-imx8` exit 0, `srcversion` 41D8E9E128B7BB8873D14D7(2.5) ->
   19824075B55FFF0DB6EF7CA(2.6)
-- 온타겟 판정 신호(미실시): `pkill` -> respawn 후 ch0 AE_CTRL
-  (`bus2 @0x11 0x5002`) readback 이 `0x0299`(AUTO)로 뒤집히지 않고
-  `0x0290`(manual)을 유지해야 한다
+- 온타겟 (2026-08-21, pim-camera-v016, 720p_4ch ch0 ae_off·gain 512).
+  판정 신호는 `pkill` -> respawn 후 ch0 AE_CTRL(`bus2 @0x11 0x5002`) readback:
+
+  |                    | 0x5002 | 0x5006 |
+  | --- | --- | --- |
+  | 2.5 콜드 기동 후   | 0x0290 manual | 0x0200 |
+  | 2.5 respawn 후     | **0x0299 AUTO** | 0x0200 |
+  | 2.6 콜드 기동 후   | 0x0290 manual | 0x0200 |
+  | 2.6 respawn 3 회   | **0x0290 manual** | 0x0200 |
+
+  2.5 는 SIGTERM 한 번으로 뒤집혔고 2.6 은 3/3 유지했다. 게인 미러
+  `0x5006` 은 양쪽 모두 잔존한다. 2.6 상태에서 정상 녹화도 확인했다 -
+  ch0 세그먼트 7.4MB(720p@30 gain 512)로, 백색 포화 시의 ~65kbps 와
+  명확히 구분된다.
 
 ## [2.5] - 2026-08-20
 
