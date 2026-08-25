@@ -22,7 +22,7 @@ make ARCH=arm64 CROSS_COMPILE=aarch64-poky-linux- KERNEL_SRC="${KERNEL_SRC}" "$@
 # 호스트 종속 경로를 담으므로 .gitignore 대상 — 각자 빌드할 때 생성된다.
 # clangd 가 GCC 전용 플래그를 읽으려면 저장소의 .clangd 파일도 함께 필요하다.
 _cc_rc=$?
-_cc_dir="$(cd "$(dirname "$0")" && pwd)"
+_cc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _cc_kdir="$KERNEL_SRC"
 
 # clean 류가 인자에 하나라도 섞이면 건너뛴다 ("clean all" 처럼 혼합돼도 안전하게).
@@ -36,8 +36,7 @@ done
 _cc_gen="${CC_GEN:-}"
 if [ -z "$_cc_gen" ]; then
     for _cc_c in "$_cc_kdir/source/scripts/clang-tools/gen_compile_commands.py" \
-                 "$_cc_kdir/scripts/clang-tools/gen_compile_commands.py" \
-                 "/opt/desktop/build-desktop/workspace/sources/linux-imx/scripts/clang-tools/gen_compile_commands.py"; do
+                 "$_cc_kdir/scripts/clang-tools/gen_compile_commands.py"; do
         if [ -f "$_cc_c" ]; then _cc_gen="$_cc_c"; break; fi
     done
 fi
@@ -48,10 +47,12 @@ if [ "$_cc_rc" -eq 0 ] && [ "$_cc_skip" -eq 0 ]; then
     elif [ -z "$_cc_gen" ]; then
         echo "compile_commands.json 건너뜀 — gen_compile_commands.py 를 찾지 못했다 (CC_GEN 으로 지정 가능)" >&2
     else
-        _cc_tmp="$_cc_dir/.compile_commands.json.tmp"
-        if python3 "$_cc_gen" -d "$_cc_kdir" -o "$_cc_tmp" "$(cd "$(dirname "$0")" && pwd)" 2>/dev/null \
-           && grep -q '"file"' "$_cc_tmp" 2>/dev/null; then
-            mv -f "$_cc_tmp" "$_cc_dir/compile_commands.json"
+        # 고정 이름은 동시 실행 시 서로 덮어쓴다. mktemp 로 고유하게 만든다.
+        _cc_tmp="$(mktemp "$_cc_dir/.compile_commands.json.XXXXXX" 2>/dev/null)" || _cc_tmp=""
+        if [ -n "$_cc_tmp" ] \
+           && python3 "$_cc_gen" -d "$_cc_kdir" -o "$_cc_tmp" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" 2>/dev/null \
+           && grep -q '"file"' "$_cc_tmp" 2>/dev/null \
+           && mv -f "$_cc_tmp" "$_cc_dir/compile_commands.json"; then
             echo "compile_commands.json 갱신됨 (clangd)"
         else
             rm -f "$_cc_tmp"
