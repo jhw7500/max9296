@@ -30,3 +30,7 @@ __pycache__/
 
 # AI session handoff notes (internal host/path details — keep out of the driver repo)
 HANDOFF.*.md
+
+# clangd (호스트 종속 — 각자 빌드 시 생성)
+compile_commands.json
+.cache/
