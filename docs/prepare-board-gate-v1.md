@@ -27,7 +27,7 @@
 | G1 두 CSI 도메인의 펌웨어 구간이 겹치는가 | 커널이 찍는 `start_fw_load`/`end_fw_load` 의 인스턴스별 구간을 dmesg 타임스탬프로 재서 교집합이 양수인지 확인 |
 | G2 STREAMON 에서 2차 펌웨어 다운로드가 없는가 | STREAMON 전후로 `start_fw_load` 건수를 세어 증가가 0 인지, lease 가 V4L2 로 이양(`lease=0`)됐는지 확인 |
 | G3 cancel / expiry / 잘못된 요청 정리 | cancel 후 `IDLE`+재 prepare 성공(전원 누수 없음), 미사용 lease 60초 만료, 잘못된 요청 5종 거부 + 상태 불변 |
-| G4 single / dual 반복 사이클 | cold prepare 1회 후 warm 재사용 사이클 반복. 매 사이클 `CONSUMED`/`lease=0`/`match=1`/`worker_errno=0` 유지, 펌웨어 재다운로드 0건 |
+| G4 single / dual 반복 사이클 | 매 사이클 hard reset, 병렬 cold prepare, STREAMON을 수행. `CONSUMED`/`lease=0`/`match=1`/`worker_errno=0` 유지와 예상 펌웨어 다운로드 건수(dual 2, single 1)를 확인 |
 
 ## 실행
 
@@ -83,8 +83,8 @@ STREAMON -> 상태 검증이며, 사이클마다 펌웨어를 다시 내려받�
 상태를 확인하므로 샘플 사이의 개입은 사이클 실패로 드러난다. 실패 0 건과 함께 보면
 구간에 개입이 없었다고 볼 근거가 된다.
 
-**폐기한 시도들** — 이 결과에 이르기까지 세 번을 버렸다. 다음 사람이 같은 길을 걷지
-않도록 남긴다.
+**검증 이력** — 최종 통과에 이르기까지 다섯 번의 실패·무효 시도를 폐기했다. 다음
+사람이 같은 길을 걷지 않도록 최종 통과 결과와 함께 남긴다.
 
 | 시도 | 결과 | 원인 |
 | --- | --- | --- |

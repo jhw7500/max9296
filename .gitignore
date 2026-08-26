@@ -1,6 +1,7 @@
 # Kernel module build artifacts
 *.o
 *.ko
+*.dtb
 *.mod
 *.mod.c
 *.mod.o
