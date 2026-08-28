@@ -35,14 +35,16 @@ def parse_prepare_command(text: str) -> tuple[int, ...]:
         raise ValueError("generation")
     if fps < 1 or fps > 120:
         raise ValueError("fps")
-    if (width, height) in ((2560, 720), (3840, 1080)):
+    if (width, height) in ((2560, 720), (3840, 1080), (1280, 360)):
         if enable != 3:
             raise ValueError("dual mask")
-    elif (width, height) in ((1280, 720), (1920, 1080)):
+    elif (width, height) in ((1280, 720), (1920, 1080), (640, 360)):
         if enable not in (1, 2):
             raise ValueError("single mask")
     else:
         raise ValueError("tuple")
+    if fps > (120 if height == 360 else 30):
+        raise ValueError("mode fps")
     return (1, generation, width, height, fps, enable)
 
 
@@ -434,11 +436,14 @@ def check_model(failures: list[str]) -> None:
     valid_commands = (
         "0\n",
         "1 1 2560 720 30 3\n",
-        "1 2 3840 1080 120 3",
+        "1 2 3840 1080 30 3",
         "1 3 1280 720 1 1",
-        "1 4 1280 720 60 2",
+        "1 4 1280 720 30 2",
         "1 5 1920 1080 30 1",
         "1 6 1920 1080 30 2",
+        "1 7 1280 360 120 3",
+        "1 8 640 360 120 1",
+        "1 9 640 360 120 2",
         "1 18446744073709551615 2560 720 30 3",
     )
     for command in valid_commands:
@@ -462,8 +467,13 @@ def check_model(failures: list[str]) -> None:
         "1 1 2560 4294967296 30 3",
         "1 1 2560 720 0 3",
         "1 1 2560 720 121 3",
+        "1 1 3840 1080 31 3",
+        "1 1 1280 720 31 1",
+        "1 1 1920 1080 120 2",
         "1 1 2560 720 30 1",
         "1 1 1280 720 30 3",
+        "1 1 1280 360 30 1",
+        "1 1 640 360 30 3",
         "1 1 640 480 30 1",
         "1 1 2560 720 30 3\n2",
         "1 1 2560 720 30 3\x00ignored",
@@ -1134,6 +1144,7 @@ def check_source(source: str, failures: list[str]) -> None:
         "generation == 0",
         "fps < 1",
         "fps > 120",
+        "command->fps > max9296_mode_data[command->mode_id].max_fps",
         "MAX9296_MODE_2560x720",
         "MAX9296_MODE_1280x720",
         "MAX9296_MODE_3840x1080",

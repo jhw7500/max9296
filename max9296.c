@@ -41,7 +41,9 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-#define SW_VERSION "2.7"
+#include "max9296_360p_policy.h"
+
+#define SW_VERSION "2.9"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
@@ -50,9 +52,12 @@
 
 static int debug;
 
-#define DEFAULT_FRAMERATE_FPS (120)
+#define DEFAULT_FRAMERATE_FPS (30)
 #define DEFAULT_RESOLUTION_WIDTH (2560)
 #define DEFAULT_RESOLUTION_HEIGHT (720)
+#define MAX9296_DEFAULT_MAX_FPS 30
+#define MAX9296_360P_MAX_FPS 120
+#define MAX9296_EXPOSURE_SAFE_MAX_FPS 30
 
 #define MAX9296_REG_CHIP_ID 0x000d
 #define MAX9296_CHIP_ID 0x96
@@ -76,6 +81,30 @@ static int debug;
 #define AP1302_REG_EXP_TIME 0x500c
 #define AP1302_REG_AWB_CTRL 0x5100
 #define AP1302_REG_LSC_CTRL 0x54a0
+#define AP1302_REG_ATOMIC 0x1184
+#define AP1302_ATOMIC_BEGIN 0x0001
+#define AP1302_ATOMIC_FINISH 0x0013
+#define AP1302_REG_PREVIEW_WIDTH 0x2000
+#define AP1302_REG_PREVIEW_HEIGHT 0x2002
+#define AP1302_REG_PREVIEW_ROI_X0 0x2004
+#define AP1302_REG_PREVIEW_ROI_Y0 0x2006
+#define AP1302_REG_PREVIEW_ROI_X1 0x2008
+#define AP1302_REG_PREVIEW_ROI_Y1 0x200a
+#define AP1302_REG_PREVIEW_ASPECT 0x200c
+#define AP1302_REG_PREVIEW_SENSOR_MODE 0x2014
+#define AP1302_REG_PREVIEW_LINE_TIME 0x201c
+#define AP1302_REG_PREVIEW_MAX_FPS 0x2020
+#define AP1302_REG_TRIGGER_MAX_MISMATCH 0x6112
+#define AP1302_REG_DZ_TGT_FCT 0x1010
+#define AP1302_REG_DZ_STEP_FCT 0x1012
+#define AP1302_REG_DZ_CENTER_X 0x118c
+#define AP1302_REG_DZ_CENTER_Y 0x118e
+
+#define AP1302_DZ_STEP_IMMEDIATE 0x8000
+#define MAX9296_DZ_MIN 100
+#define MAX9296_DZ_MAX 300
+#define MAX9296_DZ_DEFAULT 100
+#define MAX9296_DZ_CENTER_DEFAULT 0x8000
 
 /* AR0234CS sensor register (accessed via AP1302 DMA) */
 #define AR0234_REG_LED_FLASH_CONTROL 0x3270
@@ -180,6 +209,20 @@ static int debug;
 #define V4L2_CID_MCP4018_POWER_CH0 (V4L2_CID_USER_BASE + 0x1020)
 #define V4L2_CID_MCP4018_POWER_CH1 (V4L2_CID_USER_BASE + 0x1021)
 
+/* AP1302 digital zoom: one common percent plus normalized center coordinates.
+ *
+ * A dual MAX9296 output concatenates both AP1302 streams. Different zoom
+ * factors change their sensor readout heights and corrupt that combined frame,
+ * so only the shared factor is exposed. Center coordinates remain independent
+ * per channel and retain their original control IDs. */
+#define V4L2_CID_DZ (V4L2_CID_USER_BASE + 0x1022)
+#define V4L2_CID_DZ_X (V4L2_CID_USER_BASE + 0x1023)
+#define V4L2_CID_DZ_Y (V4L2_CID_USER_BASE + 0x1024)
+#define V4L2_CID_DZ_X_CH0 (V4L2_CID_USER_BASE + 0x1027)
+#define V4L2_CID_DZ_X_CH1 (V4L2_CID_USER_BASE + 0x1028)
+#define V4L2_CID_DZ_Y_CH0 (V4L2_CID_USER_BASE + 0x1029)
+#define V4L2_CID_DZ_Y_CH1 (V4L2_CID_USER_BASE + 0x102a)
+
 /*
  * MAX9295 serializer addresses (matches mcp4018_ctrl.sh channel table).
  *
@@ -243,6 +286,8 @@ enum max9296_mode_id {
   MAX9296_MODE_1280x720,
   MAX9296_MODE_3840x1080,
   MAX9296_MODE_1920x1080,
+  MAX9296_MODE_1280x360,
+  MAX9296_MODE_640x360,
   MAX9296_NUM_MODES,
 };
 
@@ -301,6 +346,7 @@ struct max9296_mode_info {
   const struct reg_value *reg_data;
   u32 reg_data_size;
   u32 max_fps;
+  u32 exposure_safe_max_fps;
 };
 
 /*
@@ -325,6 +371,9 @@ struct max9296_ctrls {
   struct v4l2_ctrl_handler handler;
   struct v4l2_ctrl *pixel_rate;
   struct v4l2_ctrl *exp_time;
+  struct v4l2_ctrl *dz;
+  struct v4l2_ctrl *dz_x;
+  struct v4l2_ctrl *dz_y;
   struct v4l2_ctrl *light_freq;
   struct v4l2_ctrl *hue;
 
@@ -353,6 +402,10 @@ struct max9296_ctrls {
   struct v4l2_ctrl *saturation_ch1;
   struct v4l2_ctrl *led_flash_ch0;
   struct v4l2_ctrl *led_flash_ch1;
+  struct v4l2_ctrl *dz_x_ch0;
+  struct v4l2_ctrl *dz_x_ch1;
+  struct v4l2_ctrl *dz_y_ch0;
+  struct v4l2_ctrl *dz_y_ch1;
 
   /* MCP4018 digital potentiometer */
   struct v4l2_ctrl *mcp4018_wiper;
@@ -381,6 +434,8 @@ struct max9296_channel_ctrl {
   int contrast;   /* V4L2_CID_CONTRAST_CHx (fixed12 u16) */
   int saturation; /* V4L2_CID_SATURATION_CHx (fixed12 u16) */
   int led_flash;  /* V4L2_CID_LED_FLASH_CHx (AR0234 R0x3270, bit8=EN, bit7:0=DELAY) */
+  int dz_x;       /* normalized center X (0..65535) */
+  int dz_y;       /* normalized center Y (0..65535) */
 };
 
 struct max9296_ctrl_cache {
@@ -392,6 +447,9 @@ struct max9296_ctrl_cache {
 
   /* Shared setting value, applied to both channels when set */
   int exposure; /* V4L2_CID_EXP_TIME - exp_time (u32) */
+  int dz;
+  int dz_x;
+  int dz_y;
 
   /* MCP4018 digital potentiometer */
   int mcp4018_wiper;      /* V4L2_CID_MCP4018_WIPER - Port B (0x00~0x7F) */
@@ -807,7 +865,8 @@ static const struct max9296_mode_info max9296_mode_init_data = {
     720,
     max9296_init_setting_1080p_crop_720p_2ch_30fps,
     ARRAY_SIZE(max9296_init_setting_1080p_crop_720p_2ch_30fps),
-    MAX9296_30_FPS,
+    MAX9296_DEFAULT_MAX_FPS,
+    MAX9296_EXPOSURE_SAFE_MAX_FPS,
 };
 
 static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
@@ -817,7 +876,8 @@ static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
         720,
         max9296_init_setting_1080p_crop_720p_2ch_30fps,
         ARRAY_SIZE(max9296_init_setting_1080p_crop_720p_2ch_30fps),
-        MAX9296_30_FPS,
+        MAX9296_DEFAULT_MAX_FPS,
+        MAX9296_EXPOSURE_SAFE_MAX_FPS,
     },
     {
         MAX9296_MODE_1280x720,
@@ -825,7 +885,8 @@ static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
         720,
         max9296_init_setting_720p_30fps_L,
         ARRAY_SIZE(max9296_init_setting_720p_30fps_L),
-        MAX9296_30_FPS,
+        MAX9296_DEFAULT_MAX_FPS,
+        MAX9296_EXPOSURE_SAFE_MAX_FPS,
     },
     {
         MAX9296_MODE_3840x1080,
@@ -833,7 +894,8 @@ static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
         1080,
         max9296_init_setting_1080p_crop_720p_2ch_30fps,
         ARRAY_SIZE(max9296_init_setting_1080p_crop_720p_2ch_30fps),
-        MAX9296_30_FPS,
+        MAX9296_DEFAULT_MAX_FPS,
+        MAX9296_EXPOSURE_SAFE_MAX_FPS,
     },
     {
         MAX9296_MODE_1920x1080,
@@ -841,7 +903,26 @@ static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
         1080,
         max9296_init_setting_720p_30fps_L,
         ARRAY_SIZE(max9296_init_setting_720p_30fps_L),
-        MAX9296_30_FPS,
+        MAX9296_DEFAULT_MAX_FPS,
+        MAX9296_EXPOSURE_SAFE_MAX_FPS,
+    },
+    {
+        MAX9296_MODE_1280x360,
+        1280,
+        360,
+        max9296_init_setting_1080p_crop_720p_2ch_30fps,
+        ARRAY_SIZE(max9296_init_setting_1080p_crop_720p_2ch_30fps),
+        MAX9296_360P_MAX_FPS,
+        MAX9296_EXPOSURE_SAFE_MAX_FPS,
+    },
+    {
+        MAX9296_MODE_640x360,
+        640,
+        360,
+        max9296_init_setting_720p_30fps_L,
+        ARRAY_SIZE(max9296_init_setting_720p_30fps_L),
+        MAX9296_360P_MAX_FPS,
+        MAX9296_EXPOSURE_SAFE_MAX_FPS,
     },
 };
 static const struct max9296_mode_info max9296_mode_data_HD_R = {
@@ -850,7 +931,8 @@ static const struct max9296_mode_info max9296_mode_data_HD_R = {
     720,
     max9296_init_setting_720p_30fps_R,
     ARRAY_SIZE(max9296_init_setting_720p_30fps_R),
-    MAX9296_30_FPS,
+    MAX9296_DEFAULT_MAX_FPS,
+    MAX9296_EXPOSURE_SAFE_MAX_FPS,
 };
 
 static const struct max9296_mode_info max9296_mode_data_FHD_R = {
@@ -859,9 +941,26 @@ static const struct max9296_mode_info max9296_mode_data_FHD_R = {
     1080,
     max9296_init_setting_720p_30fps_R,
     ARRAY_SIZE(max9296_init_setting_720p_30fps_R),
-    MAX9296_30_FPS,
+    MAX9296_DEFAULT_MAX_FPS,
+    MAX9296_EXPOSURE_SAFE_MAX_FPS,
+};
+
+static const struct max9296_mode_info max9296_mode_data_360_R = {
+    MAX9296_MODE_640x360,
+    640,
+    360,
+    max9296_init_setting_720p_30fps_R,
+    ARRAY_SIZE(max9296_init_setting_720p_30fps_R),
+    MAX9296_360P_MAX_FPS,
+    MAX9296_EXPOSURE_SAFE_MAX_FPS,
 };
 //-------------------------------------------------------------------------
+static bool max9296_mode_is_dual(const struct max9296_mode_info *mode) {
+  return mode && (mode->id == MAX9296_MODE_2560x720 ||
+                  mode->id == MAX9296_MODE_3840x1080 ||
+                  mode->id == MAX9296_MODE_1280x360);
+}
+
 /* True when the hardware is currently programmed for both cameras.
  *
  * Deliberately reads last_mode, not current_mode. current_mode is the requested
@@ -873,10 +972,7 @@ static const struct max9296_mode_info max9296_mode_data_FHD_R = {
  * serializer physically at 0x60 while current_mode already reads single.
  */
 static bool max9296_hw_is_dual(const struct max9296_dev *sensor) {
-  const struct max9296_mode_info *mode = sensor->last_mode;
-
-  return mode && (mode->id == MAX9296_MODE_2560x720 ||
-                  mode->id == MAX9296_MODE_3840x1080);
+  return max9296_mode_is_dual(sensor->last_mode);
 }
 
 /* MAX9295 I2C address for a local channel (0 or 1).
@@ -1449,6 +1545,8 @@ static int max9296_check_valid_mode(struct max9296_dev *sensor,
   case MAX9296_MODE_2560x720:
   case MAX9296_MODE_3840x1080:
   case MAX9296_MODE_1920x1080:
+  case MAX9296_MODE_1280x360:
+  case MAX9296_MODE_640x360:
     if ((rate != MAX9296_30_FPS))
       ret = -EINVAL;
     break;
@@ -2241,6 +2339,16 @@ static int max9296_set_fmt(struct v4l2_subdev *sd,
     goto out;
   }
 
+  if (READ_ONCE(sensor->fps) > new_mode->max_fps) {
+    printk(KERN_WARNING
+           "[%s:%d][%s:%d] %s mode=%ux%u current_fps=%u max_fps=%u rejected",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           __FUNCTION__, new_mode->width, new_mode->height,
+           READ_ONCE(sensor->fps), new_mode->max_fps);
+    ret = -EINVAL;
+    goto out;
+  }
+
   old_valid = !max9296_normalize_fingerprint_locked(sensor,
                                                      &old_fingerprint);
   if (new_mode != sensor->current_mode)
@@ -2274,8 +2382,7 @@ static int max9296_write_per_channel(struct max9296_dev *sensor,
                                      unsigned int reg, unsigned int val,
                                      unsigned int reg_byte,
                                      unsigned int val_byte) {
-  bool dual = (sensor->current_mode->id == MAX9296_MODE_2560x720 ||
-               sensor->current_mode->id == MAX9296_MODE_3840x1080);
+  bool dual = max9296_hw_is_dual(sensor);
   int ret;
 
   if (dual) {
@@ -2289,6 +2396,144 @@ static int max9296_write_per_channel(struct max9296_dev *sensor,
                               val_byte);
   }
   return ret;
+}
+
+static int max9296_check_exposure_policy(
+    struct max9296_dev *sensor, const char *channel, u32 exposure,
+    const struct max9296_mode_info *mode, u32 fps, u32 safe_max_fps) {
+  int ret;
+
+  if (!mode || !fps || fps > mode->max_fps)
+    ret = -EINVAL;
+  else if (!safe_max_fps || fps > safe_max_fps)
+    ret = -EBUSY;
+  else
+    return 0;
+
+  printk(KERN_WARNING
+         "[%s:%d][%s:%d] exposure write rejected channel=%s "
+         "mode=%ux%u(id=%d) fps=%u exposure=%u safe_max_fps=%u ret=%d",
+         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, channel,
+         mode ? mode->width : 0, mode ? mode->height : 0,
+         mode ? mode->id : -1, fps, exposure, safe_max_fps, ret);
+  return ret;
+}
+
+/*
+ * All AP1302 EXP_TIME (0x500c) traffic must pass this function.  The normal
+ * frame-rate limit and the exposure-write safety limit are intentionally
+ * separate mode properties: formats may still negotiate above 30 fps, but a
+ * risky exposure write is rejected before the I2C transaction.
+ */
+static int max9296_write_exposure(struct max9296_dev *sensor, u32 i2c_addr,
+                                  const char *channel, u32 exposure) {
+  const struct max9296_mode_info *mode = sensor->current_mode;
+  u32 fps = READ_ONCE(sensor->fps);
+  u32 safe_max_fps = mode ? mode->exposure_safe_max_fps : 0;
+  int ret;
+
+  ret = max9296_check_exposure_policy(sensor, channel, exposure, mode, fps,
+                                      safe_max_fps);
+  if (ret)
+    return ret;
+
+  return maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_EXP_TIME, exposure,
+                             2, 4);
+}
+
+static int max9296_preflight_exposure(struct max9296_dev *sensor,
+                                       const char *channel, u32 exposure) {
+  const struct max9296_mode_info *mode = sensor->current_mode;
+  u32 fps = READ_ONCE(sensor->fps);
+  u32 safe_max_fps = mode ? mode->exposure_safe_max_fps : 0;
+
+  return max9296_check_exposure_policy(sensor, channel, exposure, mode, fps,
+                                       safe_max_fps);
+}
+
+static int max9296_write_exposure_per_channel(struct max9296_dev *sensor,
+                                               u32 exposure) {
+  int ret;
+
+  if (!max9296_hw_is_dual(sensor))
+    return max9296_write_exposure(sensor, AP1302_I2C_ADDR, "single",
+                                  exposure);
+
+  ret = max9296_write_exposure(sensor, AP1302_CH0_I2C_ADDR, "ch0", exposure);
+  if (ret)
+    return ret;
+
+  return max9296_write_exposure(sensor, AP1302_CH1_I2C_ADDR, "ch1",
+                                exposure);
+}
+
+static u16 max9296_dz_percent_to_fixed8(u32 percent) {
+  return (u16)((percent * 0x100 + 50) / 100);
+}
+
+static u16 max9296_dz_center_to_fixed8(u32 position) {
+  return (u16)((position * 0x100 + 0x7fff) / 0xffff);
+}
+
+static int max9296_write_zoom_channel(
+    struct max9296_dev *sensor, u32 i2c_addr, const char *channel,
+    const struct max9296_channel_ctrl *ctrl, u32 dz_percent) {
+  u16 dz = max9296_dz_percent_to_fixed8(dz_percent);
+  u16 dz_x = max9296_dz_center_to_fixed8(ctrl->dz_x);
+  u16 dz_y = max9296_dz_center_to_fixed8(ctrl->dz_y);
+  int ret;
+
+  printk(KERN_NOTICE
+         "[%s:%d][%s:%d] zoom apply channel=%s dz=%u(0x%04x) "
+         "dz_x=%d(0x%04x) dz_y=%d(0x%04x)",
+         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, channel,
+         dz_percent, dz, ctrl->dz_x, dz_x, ctrl->dz_y, dz_y);
+
+  /* 0x1012 is transition speed, not a center coordinate. 0x8000 asks the
+   * AP1302 firmware to apply the following target without a visible ramp. */
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_DZ_STEP_FCT,
+                            AP1302_DZ_STEP_IMMEDIATE, 2, 2);
+  if (ret)
+    return ret;
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_DZ_CENTER_X, dz_x, 2,
+                            2);
+  if (ret)
+    return ret;
+  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_DZ_CENTER_Y, dz_y, 2,
+                            2);
+  if (ret)
+    return ret;
+
+  return maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_DZ_TGT_FCT, dz, 2,
+                             2);
+}
+
+static int max9296_apply_cached_zoom(struct max9296_dev *sensor) {
+  bool dual = max9296_hw_is_dual(sensor);
+  char ch0_name[8], ch1_name[8];
+  int ret;
+
+  if (!dual) {
+    const struct max9296_channel_ctrl *active_ctrl =
+        sensor->enable == 0x02 ? &sensor->ctrl_cache.ch1
+                               : &sensor->ctrl_cache.ch0;
+
+    max9296_fmt_ch(ch0_name, sizeof(ch0_name), sensor, AP1302_I2C_ADDR);
+    return max9296_write_zoom_channel(sensor, AP1302_I2C_ADDR, ch0_name,
+                                      active_ctrl, sensor->ctrl_cache.dz);
+  }
+
+  max9296_fmt_ch(ch0_name, sizeof(ch0_name), sensor, AP1302_CH0_I2C_ADDR);
+  max9296_fmt_ch(ch1_name, sizeof(ch1_name), sensor, AP1302_CH1_I2C_ADDR);
+  ret = max9296_write_zoom_channel(sensor, AP1302_CH0_I2C_ADDR, ch0_name,
+                                   &sensor->ctrl_cache.ch0,
+                                   sensor->ctrl_cache.dz);
+  if (ret)
+    return ret;
+
+  return max9296_write_zoom_channel(sensor, AP1302_CH1_I2C_ADDR, ch1_name,
+                                    &sensor->ctrl_cache.ch1,
+                                    sensor->ctrl_cache.dz);
 }
 
 static int max9296_set_ctrl_hue(struct max9296_dev *sensor, int value) {
@@ -2355,7 +2600,7 @@ max9296_set_ctrl_exposure(struct max9296_dev *sensor,
                       : sensor->ctrl_cache.exposure;
     /* exp_time: per-channel in dual mode (0x11/0x12), global in single (0x3c)
      */
-    ret = max9296_write_per_channel(sensor, AP1302_REG_EXP_TIME, exp_val, 2, 4);
+    ret = max9296_write_exposure_per_channel(sensor, exp_val);
   }
 
   return ret;
@@ -2402,8 +2647,7 @@ static int max9296_set_ctrl_pixelrate(struct max9296_dev *sensor, int value) {
 static int max9296_g_volatile_ctrl(struct v4l2_ctrl *ctrl) {
   struct v4l2_subdev *sd = ctrl_to_sd(ctrl);
   struct max9296_dev *sensor = to_max9296_dev(sd);
-  bool dual = (sensor->current_mode->id == MAX9296_MODE_2560x720 ||
-               sensor->current_mode->id == MAX9296_MODE_3840x1080);
+  bool dual = max9296_hw_is_dual(sensor);
   u32 ch0_addr = dual ? AP1302_CH0_I2C_ADDR : AP1302_I2C_ADDR;
   u32 ch1_addr = dual ? AP1302_CH1_I2C_ADDR : AP1302_I2C_ADDR;
 
@@ -2454,6 +2698,19 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
     sensor->ctrl_cache.ch0.exposure = ctrl->val;
     sensor->ctrl_cache.ch1.exposure = ctrl->val;
     break;
+  case V4L2_CID_DZ:
+    sensor->ctrl_cache.dz = ctrl->val;
+    break;
+  case V4L2_CID_DZ_X:
+    sensor->ctrl_cache.dz_x = ctrl->val;
+    sensor->ctrl_cache.ch0.dz_x = ctrl->val;
+    sensor->ctrl_cache.ch1.dz_x = ctrl->val;
+    break;
+  case V4L2_CID_DZ_Y:
+    sensor->ctrl_cache.dz_y = ctrl->val;
+    sensor->ctrl_cache.ch0.dz_y = ctrl->val;
+    sensor->ctrl_cache.ch1.dz_y = ctrl->val;
+    break;
 
   /* Per-channel controls - channel 0 */
   case V4L2_CID_EXPOSURE_AUTO_CH0:
@@ -2492,6 +2749,12 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
   case V4L2_CID_LED_FLASH_CH0:
     sensor->ctrl_cache.ch0.led_flash = ctrl->val;
     break;
+  case V4L2_CID_DZ_X_CH0:
+    sensor->ctrl_cache.ch0.dz_x = ctrl->val;
+    break;
+  case V4L2_CID_DZ_Y_CH0:
+    sensor->ctrl_cache.ch0.dz_y = ctrl->val;
+    break;
 
   /* Per-channel controls - channel 1 */
   case V4L2_CID_EXPOSURE_AUTO_CH1:
@@ -2529,6 +2792,12 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
     break;
   case V4L2_CID_LED_FLASH_CH1:
     sensor->ctrl_cache.ch1.led_flash = ctrl->val;
+    break;
+  case V4L2_CID_DZ_X_CH1:
+    sensor->ctrl_cache.ch1.dz_x = ctrl->val;
+    break;
+  case V4L2_CID_DZ_Y_CH1:
+    sensor->ctrl_cache.ch1.dz_y = ctrl->val;
     break;
 
   /* MCP4018 digital potentiometer */
@@ -2610,8 +2879,7 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
 
   /* Seed exposure time while in manual mode. Some FW revisions need a
    * non-zero seed before switching to AE auto. */
-  ret = maxim_ops_i2c_write(sensor, AP1302_I2C_ADDR, AP1302_REG_EXP_TIME,
-                            exp_seed, 2, 4);
+  ret = max9296_write_exposure(sensor, i2c_addr, ch_name, exp_seed);
   if (ret)
     err = ret;
   msleep(100);
@@ -2685,8 +2953,7 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
 }
 
 static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
-  bool dual = (sensor->current_mode->id == MAX9296_MODE_2560x720 ||
-               sensor->current_mode->id == MAX9296_MODE_3840x1080);
+  bool dual = max9296_hw_is_dual(sensor);
   int i2c_nr = sensor->i2c_client->adapter->nr;
   const char *ch0_name, *ch1_name;
 
@@ -2747,10 +3014,13 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   struct v4l2_subdev *sd = ctrl_to_sd(ctrl);
   struct max9296_dev *sensor = to_max9296_dev(sd);
   int ret;
-  bool dual = (sensor->current_mode->id == MAX9296_MODE_2560x720 ||
-               sensor->current_mode->id == MAX9296_MODE_3840x1080);
+  bool dual = max9296_hw_is_dual(sensor);
   u32 ch0_addr = dual ? AP1302_CH0_I2C_ADDR : AP1302_I2C_ADDR;
   u32 ch1_addr = dual ? AP1302_CH1_I2C_ADDR : AP1302_I2C_ADDR;
+  char ch0_name[8], ch1_name[8];
+
+  max9296_fmt_ch(ch0_name, sizeof(ch0_name), sensor, ch0_addr);
+  max9296_fmt_ch(ch1_name, sizeof(ch1_name), sensor, ch1_addr);
 
   if (debug)
     printk(
@@ -2761,8 +3031,62 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
         sensor->power_count);
   /* v4l2_ctrl_lock() locks our own mutex */
 
-  /* Always update cache (even if powered off) */
+  /* A control that would write EXP_TIME must be rejected before any I2C
+   * side effect (including the preceding AE_CTRL manual-mode write).  During
+   * probe/power-off there is no I2C transaction, so defaults remain cacheable
+   * and the same policy is enforced when firmware restoration reaches HW. */
+  if (sensor->power_count > 0 && sensor->ctrl_cache.firmware_ready) {
+    switch (ctrl->id) {
+    case V4L2_CID_EXP_TIME:
+      ret = max9296_preflight_exposure(sensor, "shared", ctrl->val);
+      break;
+    case V4L2_CID_EXPOSURE_CH0:
+      ret = max9296_preflight_exposure(sensor, ch0_name, ctrl->val);
+      break;
+    case V4L2_CID_EXPOSURE_CH1:
+      ret = max9296_preflight_exposure(sensor, ch1_name, ctrl->val);
+      break;
+    case V4L2_CID_EXPOSURE_AUTO_CH0:
+      if (!ctrl->val) {
+        u32 exposure = sensor->ctrl_cache.ch0.exposure
+                           ? sensor->ctrl_cache.ch0.exposure
+                           : (sensor->ctrl_cache.exposure
+                                  ? sensor->ctrl_cache.exposure
+                                  : 10000);
+        ret = max9296_preflight_exposure(sensor, ch0_name, exposure);
+      } else {
+        ret = 0;
+      }
+      break;
+    case V4L2_CID_EXPOSURE_AUTO_CH1:
+      if (!ctrl->val) {
+        u32 exposure = sensor->ctrl_cache.ch1.exposure
+                           ? sensor->ctrl_cache.ch1.exposure
+                           : (sensor->ctrl_cache.exposure
+                                  ? sensor->ctrl_cache.exposure
+                                  : 10000);
+        ret = max9296_preflight_exposure(sensor, ch1_name, exposure);
+      } else {
+        ret = 0;
+      }
+      break;
+    default:
+      ret = 0;
+      break;
+    }
+    if (ret)
+      return ret;
+  }
+
+  /* Always update cache when the request is admissible (even if powered off). */
   max9296_cache_ctrl(sensor, ctrl);
+
+  /* S_FMT may describe the next topology while last_mode still describes the
+   * AP1302/MAX9295 addresses currently programmed in hardware. Keep the new
+   * desired value, but do not send it into the stale topology; prepare will
+   * replay the cache after programming the requested mode. */
+  if (sensor->pending_mode_change || sensor->pending_fmt_change)
+    return 0;
 
   /*
    * If the device is not powered up by the host driver do
@@ -2787,8 +3111,13 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            __FUNCTION__, ctrl->val, sensor->ctrl_cache.exposure,
            sensor->ctrl_cache.ch0.exposure, sensor->ctrl_cache.ch1.exposure);
-    ret = maxim_ops_i2c_write(sensor, AP1302_I2C_ADDR, AP1302_REG_EXP_TIME,
-                              ctrl->val, 2, 4);
+    ret = max9296_write_exposure(sensor, AP1302_I2C_ADDR, "shared",
+                                 ctrl->val);
+    break;
+  case V4L2_CID_DZ:
+  case V4L2_CID_DZ_X:
+  case V4L2_CID_DZ_Y:
+    ret = max9296_apply_cached_zoom(sensor);
     break;
   case V4L2_CID_HUE:
     ret = max9296_set_ctrl_hue(sensor, ctrl->val);
@@ -2814,8 +3143,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
               ? sensor->ctrl_cache.ch0.exposure
               : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure
                                              : 10000);
-      ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_EXP_TIME, exp_val,
-                                2, 4);
+    ret = max9296_write_exposure(sensor, ch0_addr, ch0_name, exp_val);
     }
     break;
   }
@@ -2838,8 +3166,13 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
                               2, 2);
     break;
   case V4L2_CID_EXPOSURE_CH0:
-    ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_EXP_TIME,
-                              ctrl->val, 2, 4);
+    ret = max9296_write_exposure(sensor, ch0_addr, ch0_name, ctrl->val);
+    break;
+  case V4L2_CID_DZ_X_CH0:
+  case V4L2_CID_DZ_Y_CH0:
+    ret = max9296_write_zoom_channel(sensor, ch0_addr, ch0_name,
+                                     &sensor->ctrl_cache.ch0,
+                                     sensor->ctrl_cache.dz);
     break;
   case V4L2_CID_HFLIP_CH0:
   case V4L2_CID_VFLIP_CH0: {
@@ -2875,8 +3208,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
               ? sensor->ctrl_cache.ch1.exposure
               : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure
                                              : 10000);
-      ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_EXP_TIME, exp_val,
-                                2, 4);
+    ret = max9296_write_exposure(sensor, ch1_addr, ch1_name, exp_val);
     }
     break;
   }
@@ -2899,8 +3231,13 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
                               2, 2);
     break;
   case V4L2_CID_EXPOSURE_CH1:
-    ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_EXP_TIME,
-                              ctrl->val, 2, 4);
+    ret = max9296_write_exposure(sensor, ch1_addr, ch1_name, ctrl->val);
+    break;
+  case V4L2_CID_DZ_X_CH1:
+  case V4L2_CID_DZ_Y_CH1:
+    ret = max9296_write_zoom_channel(sensor, ch1_addr, ch1_name,
+                                     &sensor->ctrl_cache.ch1,
+                                     sensor->ctrl_cache.dz);
     break;
   case V4L2_CID_HFLIP_CH1:
   case V4L2_CID_VFLIP_CH1: {
@@ -3063,6 +3400,12 @@ static const struct max9296_ctrl_desc max9296_per_ch_ctrls[] = {
     CTRL_DESC(V4L2_CID_LED_FLASH_CH0, V4L2_CID_LED_FLASH_CH1,
               V4L2_CTRL_TYPE_INTEGER, "LED Flash", 0, 0x1ff, 0, led_flash_ch0,
               led_flash_ch1),
+    CTRL_DESC(V4L2_CID_DZ_X_CH0, V4L2_CID_DZ_X_CH1,
+              V4L2_CTRL_TYPE_INTEGER, "DZ X", 0, 65535,
+              MAX9296_DZ_CENTER_DEFAULT, dz_x_ch0, dz_x_ch1),
+    CTRL_DESC(V4L2_CID_DZ_Y_CH0, V4L2_CID_DZ_Y_CH1,
+              V4L2_CTRL_TYPE_INTEGER, "DZ Y", 0, 65535,
+              MAX9296_DZ_CENTER_DEFAULT, dz_y_ch0, dz_y_ch1),
 };
 
 static int max9296_init_controls(struct max9296_dev *sensor) {
@@ -3072,7 +3415,7 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
   int ret;
   //printk(KERN_NOTICE "[%s:%d][%s:%d] %s", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
 
-  v4l2_ctrl_handler_init(hdl, 56);
+  v4l2_ctrl_handler_init(hdl, 65);
 
   /* we can use our own mutex for the ctrl lock */
   hdl->lock = &sensor->lock;
@@ -3095,6 +3438,42 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
         .step = 1,
     };
     ctrls->exp_time = v4l2_ctrl_new_custom(hdl, &cfg_exp_time, NULL);
+  }
+  {
+    static const struct v4l2_ctrl_config cfg_dz = {
+        .ops = &max9296_ctrl_ops,
+        .id = V4L2_CID_DZ,
+        .type = V4L2_CTRL_TYPE_INTEGER,
+        .name = "dz",
+        .min = MAX9296_DZ_MIN,
+        .max = MAX9296_DZ_MAX,
+        .def = MAX9296_DZ_DEFAULT,
+        .step = 1,
+    };
+    static const struct v4l2_ctrl_config cfg_dz_x = {
+        .ops = &max9296_ctrl_ops,
+        .id = V4L2_CID_DZ_X,
+        .type = V4L2_CTRL_TYPE_INTEGER,
+        .name = "dz_x",
+        .min = 0,
+        .max = 65535,
+        .def = MAX9296_DZ_CENTER_DEFAULT,
+        .step = 1,
+    };
+    static const struct v4l2_ctrl_config cfg_dz_y = {
+        .ops = &max9296_ctrl_ops,
+        .id = V4L2_CID_DZ_Y,
+        .type = V4L2_CTRL_TYPE_INTEGER,
+        .name = "dz_y",
+        .min = 0,
+        .max = 65535,
+        .def = MAX9296_DZ_CENTER_DEFAULT,
+        .step = 1,
+    };
+
+    ctrls->dz = v4l2_ctrl_new_custom(hdl, &cfg_dz, NULL);
+    ctrls->dz_x = v4l2_ctrl_new_custom(hdl, &cfg_dz_x, NULL);
+    ctrls->dz_y = v4l2_ctrl_new_custom(hdl, &cfg_dz_y, NULL);
   }
   ctrls->hue = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_HUE, 0, 359, 1, 0);
   ctrls->light_freq =
@@ -3364,7 +3743,7 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
                             struct v4l2_subdev_pad_config *cfg,
                             struct v4l2_subdev_frame_interval_enum *fie) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
-  int i, count;
+  const struct max9296_mode_info *mode;
 
   if (fie->pad != 0) {
     printk(KERN_CRIT "[%s:%d][%s:%d] %s fie->pad:%d return err", KEYWORD,
@@ -3372,20 +3751,23 @@ max9296_enum_frame_interval(struct v4l2_subdev *sd,
            fie->pad);
     return -EINVAL;
   }
-  if (fie->index >= DEFAULT_FRAMERATE_FPS) {
-    if (debug)
-      printk(KERN_CRIT "[%s:%d][%s:%d] %s fie->index:%d return err", KEYWORD,
-             sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
-             fie->index);
-    return -EINVAL;
-  }
-
   if (fie->width == 0 || fie->height == 0 || fie->code == 0) {
     // pr_warn("Please assign pixel format, width and height.\n");
     printk(KERN_CRIT
            "[%s:%d][%s:%d] %s Please assign pixel format, width and heigh",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            __FUNCTION__);
+    return -EINVAL;
+  }
+
+  mode = max9296_find_mode(sensor, fie->width, fie->height, false);
+  if (!mode || fie->index >= mode->max_fps) {
+    if (debug)
+      printk(KERN_CRIT
+             "[%s:%d][%s:%d] %s mode=%ux%u index=%u max_fps=%u return err",
+             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+             __FUNCTION__, fie->width, fie->height, fie->index,
+             mode ? mode->max_fps : 0);
     return -EINVAL;
   }
 
@@ -3440,10 +3822,21 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
 
   fps = fi->interval.denominator / fi->interval.numerator;
 
-  if (fps < 1 || fps > 120) {
+  if (fps < 1 || fps > MAX9296_360P_MAX_FPS) {
     printk(KERN_CRIT "[%s:%d][%s:%d] %s invalid fps %u (valid: 1~120)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            __FUNCTION__, fps);
+    ret = -EINVAL;
+    goto out;
+  }
+
+  if (!sensor->current_mode || fps > sensor->current_mode->max_fps) {
+    printk(KERN_WARNING
+           "[%s:%d][%s:%d] %s mode=%ux%u fps=%u max_fps=%u rejected",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           __FUNCTION__, sensor->current_mode ? sensor->current_mode->width : 0,
+           sensor->current_mode ? sensor->current_mode->height : 0, fps,
+           sensor->current_mode ? sensor->current_mode->max_fps : 0);
     ret = -EINVAL;
     goto out;
   }
@@ -3677,10 +4070,16 @@ max9296_resolve_prepare_mode_locked(const struct max9296_dev *sensor) {
     return sensor->enable == 0x02
                ? &max9296_mode_data_FHD_R
                : &max9296_mode_data[MAX9296_MODE_1920x1080];
+  case MAX9296_MODE_640x360:
+    return sensor->enable == 0x02
+               ? &max9296_mode_data_360_R
+               : &max9296_mode_data[MAX9296_MODE_640x360];
   case MAX9296_MODE_2560x720:
     return &max9296_mode_data[MAX9296_MODE_2560x720];
   case MAX9296_MODE_3840x1080:
     return &max9296_mode_data[MAX9296_MODE_3840x1080];
+  case MAX9296_MODE_1280x360:
+    return &max9296_mode_data[MAX9296_MODE_1280x360];
   default:
     return NULL;
   }
@@ -3689,16 +4088,21 @@ max9296_resolve_prepare_mode_locked(const struct max9296_dev *sensor) {
 static int max9296_normalize_fingerprint_locked(
     const struct max9296_dev *sensor, struct max9296_hw_fingerprint *fingerprint) {
   const struct max9296_mode_info *mode;
+  u32 fps;
 
   mode = max9296_resolve_prepare_mode_locked(sensor);
   if (!mode)
+    return -EINVAL;
+
+  fps = READ_ONCE(sensor->fps);
+  if (!fps || fps > mode->max_fps)
     return -EINVAL;
 
   fingerprint->mode = mode;
   fingerprint->width = mode->width;
   fingerprint->height = mode->height;
   fingerprint->code = sensor->fmt.code;
-  fingerprint->fps = READ_ONCE(sensor->fps);
+  fingerprint->fps = fps;
   fingerprint->enable = sensor->enable;
 
   return 0;
@@ -3753,50 +4157,107 @@ static int max9296_set_mode(
   return ret;
 }
 
+static int max9296_program_preview_context_channel(
+    struct max9296_dev *sensor, u32 addr, u16 width, u16 height, u32 fps,
+    unsigned int sensor_mode) {
+  unsigned int current_value;
+  int finish_ret;
+  int ret;
+
+  ret = maxim_ops_i2c_write(sensor, addr, AP1302_REG_ATOMIC,
+                            AP1302_ATOMIC_BEGIN, 2, 2);
+  if (ret)
+    return ret;
+
+#define PREVIEW_WRITE(_reg, _val)                                          \
+  do {                                                                     \
+    ret = maxim_ops_i2c_write(sensor, addr, (_reg), (_val), 2, 2);         \
+    if (ret)                                                               \
+      goto finish;                                                         \
+  } while (0)
+
+  PREVIEW_WRITE(AP1302_REG_PREVIEW_WIDTH, width);
+  PREVIEW_WRITE(AP1302_REG_PREVIEW_HEIGHT, height);
+  PREVIEW_WRITE(AP1302_REG_PREVIEW_ROI_X0, MAX9296_PREVIEW_ROI_X0);
+  PREVIEW_WRITE(AP1302_REG_PREVIEW_ROI_Y0, MAX9296_PREVIEW_ROI_Y0);
+  PREVIEW_WRITE(AP1302_REG_PREVIEW_ROI_X1, MAX9296_PREVIEW_ROI_X1);
+  PREVIEW_WRITE(AP1302_REG_PREVIEW_ROI_Y1, MAX9296_PREVIEW_ROI_Y1);
+  PREVIEW_WRITE(AP1302_REG_PREVIEW_ASPECT, MAX9296_PREVIEW_ASPECT);
+
+  if (sensor_mode != MAX9296_360P_SENSOR_MODE_KEEP) {
+    ret = maxim_ops_i2c_read(sensor, addr, AP1302_REG_PREVIEW_SENSOR_MODE, 2,
+                             2, &current_value);
+    if (ret)
+      goto finish;
+    PREVIEW_WRITE(AP1302_REG_PREVIEW_SENSOR_MODE,
+                  max9296_preview_sensor_mode(current_value, 2U,
+                                              sensor_mode));
+  }
+
+  if (max9296_preview_output_uses_high_fps(width, height, fps)) {
+    PREVIEW_WRITE(AP1302_REG_PREVIEW_MAX_FPS,
+                  max9296_preview_max_fps_fixed8(fps));
+    PREVIEW_WRITE(AP1302_REG_TRIGGER_MAX_MISMATCH, 0x0000);
+  }
+
+finish:
+  finish_ret = maxim_ops_i2c_write(sensor, addr, AP1302_REG_ATOMIC,
+                                   AP1302_ATOMIC_FINISH, 2, 2);
+#undef PREVIEW_WRITE
+  return ret ? ret : finish_ret;
+}
+
 /* Program the registers that historically followed firmware completion in
  * s_stream().  Keep this separate from stream commit: it must not enable MIPI,
  * start FSYNC, publish stream_on, or mark the subdevice streaming. */
 static int max9296_post_firmware_program_locked(
     struct max9296_dev *sensor,
     const struct max9296_hw_fingerprint *fingerprint) {
+  const struct max9296_mode_info *mode = fingerprint->mode;
+  u32 output_width = max9296_mode_is_dual(mode) ? mode->width / 2
+                                                : mode->width;
+  u32 output_height = mode->height;
+  const u32 dual_addrs[] = {AP1302_CH0_I2C_ADDR, AP1302_CH1_I2C_ADDR};
+  unsigned int sensor_mode =
+      max9296_preview_sensor_mode_override(output_width, output_height);
+  unsigned int channel_count = max9296_mode_is_dual(mode) ? 2 : 1;
+  unsigned int channel;
   int ret;
 
   sensor->state.enable = MAX9296_STATE_RUNNING;
 
-  if (fingerprint->mode->id != MAX9296_MODE_3840x1080 &&
-      fingerprint->mode->id != MAX9296_MODE_1920x1080) {
-    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0001, 2, 2);
-    if (ret)
-      goto failed;
-    usleep_range(10000, 11000);
+  for (channel = 0; channel < channel_count; channel++) {
+    u32 addr = channel_count == 1 ? AP1302_I2C_ADDR : dual_addrs[channel];
 
-    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x2000, 0x0500, 2, 2);
-    if (ret)
-      goto failed;
-    usleep_range(10000, 11000);
+    if (sensor_mode == MAX9296_360P_SENSOR_MODE_KEEP)
+      printk(KERN_NOTICE
+             "[%s:%d][%s:%d] preview addr=0x%02x output=%ux%u fps=%u "
+             "sensor_mode=KEEP",
+             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, addr,
+             output_width, output_height, fingerprint->fps);
+    else
+      printk(KERN_NOTICE
+             "[%s:%d][%s:%d] preview addr=0x%02x output=%ux%u fps=%u "
+             "sensor_mode=%u",
+             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, addr,
+             output_width, output_height, fingerprint->fps, sensor_mode);
 
-    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x2002, 0x02d0, 2, 2);
+    ret = max9296_program_preview_context_channel(
+        sensor, addr, output_width, output_height, fingerprint->fps,
+        sensor_mode);
     if (ret)
       goto failed;
-    usleep_range(10000, 11000);
-
-    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x1184, 0x0013, 2, 2);
-    if (ret)
-      goto failed;
-    usleep_range(10000, 11000);
-
-    ret = maxim_ops_i2c_write(sensor, 0x3c, 0x1010, 0x0140, 2, 2);
-    if (ret)
-      goto failed;
-    usleep_range(10000, 11000);
   }
 
   ret = maxim_ops_i2c_write(sensor, 0x3c, 0x1186, 0x038a, 2, 2);
   if (ret)
     goto failed;
 
-  if (fingerprint->mode->id == MAX9296_MODE_2560x720 ||
-      fingerprint->mode->id == MAX9296_MODE_3840x1080) {
+  ret = max9296_apply_cached_zoom(sensor);
+  if (ret)
+    goto failed;
+
+  if (max9296_mode_is_dual(mode)) {
     ret = maxim_ops_i2c_write(sensor, 0x00, 0x0471, 0x83, 2, 1);
     if (ret)
       goto failed;
@@ -3864,6 +4325,8 @@ static void max9296_apply_prepare_fingerprint_locked(
     mode = &max9296_mode_data[MAX9296_MODE_1280x720];
   else if (mode == &max9296_mode_data_FHD_R)
     mode = &max9296_mode_data[MAX9296_MODE_1920x1080];
+  else if (mode == &max9296_mode_data_360_R)
+    mode = &max9296_mode_data[MAX9296_MODE_640x360];
 
   sensor->current_mode = mode;
   sensor->fmt.width = fingerprint->width;
@@ -4283,7 +4746,8 @@ static bool max9296_enable_output_locked(struct max9296_dev *sensor) {
   if (!sensor->dying && max9296_stream_epoch_current(sensor) &&
       sensor->state.fsync == MAX9296_STATE_RUNNING) {
     sensor->stream_on = 0;
-    if (sensor->current_mode->id == MAX9296_MODE_1280x720)
+    if (sensor->current_mode->id == MAX9296_MODE_1280x720 ||
+        sensor->current_mode->id == MAX9296_MODE_640x360)
       maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x02, 2, 1);
     else
       maxim_ops_i2c_write(sensor, 0x00, 0x0313, 0x82, 2, 1);
@@ -4295,6 +4759,11 @@ static bool max9296_enable_output_locked(struct max9296_dev *sensor) {
 }
 
 static void max9296_stream_commit_locked(struct max9296_dev *sensor) {
+  /* Both prepare-backed and legacy STREAMON reach this point only after the
+   * requested fingerprint is programmed or proven to match live hardware. */
+  sensor->pending_mode_change = false;
+  sensor->pending_fmt_change = false;
+
   /* Preserve the old quick-restart control behaviour without using restart as
    * evidence that firmware survived a board power transition. */
   if (sensor->restart && sensor->ctrl_cache.firmware_ready) {
@@ -4382,6 +4851,16 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
         max9296_drop_fsync_contract_locked(sensor);
         goto out;
       }
+    }
+
+    /* gstApp configures VideoBin controls before prepare. They remain cached
+     * while powered off and prepare deliberately leaves firmware_ready false.
+     * Replay that cache here while CSI output is still disabled; the enable
+     * worker repeats this under the same mutex to close post-STREAMON updates. */
+    ret = max9296_apply_cached_zoom(sensor);
+    if (ret) {
+      max9296_drop_fsync_contract_locked(sensor);
+      goto out;
     }
 
     /* Removal publishes dying under this same epoch/ownership lock.  Recheck
@@ -4635,6 +5114,7 @@ static int max9296_fsync(void *data) {
 //-------------------------------------------------------------------------
 static int max9296_enable(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
+  int zoom_ret;
 
   // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
   // __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
@@ -4689,48 +5169,60 @@ static int max9296_enable(void *data) {
        */
       mutex_lock(&sensor->lock);
       if (sensor->streaming && max9296_stream_epoch_current(sensor) &&
-          (sensor->state.fsync == MAX9296_STATE_RUNNING) &&
-          max9296_enable_output_locked(sensor)) {
-        /*
-         * Consume the request here - only on a pass that actually serves it.
-         *
-         * The clear used to sit at the very end of the pass, where it could
-         * erase a STREAMON that arrived while the pass was running: the app
-         * restarting its pipeline inside that ~600 ms window lost its request
-         * and the deserializer never got its CSI output enable. Clearing it
-         * before the liveness test is no better - a test that then fails would
-         * throw the request away with nothing left to re-raise it, wedging the
-         * channel at no frames. Inside the test both cases are safe: a rejected
-         * pass leaves the flag up for the next iteration, and a STREAMON
-         * landing mid-pass cannot be swallowed because the clear and the writes
-         * are atomic under sensor->lock, which max9296_s_stream() holds for its
-         * whole body. Such a STREAMON either completes before we take the lock,
-         * in which case this pass is the one that serves it, or lands after we
-         * drop it and leaves the flag raised for the next iteration.
-         */
-        usleep_range(10000, 11000);
+          (sensor->state.fsync == MAX9296_STATE_RUNNING)) {
+        /* s_stream() primes the cache before commit, but controls can change
+         * after it returns while firmware_ready is still false. Replay the
+         * latest zoom under the same mutex immediately before 0x0313. A
+         * failure leaves stream_on set so the worker retries without emitting
+         * a frame from the stale ROI. */
+        zoom_ret = max9296_apply_cached_zoom(sensor);
+        if (zoom_ret) {
+          printk(KERN_ERR
+                 "[%s:%d][%s:%d] pre-output zoom apply failed: %d; retrying",
+                 KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+                 zoom_ret);
+        } else if (max9296_enable_output_locked(sensor)) {
+          /*
+           * Consume the request here - only on a pass that actually serves it.
+           *
+           * The clear used to sit at the very end of the pass, where it could
+           * erase a STREAMON that arrived while the pass was running: the app
+           * restarting its pipeline inside that ~600 ms window lost its request
+           * and the deserializer never got its CSI output enable. Clearing it
+           * before the liveness test is no better - a test that then fails would
+           * throw the request away with nothing left to re-raise it, wedging the
+           * channel at no frames. Inside the test both cases are safe: a rejected
+           * pass leaves the flag up for the next iteration, and a STREAMON
+           * landing mid-pass cannot be swallowed because the clear and the writes
+           * are atomic under sensor->lock, which max9296_s_stream() holds for its
+           * whole body. Such a STREAMON either completes before we take the lock,
+           * in which case this pass is the one that serves it, or lands after we
+           * drop it and leaves the flag raised for the next iteration.
+           */
+          usleep_range(10000, 11000);
 
-        // ae
-        maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2);
-        usleep_range(100000, 101000);
-        maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2);
-        // awb
-        usleep_range(100000, 101000);
-        maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2);
-        // lsc
-        usleep_range(100000, 101000);
-        maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
+          // ae
+          maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2);
+          usleep_range(100000, 101000);
+          maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2);
+          // awb
+          usleep_range(100000, 101000);
+          maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2);
+          // lsc
+          usleep_range(100000, 101000);
+          maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
 
-        /*
-         * Override the hardcoded AE/AWB init just written above with the V4L2
-         * cached controls.  Unconditional by construction: those writes
-         * clobber the registers on every pass, so the restore has to follow
-         * every pass.  This used to sit behind a consumable ctrl_cache.pending
-         * gate, which made the outcome depend on whether s_stream(1) had
-         * already spent the flag - a cold boot kept manual AE, a respawn lost
-         * it (#26).
-         */
-        max9296_apply_cached_controls(sensor);
+          /*
+           * Override the hardcoded AE/AWB init just written above with the V4L2
+           * cached controls. Unconditional by construction: those writes
+           * clobber the registers on every pass, so the restore has to follow
+           * every pass. This used to sit behind a consumable ctrl_cache.pending
+           * gate, which made the outcome depend on whether s_stream(1) had
+           * already spent the flag - a cold boot kept manual AE, a respawn lost
+           * it (#26).
+           */
+          max9296_apply_cached_controls(sensor);
+        }
       }
       mutex_unlock(&sensor->lock);
 
@@ -4982,9 +5474,20 @@ static int max9296_parse_prepare_command(
     command->mode_id = MAX9296_MODE_1920x1080;
     if (command->enable != 1 && command->enable != 2)
       goto invalid;
+  } else if (command->width == 1280 && command->height == 360) {
+    command->mode_id = MAX9296_MODE_1280x360;
+    if (command->enable != 3)
+      goto invalid;
+  } else if (command->width == 640 && command->height == 360) {
+    command->mode_id = MAX9296_MODE_640x360;
+    if (command->enable != 1 && command->enable != 2)
+      goto invalid;
   } else {
     goto invalid;
   }
+
+  if (command->fps > max9296_mode_data[command->mode_id].max_fps)
+    goto invalid;
 
   ret = 0;
   goto out;
@@ -5022,17 +5525,21 @@ static void max9296_prepare_mode_names(
     const struct max9296_hw_fingerprint *fingerprint, const char **mode,
     const char **table) {
   if (fingerprint->mode == &max9296_mode_data[MAX9296_MODE_2560x720] ||
-      fingerprint->mode == &max9296_mode_data[MAX9296_MODE_3840x1080]) {
+      fingerprint->mode == &max9296_mode_data[MAX9296_MODE_3840x1080] ||
+      fingerprint->mode == &max9296_mode_data[MAX9296_MODE_1280x360]) {
     *mode = "dual-wide";
     *table = "dual";
   } else if (fingerprint->mode == &max9296_mode_data_HD_R ||
-             fingerprint->mode == &max9296_mode_data_FHD_R) {
+             fingerprint->mode == &max9296_mode_data_FHD_R ||
+             fingerprint->mode == &max9296_mode_data_360_R) {
     *mode = "single";
     *table = "right";
   } else if (fingerprint->mode ==
                  &max9296_mode_data[MAX9296_MODE_1280x720] ||
              fingerprint->mode ==
-                 &max9296_mode_data[MAX9296_MODE_1920x1080]) {
+                 &max9296_mode_data[MAX9296_MODE_1920x1080] ||
+             fingerprint->mode ==
+                 &max9296_mode_data[MAX9296_MODE_640x360]) {
     *mode = "single";
     *table = "left";
   } else {
@@ -5120,6 +5627,8 @@ static ssize_t sysfs_prepare_store(struct device *dev,
     fingerprint.mode = &max9296_mode_data_HD_R;
   else if (command.mode_id == MAX9296_MODE_1920x1080 && command.enable == 2)
     fingerprint.mode = &max9296_mode_data_FHD_R;
+  else if (command.mode_id == MAX9296_MODE_640x360 && command.enable == 2)
+    fingerprint.mode = &max9296_mode_data_360_R;
   else
     fingerprint.mode = &max9296_mode_data[command.mode_id];
   fingerprint.width = command.width;
@@ -5757,6 +6266,12 @@ static int max9296_probe(struct i2c_client *client) {
       sensor->ctrls.contrast_ch0 ? sensor->ctrls.contrast_ch0->val : 0;
   sensor->ctrl_cache.ch0.saturation =
       sensor->ctrls.saturation_ch0 ? sensor->ctrls.saturation_ch0->val : 4096;
+  sensor->ctrl_cache.ch0.dz_x = sensor->ctrls.dz_x_ch0
+                                    ? sensor->ctrls.dz_x_ch0->val
+                                    : MAX9296_DZ_CENTER_DEFAULT;
+  sensor->ctrl_cache.ch0.dz_y = sensor->ctrls.dz_y_ch0
+                                    ? sensor->ctrls.dz_y_ch0->val
+                                    : MAX9296_DZ_CENTER_DEFAULT;
 
   sensor->ctrl_cache.ch1.ae_on = sensor->ctrls.auto_exp_ch1
                                      ? (sensor->ctrls.auto_exp_ch1->val ? 1 : 0)
@@ -5782,9 +6297,23 @@ static int max9296_probe(struct i2c_client *client) {
       sensor->ctrls.contrast_ch1 ? sensor->ctrls.contrast_ch1->val : 0;
   sensor->ctrl_cache.ch1.saturation =
       sensor->ctrls.saturation_ch1 ? sensor->ctrls.saturation_ch1->val : 4096;
+  sensor->ctrl_cache.ch1.dz_x = sensor->ctrls.dz_x_ch1
+                                    ? sensor->ctrls.dz_x_ch1->val
+                                    : MAX9296_DZ_CENTER_DEFAULT;
+  sensor->ctrl_cache.ch1.dz_y = sensor->ctrls.dz_y_ch1
+                                    ? sensor->ctrls.dz_y_ch1->val
+                                    : MAX9296_DZ_CENTER_DEFAULT;
 
   sensor->ctrl_cache.exposure =
       sensor->ctrls.exp_time ? sensor->ctrls.exp_time->val : 10000;
+  sensor->ctrl_cache.dz =
+      sensor->ctrls.dz ? sensor->ctrls.dz->val : MAX9296_DZ_DEFAULT;
+  sensor->ctrl_cache.dz_x = sensor->ctrls.dz_x
+                                ? sensor->ctrls.dz_x->val
+                                : MAX9296_DZ_CENTER_DEFAULT;
+  sensor->ctrl_cache.dz_y = sensor->ctrls.dz_y
+                                ? sensor->ctrls.dz_y->val
+                                : MAX9296_DZ_CENTER_DEFAULT;
 
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s cache initialized: ch0(ae:%d awb:%d "

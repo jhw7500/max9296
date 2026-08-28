@@ -30,6 +30,25 @@ static void test_high_fps_policy_uses_fixed8_values(void) {
   CHECK(max9296_preview_max_fps_fixed8(120U) == 0x7800U);
 }
 
+static void test_only_360p_exposes_the_high_fps_policy(void) {
+  CHECK(max9296_mode_max_fps(1920U, 1080U) == 30U);
+  CHECK(max9296_mode_max_fps(1280U, 720U) == 30U);
+  CHECK(max9296_mode_max_fps(640U, 360U) == 120U);
+  CHECK(max9296_mode_max_fps(640U, 480U) == 0U);
+
+  CHECK(max9296_preview_sensor_mode_override(1920U, 1080U) ==
+        MAX9296_360P_SENSOR_MODE_KEEP);
+  CHECK(max9296_preview_sensor_mode_override(1280U, 720U) ==
+        MAX9296_360P_SENSOR_MODE_KEEP);
+  CHECK(max9296_preview_sensor_mode_override(640U, 360U) ==
+        MAX9296_360P_SENSOR_MODE);
+
+  CHECK(max9296_preview_output_uses_high_fps(1280U, 720U, 31U) == 0U);
+  CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 30U) == 0U);
+  CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 31U) == 1U);
+  CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 120U) == 1U);
+}
+
 static void test_full_fov_roi_is_normalized(void) {
   CHECK(MAX9296_PREVIEW_ROI_X0 == 0x0000U);
   CHECK(MAX9296_PREVIEW_ROI_Y0 == 0x0000U);
@@ -41,6 +60,7 @@ static void test_full_fov_roi_is_normalized(void) {
 int main(void) {
   test_sensor_mode_preserves_unowned_bits();
   test_high_fps_policy_uses_fixed8_values();
+  test_only_360p_exposes_the_high_fps_policy();
   test_full_fov_roi_is_normalized();
 
   printf("max9296 360p policy: %u checks, %u failures -> %s\n", checks,
