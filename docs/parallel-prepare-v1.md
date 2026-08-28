@@ -35,21 +35,41 @@ Mode is `0664`. Start syntax is exactly:
 1 <generation> <width> <height> <fps> <enable>
 ```
 
-`generation` is a non-zero unsigned 64-bit orchestration identifier and `fps`
-is `1..120`. Supported hardware tuples are:
+`generation` is a non-zero unsigned 64-bit orchestration identifier. `fps` is
+at least 1 and must not exceed the selected tuple's ordinary limit:
 
-| width x height | enable | table |
-| --- | --- | --- |
-| 2560x720 | 3 | dual-wide |
-| 3840x1080 | 3 | dual-wide |
-| 1280x720 | 1 | single left |
-| 1280x720 | 2 | single right |
-| 1920x1080 | 1 | single left |
-| 1920x1080 | 2 | single right |
+| width x height | enable | table | ordinary max FPS | exposure-write max FPS |
+| --- | --- | --- | ---: | ---: |
+| 2560x720 | 3 | dual-wide (1280x720 per channel) | 30 | 30 |
+| 3840x1080 | 3 | dual-wide (1920x1080 per channel) | 30 | 30 |
+| 1280x360 | 3 | dual-wide (640x360 per channel) | 120 | 30 |
+| 1280x720 | 1 | single left | 30 | 30 |
+| 1280x720 | 2 | single right | 30 | 30 |
+| 1920x1080 | 1 | single left | 30 | 30 |
+| 1920x1080 | 2 | single right | 30 | 30 |
+| 640x360 | 1 | single left | 120 | 30 |
+| 640x360 | 2 | single right | 120 | 30 |
 
 The media-bus format is always the driver's UYVY format and is not an input.
 Extra fields, signed values, unsupported dimensions/masks, generation zero,
 and out-of-range FPS are rejected.
+
+The 640x360 default `KEEP` policy changes each AP1302 preview/CSI output to
+640x360 but does not claim that AR0234 sensor readout also became 640x360.
+Sensor-readout candidates are separate build artifacts and are classified only
+from AR0234 timing/read-mode plus full-FOV evidence.
+
+Hardware digital crop is orthogonal to this tuple. `crop_enable=false` is the
+default and produces no host I2C writes to AP1302 `0x1010`, `0x1012`, `0x118c`
+or `0x118e`. gstApp submits crop enable and the complete cached crop tuple
+before `prepare`; the prepare fingerprint includes enable state. A streaming
+enable transition fails with `EBUSY`. Use a hard reset/firmware reload to clear
+an old true crop reliably; restarting gstApp alone is not a hardware epoch.
+
+At 640x360 above 30 FPS, AE-auto preparation skips the `0x500c` exposure seed
+but preserves the remaining AE/gain/AWB controls. A pending manual exposure is
+rejected before the first mode-table I2C write. No manual-WB `0x510a` write is
+part of this ABI.
 
 ## Parallel use
 
