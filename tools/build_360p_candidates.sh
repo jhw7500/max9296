@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eu
+set -euo pipefail
 
 usage() {
   cat <<'EOF'
@@ -85,7 +85,7 @@ build_one() {
   label=$1
   sensor_mode=$2
   artifact=$3
-  compiler_mode="-DMAX9296_360P_SENSOR_MODE=${sensor_mode}"
+  compiler_mode="-DMAX9296_360P_SENSOR_MODE=${sensor_mode} -DMAX9296_360P_MAX_FPS=120"
 
   printf '+ ./make-for-imx8 clean\n'
   printf '+ ./make-for-imx8 KCFLAGS=%s\n' "$compiler_mode"
@@ -109,6 +109,9 @@ build_one() {
     "$compiler_mode" "$artifact_sha" >>"$staging_dir/manifest.tsv"
 }
 
+staging_dir=
+build_dir=
+
 if [ "$dry_run" -eq 1 ]; then
   printf 'output\t%s\n' "$output_dir"
   printf 'git_head\t%s\n' "$git_head"
@@ -117,10 +120,18 @@ else
   output_parent=$(cd "$(dirname "$output_dir")" && pwd)
   output_dir="$output_parent/$(basename "$output_dir")"
   staging_dir=$(mktemp -d /tmp/max9296-360p-candidates.XXXXXX)
+  build_dir=$(mktemp -d /tmp/max9296-360p-build.XXXXXX)
   cleanup() {
-    rm -rf "$staging_dir"
+    rm -rf "$staging_dir" "$build_dir"
   }
   trap cleanup EXIT HUP INT TERM
+
+  # Build from an isolated snapshot of the tracked working-tree contents.
+  # Candidate KCFLAGS must never leave a qualification max9296.ko (or stale
+  # object files) in the generic production build path.  This also prevents a
+  # later clean from deleting candidate artifacts stored below the repo root.
+  git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$build_dir"
+  cd "$build_dir"
   printf 'artifact\tsensor_mode\tgit_head\tgit_diff_stat\tgit_cached_diff_stat\tcompiler_mode\tsha256\n' \
     >"$staging_dir/manifest.tsv"
 fi

@@ -18,8 +18,10 @@ Single 모드에서는 AP1302 주소 0x3c를 사용한다.
 
 해상도와 디지털 crop은 독립이다. 공개 카메라당 해상도는 1920x1080,
 1280x720, 640x360이며 dual V4L2 폭은 각각 3840, 2560, 1280이다. FHD/HD
-일반 상한은 30 FPS, 640x360 드라이버 협상 상한은 120 FPS이고 모든 모드의
-노출 쓰기 안전 상한은 30 FPS다. crop을 켜도 출력 크기는 변하지 않는다.
+production 일반 상한과 모든 모드의 노출 쓰기 안전 상한은 30 FPS다. 640x360
+120 FPS는 `MAX9296_360P_MAX_FPS=120` qualification build에서만 협상되며, KEEP
+경로 실측이 약 113~115 FPS로 엄격 기준 118.8 FPS를 통과하지 못해 양산에서는
+사용하지 않는다. crop을 켜도 출력 크기는 변하지 않는다.
 
 기본 640x360 `KEEP` 정책은 AP1302/CSI 출력을 640x360으로 바꾸지만 AR0234
 sensor readout 모드를 강제로 선택하지 않는다. 따라서 전용 sensor-readout 후보와
@@ -121,10 +123,11 @@ v4l2-ctl -d $DEV -c contrast_ch0=4096
 v4l2-ctl -d $DEV -c hflip_ch0=1
 ```
 
-노출 레지스터 `0x500c` 쓰기는 30 FPS 이하에서만 허용된다. 31~120 FPS에서는
-`exp_time`, `exp_time_chX`, 수동 AE 전환이 I2C 전에 `-EBUSY`로 거부된다.
-640x360 high-FPS의 AE auto 경로는 exposure seed만 생략하며 gain/AWB/flip 등은
-그대로 적용한다. `0x510a` 수동 WB 쓰기는 추가하지 않았다.
+노출 레지스터 `0x500c` 쓰기는 30 FPS 이하에서만 허용된다. qualification build의
+31~120 FPS에서는 `exp_time`, `exp_time_chX`, 수동 AE 전환이 I2C 전에
+`-EBUSY`로 거부된다. high-FPS AE auto 경로는 exposure seed만 생략하며
+gain/AWB/flip 등은 그대로 적용한다. production build는 30 FPS를 넘는 frame
+interval 자체를 `-EINVAL`로 거부한다. `0x510a` 수동 WB 쓰기는 추가하지 않았다.
 
 ### 3.2 디지털 줌
 
@@ -151,12 +154,12 @@ v4l2-ctl -d $DEV -c dz=200,dz_x_ch0=32768,dz_y_ch0=52000,dz_x_ch1=32768,dz_y_ch1
 
 `0x1014`는 중심 레지스터가 아니며 쓰지 않는다. `crop_enable=false`에서는
 `0x1010`, `0x1012`, `0x118c`, `0x118e` 쓰기가 0회다. true에서는 tuple을
-step→X→Y→factor-last 순서로 적용한다. enable 자체의 스트리밍 중 변경은
-`-EBUSY`다. true→false 뒤 기존 hardware crop을 확실히 지우려면 gstApp만
+step→X→Y→factor-last 순서로 적용한다. enable 값의 스트리밍 중 전환은
+`-EBUSY`이고, 현재 값과 같은 no-op 쓰기는 성공한다. true→false 뒤 기존 hardware crop을 확실히 지우려면 gstApp만
 재시작하지 말고 `cam_hard_reset.sh -s -S` 또는 `init_cam.sh`를 사용한다.
 
 edgeconf에는 `.VHL_CAM.cam_width=640`, `.VHL_CAM.cam_height=360`,
-`.VHL_CAM.fps=120`을 사용한다. `width`/`height`는 gstApp parser 키가 아니다.
+`.VHL_CAM.fps=30`을 사용한다. `width`/`height`는 gstApp parser 키가 아니다.
 `docs/examples/edgeconf-max9296-640x360-fragment.json`을 기존 `.VHL_CAM`에
 재귀 병합해 credential, enable, bitrate 등 장비별 값을 보존한다.
 

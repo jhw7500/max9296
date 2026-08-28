@@ -26,11 +26,11 @@ V4L2 subdev 노드도 이 전역 채널과 정합되게 사용한다.
 
 ### 1.1 해상도와 디지털 crop은 독립 제어
 
-| 카메라당 출력 | single V4L2 폭 | dual V4L2 폭 | 일반 `max_fps` | 노출 쓰기 안전 상한 |
+| 카메라당 출력 | single V4L2 폭 | dual V4L2 폭 | production `max_fps` | 노출 쓰기 안전 상한 |
 |---:|---:|---:|---:|---:|
 | 1920x1080 | 1920x1080 | 3840x1080 | 30 | 30 |
 | 1280x720 | 1280x720 | 2560x720 | 30 | 30 |
-| 640x360 | 640x360 | 1280x360 | 120 | 30 |
+| 640x360 | 640x360 | 1280x360 | 30 | 30 |
 
 `cam_width`/`cam_height`는 AP1302/CSI의 출력 크기를 선택한다. `crop_enable`과
 `dz`는 선택된 출력 안에서 디지털 확대·중심 조준만 하며 출력 해상도를 바꾸지
@@ -46,8 +46,10 @@ AR0234 window/read-mode/timing과 전체 FOV를 보드에서 확인한 뒤에만
 `0x2000~0x2020`, `max9296_360p_policy.h`의 `KEEP`/후보 정책이다. register write
 순서와 false 무쓰기는 `tests/max9296_360p_zoom_exposure_test.py`, 모드 상한은
 `tests/max9296_360p_policy_test.c`가 고정한다. 반면 실제 AR0234 readout profile,
-녹색 화면 원인과 120 FPS 지원 여부는 보드 readback/UYVY/IRQ 반복 시험 전에는
-확정값이 아니다.
+보드 qualification artifact는 `MAX9296_360P_MAX_FPS=120`을 명시해 연구 경로를
+유지한다. 2026-08-28 KEEP 경로 실측은 CSI/ISI 약 113~115 FPS로 118.8 FPS 기준을
+통과하지 못했으므로 production 기본은 30 FPS다. 녹색 화면처럼 보였던 raw는 실제
+`RGBP`를 UYVY로 해석한 결과였고, 올바른 RGB565/RTSP 디코드는 녹색이 아니었다.
 
 ## 2) 값 표현(고정점) 규칙
 
@@ -135,7 +137,8 @@ firmware replay, live apply 어느 경로에서도 `0x1010`, `0x1012`, `0x118c`,
 `crop_enable=true`에서는 스트리밍 중 공통 배율과 채널별 중심을 변경할 수 있다.
 여러 값을 함께 바꿀 때는 한 번의 `VIDIOC_S_EXT_CTRLS`가 되도록 쉼표로 묶고,
 드라이버는 step→X→Y→factor 순서로 각 활성 AP1302에 적용한다. factor `0x1010`이
-마지막이다. `crop_enable` 자체는 스트리밍 중 바꿀 수 없고 `-EBUSY`를 반환한다.
+마지막이다. `crop_enable` 값의 스트리밍 중 전환은 `-EBUSY`이고 동일 값 no-op은
+성공한다.
 정지 상태의 enable 변경은 cache와 prepare fingerprint를 stale로 만들지만 false로
 바꿀 때 기존 하드웨어 crop을 1배로 덮어쓰지는 않는다. 이전 crop을 확실히 제거할
 때는 `cam_hard_reset.sh -s -S` 또는 `init_cam.sh`로 firmware를 다시 로드한다.
@@ -143,8 +146,8 @@ gstApp 재시작만으로는 하드웨어 epoch가 바뀌지 않는다.
 
 ### 3.3 노출 쓰기 안전 정책
 
-일반 영상 FPS 범위는 모드별 `max_fps`(현재 최대 120)를 유지하지만 AP1302
-`EXP_TIME(0x500c)` 쓰기는 모드별 안전 상한 30 FPS 이하에서만 허용한다. 31~120
+production 일반 영상 FPS와 `EXP_TIME(0x500c)` 안전 상한은 모두 30 FPS다.
+qualification module만 일반 상한을 120으로 override한다. 해당 모듈의 31~120
 FPS에서 `exp_time`, `exp_time_chX` 또는 수동 AE 전환으로 노출 쓰기가 필요하면
 레지스터를 건드리기 전에 `-EBUSY`로 거부한다. 커널 로그에는 채널, 모드, 현재 FPS,
 요청 노출값, 안전 상한이 기록된다.
@@ -236,8 +239,11 @@ v4l2-ctl -d /dev/v4l-subdev2 -c dma_reg_write_ch0=$((0x30700001))
 
 - 공통 최소값: 1 FPS
 - 1920x1080, 1280x720: 최대 30 FPS
-- 640x360: 드라이버 협상 상한 120 FPS. 실제 120 지원 판정은 raw CSI와 신뢰
-  가능한 ISI가 각각 118.8 FPS 이상이고 손실 1% 이하인 보드 반복 계측으로 한다.
+- 640x360 production: 최대 30 FPS
+- 640x360 qualification artifact: 최대 120 FPS. 지원 판정은 유효한 sensor/AP
+  HINF 표본 전체와 CSI/신뢰 가능한 ISI가 각각 118.8 FPS 이상이고 손실 1% 이하인
+  보드 반복 계측으로 한다.
+  KEEP 경로는 113~115 FPS로 실패했으므로 production에 사용하지 않는다.
 - 모든 모드의 `0x500c` 노출 쓰기 안전 상한: 30 FPS
 
 #### 코드 위치
@@ -423,7 +429,9 @@ jq -e . "$CONF.360p.tmp"
 위 `*`는 중첩 object를 병합하므로 fragment에 없는 key를 보존한다. 실제 설치 전
 원본 SHA-256과 backup을 기록하고, 같은 파일시스템에서 권한/소유자를 유지한 채
 원자 교체한 뒤 `cam_hard_reset.sh -s -S` 또는 `init_cam.sh`를 실행한다. 최초
-green-screen gate는 `fps=30`, crop false로 확인한 뒤 120으로 올린다.
+production fragment는 `fps=30`, crop false다. 120 시험은 manifest-backed
+qualification module과 별도 JSON을 사용하고 종료 후 production module/JSON으로
+hard reset 복구한다.
 
 ### 5.1 테스트/튜닝 시(권장)
 

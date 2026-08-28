@@ -324,7 +324,7 @@ printf '%-8s | %-11s | %-8s | %-8s | %-8s | %-8s | %s\n' "경과" "대상" "센�
 echo "$LINE"
 
 # ---------------------------------------------------------------- 샘플 루프
-declare -A PH PT PC PI SUM_S SUM_P SUM_C SUM_I N ISI_SUSPECT ISI_RATIO
+declare -A PH PT PC PI SUM_S SUM_P SUM_C SUM_I N N_S N_P ISI_SUSPECT ISI_RATIO
 for c in $CHANS; do
 	PC[$c]=$(irq_of "$(csi_of "$c")")
 	PI[$c]=$(irq_of "$(isi_of "$c")")
@@ -339,6 +339,8 @@ for c in $CHANS; do
 		SUM_C[$k]=0
 		SUM_I[$k]=0
 		N[$k]=0
+		N_S[$k]=0
+		N_P[$k]=0
 	done
 done
 
@@ -397,8 +399,14 @@ while [ "$T" -lt "$DURATION" ]; do
 				printf "%.1f %.1f %.1f %.1f %s", sen, isp, csi, isi, l
 			}')"
 
-			[ "${TF:-0}" -gt 0 ] 2>/dev/null && SUM_S[$k]=$(awk -v x="${SUM_S[$k]}" -v y="$S" 'BEGIN{print x+y}')
-			[ "$DP" -ge 0 ] && SUM_P[$k]=$(awk -v x="${SUM_P[$k]}" -v y="$P" 'BEGIN{print x+y}')
+			if [ "${TF:-0}" -gt 0 ] 2>/dev/null; then
+				SUM_S[$k]=$(awk -v x="${SUM_S[$k]}" -v y="$S" 'BEGIN{print x+y}')
+				N_S[$k]=$((N_S[$k] + 1))
+			fi
+			if [ "$DP" -ge 0 ]; then
+				SUM_P[$k]=$(awk -v x="${SUM_P[$k]}" -v y="$P" 'BEGIN{print x+y}')
+				N_P[$k]=$((N_P[$k] + 1))
+			fi
 			SUM_C[$k]=$(awk -v x="${SUM_C[$k]}" -v y="$CC2" 'BEGIN{print x+y}')
 			SUM_I[$k]=$(awk -v x="${SUM_I[$k]}" -v y="$II" 'BEGIN{print x+y}')
 			N[$k]=$((N[$k] + 1))
@@ -423,13 +431,17 @@ for c in $CHANS; do
 	for a in ${ADDRS[$c]}; do
 		k="$c/$a"
 		n=${N[$k]}
+		ns=${N_S[$k]}
+		np=${N_P[$k]}
 		[ "$n" -eq 0 ] && {
 			li=$((li + 1))
 			continue
 		}
-		awk -v tag="${labs[$li]} ($a)" -v n="$n" -v s="${SUM_S[$k]}" -v p="${SUM_P[$k]}" \
+		awk -v tag="${labs[$li]} ($a)" -v n="$n" -v ns="$ns" -v np="$np" \
+			-v s="${SUM_S[$k]}" -v p="${SUM_P[$k]}" \
 			-v cc="${SUM_C[$k]}" -v ii="${SUM_I[$k]}" 'BEGIN{
-			printf "%-8s | %-11s | %8.1f | %8.1f | %8.1f | %8.1f |\n", "평균", tag, s/n, p/n, cc/n, ii/n
+			sensor=(ns>0) ? s/ns : -1; isp=(np>0) ? p/np : -1
+			printf "%-8s | %-11s | %8.1f | %8.1f | %8.1f | %8.1f |\n", "평균", tag, sensor, isp, cc/n, ii/n
 		}'
 		li=$((li + 1))
 	done
@@ -441,15 +453,17 @@ for c in $CHANS; do
 	for a in ${ADDRS[$c]}; do
 		k="$c/$a"
 		n=${N[$k]}
+		ns=${N_S[$k]}
+		np=${N_P[$k]}
 		[ "$n" -eq 0 ] && {
 			li=$((li + 1))
 			continue
 		}
 		echo
 		echo "### $c / ${labs[$li]} (AP1302 $a) 판정"
-		awk -v n="$n" -v s="${SUM_S[$k]}" -v p="${SUM_P[$k]}" -v cc="${SUM_C[$k]}" -v ii="${SUM_I[$k]}" \
+		awk -v n="$n" -v ns="$ns" -v np="$np" -v s="${SUM_S[$k]}" -v p="${SUM_P[$k]}" -v cc="${SUM_C[$k]}" -v ii="${SUM_I[$k]}" \
 			-v sus="${ISI_SUSPECT[$c]}" -v rr="${ISI_RATIO[$c]}" 'BEGIN{
-			sen=s/n; isp=p/n; csi=cc/n; isi=ii/n
+			sen=(ns>0) ? s/ns : -1; isp=(np>0) ? p/np : -1; csi=cc/n; isi=ii/n
 			if (csi < 0.5 && (sus || isi < 0.5)) {
 				printf "  스트리밍 없음 - 프레임이 흐르지 않습니다\n"
 				if (sen > 0.5) printf "  (센서는 %.1f fps 로 돌고 있으나 ISP 출력이 없습니다)\n", sen
@@ -471,16 +485,18 @@ for c in $CHANS; do
 				printf "  → ISI 가 못 받고 있습니다. 대역/버퍼 확인\n"
 		}'
 		awk -v case_name="$CASE_LABEL" -v requested="$REQUESTED_FPS" \
-			-v channel="${labs[$li]}" -v n="$n" -v s="${SUM_S[$k]}" \
+			-v channel="${labs[$li]}" -v n="$n" -v ns="$ns" -v np="$np" -v s="${SUM_S[$k]}" \
 			-v p="${SUM_P[$k]}" -v cc="${SUM_C[$k]}" -v ii="${SUM_I[$k]}" \
 			-v suspect="${ISI_SUSPECT[$c]}" 'BEGIN{
-			sensor=s/n; isp=p/n; csi=cc/n; isi=ii/n; loss=0
+			sensor=(ns>0) ? s/ns : -1; isp=(np>0) ? p/np : -1; csi=cc/n; isi=ii/n; loss=0
 			if (sensor>0 && isp>=0 && (sensor-isp)/sensor > loss) loss=(sensor-isp)/sensor
 			if (isp>0 && csi>=0 && (isp-csi)/isp > loss) loss=(isp-csi)/isp
 			if (!suspect && csi>0 && isi>=0 && (csi-isi)/csi > loss) loss=(csi-isi)/csi
 			trust=suspect ? 0 : 1
-			pass=(requested==120 && csi>=118.8 && trust && isi>=118.8 && loss*100<=1.0) ? 1 : 0
-			printf "FPS_RESULT case=%s requested=%d channel=%s sensor=%.1f isp=%.1f csi=%.1f isi=%.1f loss_pct=%.1f isi_trust=%d pass120=%d\n", case_name, requested, channel, sensor, isp, csi, isi, loss*100, trust, pass
+			sensor_valid=(n>0 && ns==n) ? 1 : 0
+			isp_valid=(n>0 && np==n) ? 1 : 0
+			pass=(requested==120 && sensor_valid && isp_valid && sensor>=118.8 && isp>=118.8 && csi>=118.8 && trust && isi>=118.8 && loss*100<=1.0) ? 1 : 0
+			printf "FPS_RESULT case=%s requested=%d channel=%s sensor=%.1f isp=%.1f csi=%.1f isi=%.1f loss_pct=%.1f isi_trust=%d sensor_valid=%d isp_valid=%d pass120=%d\n", case_name, requested, channel, sensor, isp, csi, isi, loss*100, trust, sensor_valid, isp_valid, pass
 		}'
 		li=$((li + 1))
 	done

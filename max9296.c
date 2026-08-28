@@ -56,7 +56,6 @@ static int debug;
 #define DEFAULT_RESOLUTION_WIDTH (2560)
 #define DEFAULT_RESOLUTION_HEIGHT (720)
 #define MAX9296_DEFAULT_MAX_FPS 30
-#define MAX9296_360P_MAX_FPS 120
 #define MAX9296_EXPOSURE_SAFE_MAX_FPS 30
 
 #define MAX9296_REG_CHIP_ID 0x000d
@@ -3114,7 +3113,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   if (ctrl->id == V4L2_CID_CROP_ENABLE) {
     bool requested = !!ctrl->val;
 
-    if (sensor->streaming)
+    if (sensor->streaming && sensor->ctrl_cache.crop_enable != requested)
       return -EBUSY;
     if (sensor->ctrl_cache.crop_enable != requested) {
       sensor->ctrl_cache.crop_enable = requested;
@@ -3941,9 +3940,9 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
   fps = fi->interval.denominator / fi->interval.numerator;
 
   if (fps < 1 || fps > MAX9296_360P_MAX_FPS) {
-    printk(KERN_CRIT "[%s:%d][%s:%d] %s invalid fps %u (valid: 1~120)",
+    printk(KERN_CRIT "[%s:%d][%s:%d] %s invalid fps %u (valid: 1~%u)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-           __FUNCTION__, fps);
+           __FUNCTION__, fps, MAX9296_360P_MAX_FPS);
     ret = -EINVAL;
     goto out;
   }

@@ -32,6 +32,9 @@ emit32() {
 
 case "$reg" in
     0002)
+        if [ "${CAM_FPS_STACK_TEST_MISSING_HINF_ADDR:-}" = "$addr" ]; then
+            exit 1
+        fi
         count_file="$state/hinf-${addr}"
         count=0
         [ -f "$count_file" ] && count=$(cat "$count_file")

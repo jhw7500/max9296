@@ -1,7 +1,7 @@
 {
   "cam_width": 640,
   "cam_height": 360,
-  "fps": 120,
+  "fps": 30,
   "i2c2": {
     "crop_enable": false,
     "dz": 100,

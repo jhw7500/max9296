@@ -24,6 +24,7 @@ run_deep() {
     local addr_count=$4
     local csi_fps=${5:-120}
     local isi_fps=${6:-120}
+    local missing_hinf=${7:-}
     local state="$TMP_ROOT/$name"
     mkdir -p "$state"
     printf '%s\n' \
@@ -39,6 +40,7 @@ run_deep() {
         CAM_FPS_STACK_TEST_CSI_FPS="$csi_fps" \
         CAM_FPS_STACK_TEST_ISI_FPS="$isi_fps" \
         CAM_FPS_STACK_TEST_ADDR_COUNT="$addr_count" \
+        CAM_FPS_STACK_TEST_MISSING_HINF_ADDR="$missing_hinf" \
         PATH="$FIXTURE_BIN:$PATH" \
         bash "$SCRIPT" -c ch01 -d 1 -i 1 -D -L "$label" -R 120
 }
@@ -72,7 +74,7 @@ case "$output" in
     *) fail "single AR0234 timing evidence is incomplete" ;;
 esac
 case "$output" in
-    *'FPS_RESULT case=SENSOR-640 requested=120 channel=ch0 sensor=120.0 isp=120.0 csi=120.0 isi=120.0 loss_pct=0.0 isi_trust=1 pass120=1'*) ;;
+    *'FPS_RESULT case=SENSOR-640 requested=120 channel=ch0 sensor=120.0 isp=120.0 csi=120.0 isi=120.0 loss_pct=0.0 isi_trust=1 sensor_valid=1 isp_valid=1 pass120=1'*) ;;
     *) fail "single wrap-around measurement did not strictly pass 120fps" ;;
 esac
 
@@ -83,8 +85,8 @@ for expected in \
     'AP_CONTEXT case=HD-ISP channel=ch1 addr=0x12 width=640 height=360' \
     'AR_TIMING case=HD-ISP channel=ch0' \
     'AR_TIMING case=HD-ISP channel=ch1' \
-    'FPS_RESULT case=HD-ISP requested=120 channel=ch0 sensor=120.0 isp=120.0 csi=120.0 isi=120.0 loss_pct=0.0 isi_trust=1 pass120=1' \
-    'FPS_RESULT case=HD-ISP requested=120 channel=ch1 sensor=120.0 isp=120.0 csi=120.0 isi=120.0 loss_pct=0.0 isi_trust=1 pass120=1'
+    'FPS_RESULT case=HD-ISP requested=120 channel=ch0 sensor=120.0 isp=120.0 csi=120.0 isi=120.0 loss_pct=0.0 isi_trust=1 sensor_valid=1 isp_valid=1 pass120=1' \
+    'FPS_RESULT case=HD-ISP requested=120 channel=ch1 sensor=120.0 isp=120.0 csi=120.0 isi=120.0 loss_pct=0.0 isi_trust=1 sensor_valid=1 isp_valid=1 pass120=1'
 do
     case "$output" in
         *"$expected"*) ;;
@@ -95,15 +97,22 @@ done
 output=$(run_deep untrusted '640x360@1/120' SENSOR-640 1 120 60) ||
     fail "untrusted ISI measurement command failed"
 case "$output" in
-    *'FPS_RESULT case=SENSOR-640 requested=120 channel=ch0 sensor=120.0 isp=120.0 csi=120.0 isi=60.0 loss_pct=0.0 isi_trust=0 pass120=0'*) ;;
+    *'FPS_RESULT case=SENSOR-640 requested=120 channel=ch0 sensor=120.0 isp=120.0 csi=120.0 isi=60.0 loss_pct=0.0 isi_trust=0 sensor_valid=1 isp_valid=1 pass120=0'*) ;;
     *) fail "untrusted ISI must make the strict 120fps result fail" ;;
 esac
 
 output=$(run_deep below-threshold '640x360@1/120' SENSOR-640 1 115 115) ||
     fail "below-threshold measurement command failed"
 case "$output" in
-    *'FPS_RESULT case=SENSOR-640 requested=120 channel=ch0 sensor=120.0 isp=120.0 csi=115.0 isi=115.0 loss_pct=4.2 isi_trust=1 pass120=0'*) ;;
+    *'FPS_RESULT case=SENSOR-640 requested=120 channel=ch0 sensor=120.0 isp=120.0 csi=115.0 isi=115.0 loss_pct=4.2 isi_trust=1 sensor_valid=1 isp_valid=1 pass120=0'*) ;;
     *) fail "115fps must not be rounded into a 120fps pass" ;;
+esac
+
+output=$(run_deep missing-hinf '640x360@1/120' SENSOR-640 1 120 120 0x3c) ||
+    fail "missing-HINF measurement command failed"
+case "$output" in
+    *'FPS_RESULT case=SENSOR-640 requested=120 channel=ch0 sensor=120.0 isp=-1.0 csi=120.0 isi=120.0 loss_pct=0.0 isi_trust=1 sensor_valid=1 isp_valid=0 pass120=0'*) ;;
+    *) fail "missing AP HINF samples must invalidate strict 120fps" ;;
 esac
 
 echo "PASS: cam_fps_stack mode/readback/120fps contracts"

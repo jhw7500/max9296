@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "max9296.c"
+POLICY = ROOT / "max9296_360p_policy.h"
 
 
 def function(source: str, name: str) -> str:
@@ -77,7 +78,7 @@ def crop_enable_transition(
     cached: bool, requested: bool, streaming: bool
 ) -> tuple[int, bool, bool, int]:
     """Return errno, cached value, prepare-stale flag, and register writes."""
-    if streaming:
+    if streaming and cached != requested:
         return (-16, cached, False, 0)
     return (0, requested, cached != requested, 0)
 
@@ -89,6 +90,7 @@ def crop_apply_writes(enabled: bool, dual: bool) -> int:
 
 def main() -> int:
     source = SOURCE.read_text(encoding="utf-8")
+    policy = POLICY.read_text(encoding="utf-8")
     failures: list[str] = []
 
     # Public-control conversion contracts. The center ABI stays 0..65535,
@@ -133,6 +135,8 @@ def main() -> int:
         failures.append("pending topology changes must not receive live control I2C")
     if crop_enable_transition(False, True, True) != (-16, False, False, 0):
         failures.append("streaming crop-enable changes must fail without mutation")
+    if crop_enable_transition(True, True, True) != (0, True, False, 0):
+        failures.append("streaming crop-enable no-op writes must remain idempotent")
     if crop_enable_transition(False, True, False) != (0, True, True, 0):
         failures.append("stopped crop-enable changes must stale prepare without I2C")
     if crop_apply_writes(False, True) != 0:
@@ -168,10 +172,16 @@ def main() -> int:
         failures.append("conservative 30fps exposure safety policy is missing")
     if '#include "max9296_360p_policy.h"' not in source:
         failures.append("driver does not consume the tested 360p policy")
-    if "#define MAX9296_360P_MAX_FPS 120" not in source:
-        failures.append("360p ordinary 120fps limit is missing")
+    if "#define MAX9296_360P_MAX_FPS 30U" not in policy:
+        failures.append("measured production 360p limit is not 30fps")
+    if "#ifndef MAX9296_360P_MAX_FPS" not in policy:
+        failures.append("qualification builds cannot override the production FPS limit")
+    if "#define MAX9296_360P_MAX_FPS" in source:
+        failures.append("driver source shadows the tested 360p FPS policy")
     if source.count("MAX9296_360P_MAX_FPS,") < 3:
-        failures.append("single, dual, and right-hand 360p modes do not share 120fps")
+        failures.append("single, dual, and right-hand 360p modes do not share the policy limit")
+    if "invalid fps %u (valid: 1~%u)" not in source:
+        failures.append("FPS rejection log still advertises a stale fixed limit")
     if "#define MAX9296_DEFAULT_MAX_FPS 30" not in source:
         failures.append("HD/FHD ordinary max_fps policy is missing")
     if source.count("MAX9296_DEFAULT_MAX_FPS,") < 7:
@@ -517,6 +527,8 @@ def main() -> int:
             failures.append(f"crop_enable transition contract missing: {token}")
     if "max9296_apply_cached_crop" in enable_block:
         failures.append("crop_enable transition performs forbidden live I2C")
+    if "sensor->streaming && sensor->ctrl_cache.crop_enable != requested" not in enable_block:
+        failures.append("crop_enable rejects a streaming no-op as if it were a transition")
 
     cluster_cache = set_ctrl.find("ctrl == sensor->ctrls.dz")
     cluster_apply = set_ctrl.find("max9296_apply_cached_crop(sensor)", cluster_cache)

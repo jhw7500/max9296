@@ -2,6 +2,10 @@
 
 #include <stdio.h>
 
+#ifndef MAX9296_360P_EXPECTED_MAX_FPS
+#define MAX9296_360P_EXPECTED_MAX_FPS 30U
+#endif
+
 static unsigned int checks;
 static unsigned int failures;
 
@@ -21,6 +25,7 @@ static void test_sensor_mode_preserves_unowned_bits(void) {
 }
 
 static void test_high_fps_policy_uses_fixed8_values(void) {
+  CHECK(MAX9296_360P_MAX_FPS == MAX9296_360P_EXPECTED_MAX_FPS);
   CHECK(max9296_preview_uses_high_fps(30U) == 0U);
   CHECK(max9296_preview_uses_high_fps(31U) == 1U);
   CHECK(max9296_preview_uses_high_fps(120U) == 1U);
@@ -33,7 +38,8 @@ static void test_high_fps_policy_uses_fixed8_values(void) {
 static void test_only_360p_exposes_the_high_fps_policy(void) {
   CHECK(max9296_mode_max_fps(1920U, 1080U) == 30U);
   CHECK(max9296_mode_max_fps(1280U, 720U) == 30U);
-  CHECK(max9296_mode_max_fps(640U, 360U) == 120U);
+  CHECK(max9296_mode_max_fps(640U, 360U) ==
+        MAX9296_360P_EXPECTED_MAX_FPS);
   CHECK(max9296_mode_max_fps(640U, 480U) == 0U);
 
   CHECK(max9296_preview_sensor_mode_override(1920U, 1080U) ==
@@ -45,8 +51,10 @@ static void test_only_360p_exposes_the_high_fps_policy(void) {
 
   CHECK(max9296_preview_output_uses_high_fps(1280U, 720U, 31U) == 0U);
   CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 30U) == 0U);
-  CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 31U) == 1U);
-  CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 120U) == 1U);
+  CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 31U) ==
+        (MAX9296_360P_EXPECTED_MAX_FPS >= 31U));
+  CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 120U) ==
+        (MAX9296_360P_EXPECTED_MAX_FPS >= 120U));
 }
 
 static void test_full_fov_roi_is_normalized(void) {
