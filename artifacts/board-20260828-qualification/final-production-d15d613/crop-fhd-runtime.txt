@@ -1,0 +1,47 @@
+CASE=FHD-CROP-TRUE
+state=CONSUMED generation=4318277343158400 epoch=2 mode=dual-wide table=dual width=3840 height=1080 fps=30 code=0x2006 enable=3 crop_enable=1 errno=0 worker_errno=0 lease=0 match=1
+ioctl: VIDIOC_SUBDEV_G_FMT (pad=0)
+	Width/Height      : 3840/1080
+	Mediabus Code     : 0x2006 (MEDIA_BUS_FMT_UYVY8_2X8)
+	Field             : Unknown (0xffff8000)
+	Colorspace        : sRGB
+	Transfer Function : sRGB
+	YCbCr/HSV Encoding: ITU-R 601
+	Quantization      : Full Range
+crop_enable: 1
+                             dz 0x00981922 (int)    : min=100 max=300 step=1 default=100 value=150
+                           dz_x 0x00981923 (int)    : min=0 max=65535 step=1 default=32768 value=32768
+                           dz_y 0x00981924 (int)    : min=0 max=65535 step=1 default=32768 value=32768
+                       dz_x_ch0 0x00981927 (int)    : min=0 max=65535 step=1 default=32768 value=16384
+                       dz_x_ch1 0x00981928 (int)    : min=0 max=65535 step=1 default=32768 value=49152
+                       dz_y_ch0 0x00981929 (int)    : min=0 max=65535 step=1 default=32768 value=49152
+                       dz_y_ch1 0x0098192a (int)    : min=0 max=65535 step=1 default=32768 value=16384
+                    crop_enable 0x0098192b (bool)   : default=0 value=1
+INITIAL AP=0x11 1010=0x01 0x80
+1012=0x80 0x00
+118c=0x00 0x40
+118e=0x00 0xc0
+INITIAL AP=0x12 1010=0x01 0x80
+1012=0x80 0x00
+118c=0x00 0xc0
+118e=0x00 0x40
+RUNTIME AP=0x11 1010=0x02 0x00
+1012=0x80 0x00
+118c=0x00 0x80
+118e=0x00 0x40
+RUNTIME AP=0x12 1010=0x02 0x00
+1012=0x80 0x00
+118c=0x00 0x80
+118e=0x00 0xc0
+ENABLE_TRANSITION_RC=255 crop_enable: Device or resource busy
+VIDIOC_S_EXT_CTRLS: failed: Device or resource busy
+crop_enable: 1
+ioctl: VIDIOC_SUBDEV_G_FMT (pad=0)
+	Width/Height      : 3840/1080
+	Mediabus Code     : 0x2006 (MEDIA_BUS_FMT_UYVY8_2X8)
+	Field             : Unknown (0xffff8000)
+	Colorspace        : sRGB
+	Transfer Function : sRGB
+	YCbCr/HSV Encoding: ITU-R 601
+	Quantization      : Full Range
+active

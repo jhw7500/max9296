@@ -34,6 +34,7 @@
 | `12d590a` | 기존 cached-control replay best-effort 복구 |
 | `675c0d6` | 후보 빌더의 artifact 보존 회귀 수정 |
 | `de9908f` | AR0234 odd-increment readback 추가 |
+| `d15d613` | production 30 FPS 판정, 엄격 FPS 계측, 최종 문서/증적 |
 
 gstApp revision은 `b9f4767`, `741b61a`, `895d1f2`다. 각각 edgeconf parsing,
 crop tuple의 prepare 전 적용, 640x360 prepare target을 담당한다.
@@ -184,7 +185,7 @@ ch1은 거의 흑색의 점 하나뿐이라 full-FOV를 비교할 target/조도�
 | sm02 RTSP ch0 | `ef8400399cbb84bdec02b43395c873daf7c06084742b5404a3ab3b45aec17708` | Y=16, U/V=128/128 |
 | sm02 RTSP ch1 | `8424d83171c654d451b4ba9e1fcb8604560353ff31d7c56ff8394f9412765d06` | Yavg≈16.02, U/V=128/128 |
 | final KEEP RTSP ch0 | `ef8400399cbb84bdec02b43395c873daf7c06084742b5404a3ab3b45aec17708` | 완전 흑색 |
-| final KEEP RTSP ch1 | `c6536fbd46f4d10b8f2f72dc63e0eeb0ae22f230eda6c4c5761ed329682fa480` | Yavg≈17.8, 어두운 청색 장면 |
+| final KEEP RTSP ch1 | `e9869a1a269e0c19df1e0e96c97f79c64449e4d3118b8154c8b84175b72f41ce` | RGB 평균 `(0.005, 1.533, 17.482)`, 어두운 청색 장면 |
 
 window/read-mode만으로 full-FOV를 주장할 수 없고 세 요구 profile도 없으므로 matrix를
 중단했다. sm01/sm02는 upstream sensor sample workload를 KEEP보다 줄일 가능성이
@@ -245,6 +246,48 @@ edgeconf를 갱신한 뒤 hard reset한다.
 
 rollback은 backup의 module/gstApp/edgeconf를 원래 경로에 복원하고 `depmod -a`,
 hard reset을 실행한 뒤 세 원본 SHA-256를 대조한다.
+
+### 7.1 최종 production smoke
+
+`d15d613` 기준 clean build를 설치하고 crop 시험을 끝낸 뒤 production JSON으로 다시
+hard reset했다. 2026-08-28T15:51:42Z에 읽은 최종 상태는 다음과 같다.
+
+| 항목 | 결과 |
+|---|---|
+| driver | SHA-256 `b27ae021...e09fc33`, version 2.9, `srcversion=DA89ABE8A6E147911293CE6` |
+| gstApp | SHA-256 `08ae95d1...239ee`, `gstApp -d 11 -m 4`, service active |
+| edgeconf | SHA-256 `eba52154...53654f`, 640x360@30, crop false, dz=100 |
+| prepare | `CONSUMED`, dual `1280x360`, `errno=0`, `worker_errno=0`, `match=1` |
+| AP1302 readback | ch0/ch1 모두 factor `0x0100`, step `0x8000`, X/Y `0x0080` |
+| 8초 FPS 평균 | ch0 sensor/AP/CSI/ISI `30.0/29.9/29.5/29.8`, ch1 `30.0/30.0/29.3/29.5` |
+| final probe log | crop register 쓰기 0회, `0x510A` 쓰기 0회, transport error keyword 0회 |
+
+production 모듈에서 120 FPS를 요청한 `VIDIOC_SUBDEV_S_FRAME_INTERVAL`은
+`-EINVAL`로 실패했고 active interval은 30 FPS로 유지됐다. `crop_enable=false`와
+동일한 no-op 제어는 스트리밍 중 성공했으며 실제 enable 전환만 `-EBUSY`다.
+
+crop true는 FHD(dual 3840x1080), HD(dual 2560x720), 360p(dual 1280x360)에서 각각
+검증했다. 세 경우 모두 초기 1.5배/채널별 중심과 runtime 2.0배/새 중심이 AP1302
+readback에 반영됐고, 출력 해상도는 바뀌지 않았다. enable 전환은 세 경우 모두
+`-EBUSY`였으며 서비스는 active를 유지했다.
+
+최종 RTSP H.265를 GStreamer로 decode한 PNG는 ch0가 완전 흑색, ch1의 RGB 평균이
+`(0.005, 1.533, 17.482)`인 어두운 청색 장면이었다. 녹색 dominance는 없었다.
+원시 출력과 frame은 다음 디렉터리에 보존한다.
+
+```text
+artifacts/board-20260828-qualification/final-production-d15d613/
+```
+
+| evidence | SHA-256 |
+|---|---|
+| `final-deployment-status.txt` | `d603da74ecd3e2c9a4718f8163303a43ac6e207f0df9f6c8035d6c6b7619feb9` |
+| `final-production-30-fps.txt` | `ffe714af287034868db54c4c523f022204b9b140c7ef5fcce8ed402d6f87a17e` |
+| `crop-fhd-runtime.txt` | `eeb1a2761696a1e3bf8624de25a81201e64f6db712fe4f8c8967875c5b255da3` |
+| `crop-hd-runtime.txt` | `8c8d052385f37e4820bf459829fda58b5b7ece00fe1c7edca2ec35c3bc079074` |
+| `crop-360p-runtime.txt` | `f882997dae79bea8b5e597adde85986625c30f4eeebfbc1f095bd439f8694a83` |
+| `rtsp-ch0.png` | `ef8400399cbb84bdec02b43395c873daf7c06084742b5404a3ab3b45aec17708` |
+| `rtsp-ch1.png` | `e9869a1a269e0c19df1e0e96c97f79c64449e4d3118b8154c8b84175b72f41ce` |
 
 ## 8. 재시험에 필요한 조건
 
