@@ -1,4 +1,4 @@
-# MAX9296 해상도 모드·720x360 센서 readout·디지털 crop 설계
+# MAX9296 해상도 모드·640x360 센서 readout·디지털 crop 설계
 
 ## 문서 상태
 
@@ -10,14 +10,14 @@
 ## 1. 목표
 
 최종 사용자 해상도를 카메라당 `1920x1080`, `1280x720`,
-`720x360` 세 가지로 정리한다. 해상도 선택은 AP1302가 소유하는 센서
+`640x360` 세 가지로 정리한다. 해상도 선택은 AP1302가 소유하는 센서
 readout·기본 ROI·출력 크기를 결정하고, 검사 띠 조준을 위한 디지털 crop은
 모든 해상도에서 독립적으로 켜고 끌 수 있게 한다.
 
-`720x360@120`은 단순히 GStreamer caps를 120으로 표시하는 것이 아니라
+`640x360@120`은 단순히 GStreamer caps를 120으로 표시하는 것이 아니라
 AR0234 → AP1302 → MIPI CSI → ISI 전체 경로의 실측 FPS와 영상 무결성으로
-검증한다. 센서 readout 방식과 full-readout 후 ISP 축소 방식은 공개 설정을
-추가하지 않고 시험용 A/B 빌드로 비교한다.
+검증한다. 640x360 sensor readout, HD readout 후 ISP 축소, FHD readout 후
+ISP 축소를 공개 설정 추가 없이 세 개의 시험 artifact로 비교한다.
 
 기존 노출 안전 정책, AE·gain·AWB·flip 제어는 안전 범위에서 그대로 유지하며,
 SoC 정지 이력이 있는 AP1302 `0x510A` 수동 WB 쓰기는 추가하지 않는다.
@@ -76,9 +76,11 @@ SoC 정지 이력이 있는 AP1302 `0x510A` 수동 WB 쓰기는 추가하지 않
 
 ### 2.3 구현 전에 보드에서 확정해야 하는 사실
 
-- 720x360에 적합한 AP1302 firmware sensor-mode 값
+- 640x360에 적합한 AP1302 firmware sensor-mode 값
 - 그 값이 실제 AR0234 crop/binning/subsampling과 타이밍을 일관되게
   구성하는지
+- 사용자 crop 없이 16:9 전체 FOV를 유지하는 sensor binning/subsampling
+  모드가 존재하는지
 - 양 채널에 같은 active window와 line/frame timing이 적용되는지
 - 해당 경로가 120 FPS와 정상 UYVY 영상을 동시에 유지하는지
 
@@ -94,22 +96,26 @@ SoC 정지 이력이 있는 AP1302 `0x510A` 수동 WB 쓰기는 추가하지 않
 |---:|---:|---:|---:|
 | 1920x1080 | 1920x1080 | 3840x1080 | 16:9 |
 | 1280x720 | 1280x720 | 2560x720 | 16:9 |
-| 720x360 | 720x360 | 1440x360 | 2:1 |
+| 640x360 | 640x360 | 1280x360 | 16:9 |
 
-기존 공개 `640x360`·`1280x360` 모드는 각각
-`720x360`·`1440x360`으로 교체한다. gstApp의 해상도 검증, prepare
-target 계산, V4L2 모드 표와 caps도 같은 계약을 사용한다.
+기존 공개 `640x360`·`1280x360` 크기는 유지한다. 다만 현재
+full-readout scale 경로와 검증할 sensor-readout 경로를 구분해 측정한 뒤,
+production mode의 내부 sensor mode를 결정한다. gstApp의 해상도 검증,
+prepare target 계산, V4L2 모드 표와 caps도 같은 계약을 사용한다.
 
-### 3.1 720x360의 기본 ROI
+### 3.1 640x360의 기본 ROI와 FOV
 
-720x360은 2:1이므로 1920x1080 전체 16:9 readout과 화면비가 다르다.
-개념적으로는 중앙 `1920x960` 영역을 기준으로 720x360을 구성하며,
-전체 1080 높이와 비교하면 상하 합계 약 11.1%의 수직 FOV를 제외한다.
+640x360은 1920x1080 및 1280x720과 같은 16:9다. 따라서 해상도를
+성립시키기 위한 상하 aspect crop은 필요하지 않으며
+`crop_enable=false`의 기본 ROI는 전체 16:9 FOV다.
 
-이는 사용자 디지털 crop이 아니라 해상도를 성립시키는 기본 ROI다.
-`crop_enable=false`여도 적용된다. 정확한 AR0234 window, binning 또는
-subsampling 조합과 ROI 레지스터 값은 AP1302 sensor-mode 보드 검증 결과로
-확정한다.
+production sensor-readout 후보는 중앙 640x360 window crop이 아니라
+전체 FOV를 표본화하는 firmware 지원 binning/subsampling을 우선한다.
+AR0234 window가 전체 크기로 남더라도 `READ_MODE`, line/frame timing과
+실제 출력 샘플링이 바뀔 수 있으므로 window 크기 하나만으로 전용
+readout 여부를 판정하지 않는다. 중앙 640x360 window만 만드는 후보는
+디지털 crop 비교 case로 분류하고 crop-disabled production 기본 모드로
+채택하지 않는다.
 
 ## 4. 해상도 기반 센서 readout
 
@@ -121,9 +127,10 @@ edgeconf와 V4L2에는 `readout_mode`를 추가하지 않는다. 선택된 해�
 3. 보드에서 검증된 `PREVIEW_SENSOR_MODE`
 4. 해상도·FPS별 preview timing 정책
 
-1920x1080과 1280x720은 현재 검증된 경로를 유지한다. 720x360은 센서에서
-가능한 한 이른 단계에 crop/binning/subsampling을 수행하여 센서와 AP1302의
-불필요한 픽셀 처리를 줄이는 경로를 목표로 한다.
+1920x1080과 1280x720은 현재 검증된 경로를 유지한다. 640x360은
+사용자 crop 없이 전체 FOV를 유지하면서 센서에서 가능한 한 이른 단계에
+binning/subsampling을 수행하여 센서와 AP1302의 불필요한 픽셀 처리를
+줄이는 경로를 목표로 한다.
 
 AP1302가 센서 설정의 소유자이므로 드라이버가 AR0234 window·line length·
 frame length·read mode를 새 모드 값으로 직접 쓰지 않는다. AR0234 DMA
@@ -131,7 +138,7 @@ frame length·read mode를 새 모드 값으로 직접 쓰지 않는다. AR0234 
 
 ## 5. 디지털 crop 인터페이스
 
-디지털 crop은 기본 해상도와 독립적이며 1920x1080, 1280x720, 720x360의
+디지털 crop은 기본 해상도와 독립적이며 1920x1080, 1280x720, 640x360의
 단일·듀얼 구성 모두에서 사용할 수 있다. crop을 켜도 출력 해상도는
 바뀌지 않고, 기본 ROI 안의 일부를 선택해 같은 출력 크기로 resample한다.
 기본 ROI 밖의 FOV를 복원할 수는 없다.
@@ -178,7 +185,7 @@ frame length·read mode를 새 모드 값으로 직접 쓰지 않는다. AR0234 
 | 300 | `0x0300` | 약 33.3%, 3.00배 |
 
 예를 들어 1920x1080에서 `dz=200`은 기본 ROI의 중앙 절반 크기를
-선택해 다시 1920x1080으로 출력한다. 1280x720과 720x360도 각자의 기본
+선택해 다시 1920x1080으로 출력한다. 1280x720과 640x360도 각자의 기본
 ROI 안에서 동일한 배율 의미를 갖는다.
 
 ### 5.3 enable과 런타임 규칙
@@ -223,7 +230,7 @@ firmware replay 어디에서도 다음 레지스터에 host I2C 쓰기를 발행
 
 ```json
 {
-  "width": 720,
+  "width": 640,
   "height": 360,
   "i2c2": {
     "crop_enable": false,
@@ -289,13 +296,13 @@ firmware replay 어디에서도 다음 레지스터에 host I2C 쓰기를 발행
 `0x500C` 쓰기가 예정되어 있으면 첫 mode-table I2C 쓰기 전에 거부한다.
 따라서 120 FPS 시험은 수동 노출 요청 없이 AE 경로로 시작한다.
 
-720x360은 보드 검증을 거쳐 카메라당 최대 120 FPS를 목표로 한다.
+640x360은 보드 검증을 거쳐 카메라당 최대 120 FPS를 목표로 한다.
 1920x1080과 1280x720의 일반 `max_fps`는 이번 120 FPS 자격 검증으로
 임의 상향하지 않는다.
 
-### 8.1 720x360 high-FPS preview 정책
+### 8.1 640x360 high-FPS preview 정책
 
-720x360에서 요청 FPS가 30을 넘을 때 각 활성 AP1302에 다음 atomic
+640x360에서 요청 FPS가 30을 넘을 때 각 활성 AP1302에 다음 atomic
 정책을 적용한다.
 
 1. `ATOMIC(0x1184)=0x0001`
@@ -310,44 +317,70 @@ line-time 값이 필요한 경우에만 후속 설계 변경으로 추가한다.
 중간 쓰기 실패 시 첫 오류를 보존하고 atomic finish를 best effort로
 시도한 뒤 준비를 실패시킨다.
 
-## 9. 센서 readout 대 ISP 축소 A/B
+## 9. sensor readout 대 AP1302 ISP 축소 비교
 
-공개 `readout_mode` 없이 동일한 소스 revision에서 sensor-mode 표
-한 항목만 다른 두 개의 명시적 시험 빌드를 만든다.
+응용단 scaling은 비교에서 제외한다. 세 Case 모두
+`PREVIEW_WIDTH/HEIGHT=640x360`, AP1302/CSI UYVY 출력 640x360,
+gstApp 입력 640x360으로 고정한다. 비교 변수는 AR0234 readout과 AP1302
+내부 rescale 부담뿐이다.
 
-| Case | 센서 측 | AP1302 출력 | 공개 crop |
-|---|---|---|---|
-| A: full-readout scale | 1920x1080 readout 유지 | 기본 aspect crop/scale 후 720x360 | disabled |
-| B: sensor readout | 검증된 sensor crop/bin/subsample | 720x360 | disabled |
+세 해상도는 모두 16:9이므로 중앙 영역을 잘라내는 geometric crop이 아니라
+전체 FOV를 유지하는 rescale 비교다. `crop_enable=false`로 두고
+`0x1010`, `0x1012`, `0x118C`, `0x118E`를 쓰지 않는다.
 
-두 빌드는 artifact 이름과 git revision·시험 mode-table 차이를 기록하며
-edgeconf/V4L2에는 이를 선택하는 필드를 넣지 않는다. 각 case 사이에는
-hard reset을 수행한다.
+### 9.1 시험 Case
+
+| Case | AR0234 목표 readout | AP1302 처리 | AP1302/CSI 출력 | 목적 |
+|---|---:|---|---:|---|
+| A: `SENSOR-640` | 전체 FOV의 검증된 640x360 상당 bin/subsample | 최소 rescale | 640x360 | 전용 sensor-readout 후보 |
+| B: `HD-ISP` | 전체 FOV 1280x720 | 640x360으로 2:1 축소 | 640x360 | HD sensor + ISP 축소 |
+| C: `FHD-ISP` | 전체 FOV 1920x1080 | 640x360으로 3:1 축소 | 640x360 | 현재 FHD sensor + ISP 축소 기준 |
+
+`SENSOR-640`의 “640x360 상당”은 단순한 중앙 window crop을 뜻하지
+않는다. 전체 FOV를 유지하는 firmware 지원 binning/subsampling과 변경된
+read mode/timing을 board readback으로 확인해야 한다.
+
+세 Case는 동일한 소스 revision에서 640x360 mode의
+`PREVIEW_SENSOR_MODE`·기본 ROI 항목만 다른 명시적 시험 artifact로
+만든다. 공개 edgeconf/V4L2 `readout_mode`는 추가하지 않는다. artifact
+이름, git revision, 적용한 sensor-mode 값과 register readback을 결과에
+기록한다.
+
+Case C는 이전 `dz=100` 측정의
+`AR0234 1920x1080 → AP1302/CSI 640x360` 경로를 재현한다. 이전
+`dz=300` 결과는 중앙 640x360 digital zoom의 historical control일 뿐,
+이번 전체-FOV 비교 Case에는 포함하지 않는다.
+
+### 9.2 공정한 조건과 FPS
+
+세 Case 모두 먼저 30 FPS에서 기능·자원 기준값을 측정하고, 이어서 동일하게
+60 FPS와 요청 120 FPS를 적용한다. 요청값이 아니라 raw CSI/ISI IRQ로 실제
+cadence를 판정하며, 특정 sensor readout이 목표를 만들지 못하면 그 실측값을
+그대로 기록한다.
 
 동일하게 유지할 조건은 다음과 같다.
 
-- `crop_enable=false`; 네 digital-crop 레지스터 쓰기 없음
-- 동일한 요청 FPS와 노출/AE/AWB 설정
-- 동일 조명, 카메라 위치와 온도 안정화 시간
-- 동일 gstApp, encoder, RTSP와 계측 기간
+- `crop_enable=false`; 네 digital-crop 레지스터의 host I2C 쓰기 0회
+- 전체 16:9 FOV, 동일 조명, 카메라 위치와 온도 안정화 시간
+- 동일한 AE/AWB/gain 설정; 30 FPS 초과 시 수동 `0x500C` 쓰기 없음
+- 동일 AP1302/CSI 640x360 caps, gstApp, encoder, RTSP와 계측 기간
+- Case 또는 시험 artifact 변경 사이 hard reset
 
-### 9.1 예상되는 차이와 해석
+### 9.3 예상되는 차이와 해석
 
-두 case 모두 AP1302 이후에는 같은 720x360 UYVY 프레임과 FPS를 내므로
-MIPI 출력 대역폭, ISI 픽셀 처리량, gstApp 메모리 이동량과 encoder 부하는
-대체로 비슷할 수 있다. sensor readout의 주된 이점 후보는 AR0234가 읽는
-행·열 수와 AP1302 front-end 입력 픽셀 수 감소에 따른 센서/AP1302
-처리량, 전력과 온도 감소다.
+AP1302 이후 출력과 gstApp 파이프라인이 같으므로 MIPI 대역폭, ISI 픽셀
+처리량, gstApp 메모리 이동량과 encoder 부하는 세 Case에서 비슷해야 한다.
+유의미한 차이는 AR0234 sampling·line/frame timing, AP1302 front-end 입력
+픽셀 수, sensor/AP1302 전력·온도와 화질에서 기대한다.
 
-반대로 sensor crop은 FOV를 줄이고, binning/subsampling 조합에 따라
-노이즈·해상력·aliasing이 달라질 수 있다. full-readout scale은 센서와
-AP1302 내부 처리량이 크지만 더 넓은 원본 정보를 resample할 수 있다.
-이 차이는 CPU만으로 판단하지 않고 sensor window/timing, DDR, 온도,
-화질과 FOV를 함께 비교한다.
+명목 active pixel 수는 HD-ISP가 640x360의 4배, FHD-ISP가 9배지만,
+blanking, binning 회로와 firmware 처리 때문에 전력·온도가 그 비율로
+변한다고 가정하지 않는다. 실제 register timing과 자원 계측으로 판단한다.
 
-gstApp과 RTSP 소비자는 두 case에서 같은 caps를 받는다. 응용단 자유도는
-공개 `readout_mode`가 아니라 세 해상도 선택과 독립적인
-`crop_enable/dz/center` 조합으로 제공한다.
+세 Case 모두 전체 FOV를 유지해야 화질을 직접 비교할 수 있다. 결과에는
+sharpness, noise, aliasing과 downscale 방식도 기록한다. SENSOR-640 후보가
+전체 FOV를 유지하지 못하면 production 후보에서 제외하고 별도 crop 결과로
+분류한다.
 
 ## 10. 검증 계획
 
@@ -356,9 +389,11 @@ gstApp과 RTSP 소비자는 두 case에서 같은 caps를 받는다. 응용단 �
 드라이버의 모드·crop·FPS 결정을 가능한 한 pure policy로 분리하고 먼저
 실패하는 host test를 작성한다.
 
-- 단일/듀얼 1920x1080, 1280x720, 720x360 모드 매핑
-- 기존 640x360/1280x360 공개 모드 제거
-- 720x360 기본 ROI/aspect와 sensor-mode 선택
+- 단일/듀얼 1920x1080, 1280x720, 640x360 모드 매핑
+- 기존 640x360/1280x360 공개 크기 유지
+- 640x360 전체-FOV 기본 ROI와 sensor-mode 선택
+- SENSOR-640, HD-ISP, FHD-ISP 시험 artifact의 차이가 640x360
+  sensor-mode/ROI 정책으로 제한되는지
 - `dz` 100/150/200/300의 8.8 변환
 - 0/32768/65535 중심 좌표 변환
 - `crop_enable=false`에서 네 레지스터 write 호출 0회
@@ -377,17 +412,18 @@ gstApp host test는 다음을 확인한다.
 - 공통 `dz`와 채널별 center parser
 - crop control을 prepare 전에 한 tuple로 적용
 - 기존 GStreamer `crop_en`과 새 hardware `crop_enable`의 분리
+- 세 sensor/ISP Case에서 gstApp 입력 caps가 모두 640x360인지
 
 드라이버 health/prepare 테스트와 커널 모듈 빌드를 통과시킨다. gstApp은
 plain `make`가 아니라 `./make-for-imx8`로만 빌드한다.
 
 ### 10.2 보드 sensor-mode 자격 시험
 
-각 AP1302 sensor-mode 후보마다 다음 순서로 확인한다.
+세 시험 artifact의 AP1302 sensor-mode마다 다음 순서로 확인한다.
 
 1. 보드 예약을 확보하고 기존 module, gstApp, edgeconf와 hash를 백업한다.
-2. `crop_enable=false`와 720x360 기본 모드를 적용하고 hard reset한다.
-3. AP1302 `0x2000~0x2014`를 readback한다.
+2. `crop_enable=false`와 640x360 기본 모드를 적용하고 hard reset한다.
+3. AP1302 `0x2000~0x2014`를 readback하고 output이 640x360인지 확인한다.
 4. 두 AR0234의 `0x3002/0x3004/0x3006/0x3008` window,
    `0x300C` line length, `0x300A` frame length,
    `0x3040` read mode를 readback한다.
@@ -395,11 +431,12 @@ plain `make`가 아니라 `./make-for-imx8`로만 빌드한다.
    확인한다.
 6. AE/AWB, 노출 안전 guard와 영상 포맷을 확인한다.
 
-후보가 안정적일 때만 production mode table에 넣는다.
+SENSOR-640 후보가 전체 FOV와 안정성을 만족할 때만 production mode
+table에 넣는다. HD-ISP와 FHD-ISP는 비교 기준으로 결과를 보존한다.
 
 ### 10.3 120 FPS 및 자원 비교
 
-각 A/B case에서 최소 15~20초 안정 구간을 측정한다.
+각 비교 Case에서 30/60/120 FPS별 최소 15~20초 안정 구간을 측정한다.
 
 - 수정된 `cam_fps_stack.sh` 결과
 - raw CSI/ISI IRQ delta
@@ -422,11 +459,13 @@ RTSP caps나 `videorate`의 120 표기만으로 합격 처리하지 않는다.
 ### 10.4 모드·crop 회귀
 
 - 세 해상도의 단일·듀얼 스트림을 일반 FPS에서 확인한다.
-- 720x360@120은 별도 엄격 기준으로 확인한다.
+- 640x360@120은 별도 엄격 기준으로 확인한다.
 - 각 해상도에서 crop false와 true를 확인한다.
 - crop true에서 100/150/200과 채널별 중심 이동을 런타임 적용한다.
 - `VIDIOC_S_EXT_CTRLS` tuple의 일관성과 I2C 오류 반환을 확인한다.
 - hard reset·firmware reload 후 JSON crop 값이 재적용되는지 확인한다.
+- sensor/ISP 비교 Case에서는 AR0234 window/read mode/timing과
+  AP1302/CSI 640x360 output을 각각 기록한다.
 
 ## 11. 녹색 화면 처리
 
@@ -447,7 +486,7 @@ FPS가 120에 근접해도 녹색 화면이 남아 있으면 해당 case는 실�
 
 1. 설치된 kernel module, gstApp binary와 edgeconf를 run별 이름으로 백업한다.
 2. 같은 git revision의 module과 gstApp을 배포한다.
-3. 720x360, 120 FPS, `crop_enable=false` JSON으로 hard reset 후 검증한다.
+3. 640x360, 120 FPS, `crop_enable=false` JSON으로 hard reset 후 검증한다.
 4. 별도 시험에서 `crop_enable=true`와 runtime 중심/배율을 검증한다.
 5. 세 해상도와 기존 안전 제어의 smoke test를 수행한다.
 6. 결과와 register readback, FPS, 자원 사용량, 영상 캡처를 문서화한다.
@@ -462,6 +501,7 @@ FPS가 120에 근접해도 녹색 화면이 남아 있으면 해당 case는 실�
 지원 완료라고 주장하지 않는다.
 
 - 안정적인 AP1302 firmware sensor mode를 찾지 못함
+- crop-disabled production 후보가 전체 16:9 FOV를 유지하지 못함
 - 양 채널 AR0234 window/timing 불일치
 - raw CSI 또는 ISI가 118.8 FPS 미만
 - CSI-to-ISI 손실률 1% 초과
@@ -471,5 +511,5 @@ FPS가 120에 근접해도 녹색 화면이 남아 있으면 해당 case는 실�
 
 완료 결과에는 full-readout scale과 sensor readout의 실제 FPS, CPU,
 메모리, DDR, 온도, 센서 window/timing, FOV와 화질 차이를 함께 기록한다.
-720x360 모드가 낮은 FPS에서만 안정적이라면 그 결과를 별도 제한으로
+640x360 모드가 낮은 FPS에서만 안정적이라면 그 결과를 별도 제한으로
 문서화할 수 있지만 120 FPS 자격과 혼동하지 않는다.
