@@ -2456,6 +2456,16 @@ static int max9296_preflight_exposure(struct max9296_dev *sensor,
                                        safe_max_fps);
 }
 
+static u32 max9296_cached_exposure_value(
+    const struct max9296_dev *sensor,
+    const struct max9296_channel_ctrl *channel) {
+  if (channel->exposure)
+    return channel->exposure;
+  if (sensor->ctrl_cache.exposure)
+    return sensor->ctrl_cache.exposure;
+  return 10000;
+}
+
 static int max9296_write_exposure_per_channel(struct max9296_dev *sensor,
                                                u32 exposure) {
   int ret;
@@ -2868,13 +2878,13 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
 }
 
 /* Helper function to apply settings for one channel */
-static void max9296_apply_channel_controls(struct max9296_dev *sensor,
-                                           u32 i2c_addr,
-                                           struct max9296_channel_ctrl *ch_ctrl,
-                                           u8 ser_addr, u8 mcp4018_host,
-                                           u8 mcp4018_wiper,
-                                           const char *ch_name,
-                                           const char *mode_name) {
+static int max9296_apply_channel_controls(struct max9296_dev *sensor,
+                                          u32 i2c_addr,
+                                          struct max9296_channel_ctrl *ch_ctrl,
+                                          u8 ser_addr, u8 mcp4018_host,
+                                          u8 mcp4018_wiper,
+                                          const char *ch_name,
+                                          const char *mode_name) {
   /* Pre-compute all values so entry log shows the full plan. */
   bool mcp_active  = (ch_ctrl->led_flash & (1 << 8));
   u8   flash_delay = (u8)(ch_ctrl->led_flash & 0xff);
@@ -2889,7 +2899,19 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
                          : (sensor->ctrl_cache.exposure
                                 ? sensor->ctrl_cache.exposure
                                 : 10000);
-  int  ret, err = 0;
+  u32 fps = READ_ONCE(sensor->fps);
+  u32 safe_max_fps = sensor->current_mode
+                         ? sensor->current_mode->exposure_safe_max_fps
+                         : 0;
+  bool skip_exposure_seed = ch_ctrl->ae_on && fps > safe_max_fps;
+  int ret;
+  int first_err = 0;
+
+  if (!skip_exposure_seed) {
+    ret = max9296_preflight_exposure(sensor, ch_name, exp_seed);
+    if (ret)
+      return ret;
+  }
 
   /* Entry log — what is about to be applied. */
   printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s apply (addr:0x%02x ae:%s "
@@ -2901,92 +2923,107 @@ static void max9296_apply_channel_controls(struct max9296_dev *sensor,
          awb_mode_name(ch_ctrl->awb), awb_val, gain_seed, exp_seed, rot,
          mcp_active ? "on" : "off", mcp4018_wiper, flash_delay);
 
-  /* STEP 1: Initialize AE to manual mode first */
-  ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL,
-                            AP1302_AE_CTRL_MANUAL, 2, 2);
-  if (ret)
-    err = ret;
-  msleep(100);
+  if (!skip_exposure_seed) {
+    /* STEP 1: Initialize AE to manual mode first. */
+    ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL,
+                              AP1302_AE_CTRL_MANUAL, 2, 2);
+    if (ret && !first_err)
+      first_err = ret;
+    msleep(100);
 
-  /* Seed exposure time while in manual mode. Some FW revisions need a
-   * non-zero seed before switching to AE auto. */
-  ret = max9296_write_exposure(sensor, i2c_addr, ch_name, exp_seed);
-  if (ret)
-    err = ret;
-  msleep(100);
+    /* Seed exposure time while in manual mode. Some FW revisions need a
+     * non-zero seed before switching to AE auto. */
+    ret = max9296_write_exposure(sensor, i2c_addr, ch_name, exp_seed);
+    if (ret && !first_err)
+      first_err = ret;
+    msleep(100);
+  }
 
   /* STEP 2: Apply configured AE mode (auto/manual) */
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2);
-  if (ret)
-    err = ret;
+  if (ret && !first_err)
+    first_err = ret;
   if (ch_ctrl->ae_on)
     msleep(100);
 
   /* AWB: ch_ctrl->awb holds AWB_CTRL MODE (0x0~0xf). */
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AWB_CTRL, awb_val, 2, 2);
-  if (ret)
-    err = ret;
+  if (ret && !first_err)
+    first_err = ret;
 
   /* Gain value (always set, used when switching to manual) */
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_AE_GAIN, gain_seed, 2, 2);
-  if (ret)
-    err = ret;
+  if (ret && !first_err)
+    first_err = ret;
 
   /* Rotation (hflip + vflip combined) */
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_ROTATION, rot, 2, 2);
-  if (ret)
-    err = ret;
+  if (ret && !first_err)
+    first_err = ret;
 
   /* Per-channel tuning values */
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_LSC_CTRL,
                             ch_ctrl->lsc, 2, 2);
-  if (ret)
-    err = ret;
+  if (ret && !first_err)
+    first_err = ret;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_BRIGHTNESS,
                             ch_ctrl->brightness, 2, 2);
-  if (ret)
-    err = ret;
+  if (ret && !first_err)
+    first_err = ret;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_CONTRAST,
                             ch_ctrl->contrast, 2, 2);
-  if (ret)
-    err = ret;
+  if (ret && !first_err)
+    first_err = ret;
   ret = maxim_ops_i2c_write(sensor, i2c_addr, AP1302_REG_SATURATION,
                             ch_ctrl->saturation, 2, 2);
-  if (ret)
-    err = ret;
+  if (ret && !first_err)
+    first_err = ret;
 
   /* LED flash (AR0234 R0x3270 via AP1302 DMA). Firmware routes to the
    * correct physical sensor in both dual and single modes. */
   ret = max9296_dma_write_reg(sensor, i2c_addr, AR0234_REG_LED_FLASH_CONTROL,
                               (u16)ch_ctrl->led_flash);
-  if (ret)
-    err = ret;
+  if (ret && !first_err)
+    first_err = ret;
 
   /* MCP4018 wiper — atomic open/write/close. Gated on flash enable bit:
    * when the flash is disabled the LED/MCP4018 chain may be unpopulated. */
   if (mcp_active) {
-    max9295_mfp4_set(sensor, ser_addr, true);
-    ret = mcp4018_write_wiper(sensor, mcp4018_host, mcp4018_wiper, ser_addr);
-    max9295_mfp4_set(sensor, ser_addr, false);
-    if (ret)
-      err = ret;
+    ret = max9295_mfp4_set(sensor, ser_addr, true);
+    if (ret && !first_err)
+      first_err = ret;
+    if (!ret) {
+      ret = mcp4018_write_wiper(sensor, mcp4018_host, mcp4018_wiper,
+                                ser_addr);
+      if (ret && !first_err)
+        first_err = ret;
+    }
+    ret = max9295_mfp4_set(sensor, ser_addr, false);
+    if (ret && !first_err)
+      first_err = ret;
   }
 
   /* Exit log — high-level result. Details are in the per-step logs above. */
-  if (err)
+  if (first_err)
     printk(KERN_ERR "[%s:%d][%s:%d] %s %s applied fail (ret=%d)",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-           ch_name, mode_name, err);
+           ch_name, mode_name, first_err);
   else
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied success",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            ch_name, mode_name);
+  return first_err;
 }
 
-static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
+static int max9296_apply_cached_controls(struct max9296_dev *sensor) {
   bool dual = max9296_hw_is_dual(sensor);
   int i2c_nr = sensor->i2c_client->adapter->nr;
   const char *ch0_name, *ch1_name;
+  int first_err = 0;
+  int ret;
+
+  lockdep_assert_held(&sensor->lock);
+  sensor->ctrl_cache.firmware_ready = false;
 
   /* Determine channel names based on I2C adapter number */
   if (i2c_nr == 1) {
@@ -3008,16 +3045,18 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
   if (dual) {
     /* Dual-channel mode: apply each channel's settings separately.
      * MCP4018 per-port wiper is inlined via max9296_apply_channel_controls. */
-    max9296_apply_channel_controls(sensor, AP1302_CH0_I2C_ADDR,
-                                   &sensor->ctrl_cache.ch0,
-                                   MAX9295_SER_ADDR_CH0, MCP4018_HOST_ADDR,
-                                   (u8)sensor->ctrl_cache.mcp4018_wiper,
-                                   ch0_name, "dual");
-    max9296_apply_channel_controls(sensor, AP1302_CH1_I2C_ADDR,
-                                   &sensor->ctrl_cache.ch1,
-                                   MAX9295_SER_ADDR_CH1, MCP4018_HOST_ADDR_CH1,
-                                   (u8)sensor->ctrl_cache.mcp4018_wiper_ch1,
-                                   ch1_name, "dual");
+    ret = max9296_apply_channel_controls(
+        sensor, AP1302_CH0_I2C_ADDR, &sensor->ctrl_cache.ch0,
+        MAX9295_SER_ADDR_CH0, MCP4018_HOST_ADDR,
+        (u8)sensor->ctrl_cache.mcp4018_wiper, ch0_name, "dual");
+    if (ret && !first_err)
+      first_err = ret;
+    ret = max9296_apply_channel_controls(
+        sensor, AP1302_CH1_I2C_ADDR, &sensor->ctrl_cache.ch1,
+        MAX9295_SER_ADDR_CH1, MCP4018_HOST_ADDR_CH1,
+        (u8)sensor->ctrl_cache.mcp4018_wiper_ch1, ch1_name, "dual");
+    if (ret && !first_err)
+      first_err = ret;
   } else {
     /* Single-channel mode: apply ch0 cache slot to global address.
      * sensor->enable bitmask identifies the active local channel
@@ -3032,13 +3071,19 @@ static void max9296_apply_cached_controls(struct max9296_dev *sensor) {
     u8 host  = local_ch ? MCP4018_HOST_ADDR_CH1 : MCP4018_HOST_ADDR;
     u8 wiper = local_ch ? (u8)sensor->ctrl_cache.mcp4018_wiper_ch1
                         : (u8)sensor->ctrl_cache.mcp4018_wiper;
+    struct max9296_channel_ctrl *active_ctrl =
+        local_ch ? &sensor->ctrl_cache.ch1 : &sensor->ctrl_cache.ch0;
     snprintf(single_name, sizeof(single_name), "ch%u", global_ch);
-    max9296_apply_channel_controls(sensor, AP1302_I2C_ADDR,
-                                   &sensor->ctrl_cache.ch0,
-                                   ser, host, wiper, single_name, "single");
+    ret = max9296_apply_channel_controls(sensor, AP1302_I2C_ADDR, active_ctrl,
+                                         ser, host, wiper, single_name,
+                                         "single");
+    if (ret)
+      first_err = ret;
   }
 
-  sensor->ctrl_cache.firmware_ready = true;
+  if (!first_err)
+    sensor->ctrl_cache.firmware_ready = true;
+  return first_err;
 }
 
 static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
@@ -3078,48 +3123,40 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
    * side effect (including the preceding AE_CTRL manual-mode write).  During
    * probe/power-off there is no I2C transaction, so defaults remain cacheable
    * and the same policy is enforced when firmware restoration reaches HW. */
-  if (sensor->power_count > 0 && sensor->ctrl_cache.firmware_ready) {
-    switch (ctrl->id) {
-    case V4L2_CID_EXP_TIME:
-      ret = max9296_preflight_exposure(sensor, "shared", ctrl->val);
-      break;
-    case V4L2_CID_EXPOSURE_CH0:
-      ret = max9296_preflight_exposure(sensor, ch0_name, ctrl->val);
-      break;
-    case V4L2_CID_EXPOSURE_CH1:
-      ret = max9296_preflight_exposure(sensor, ch1_name, ctrl->val);
-      break;
-    case V4L2_CID_EXPOSURE_AUTO_CH0:
-      if (!ctrl->val) {
-        u32 exposure = sensor->ctrl_cache.ch0.exposure
-                           ? sensor->ctrl_cache.ch0.exposure
-                           : (sensor->ctrl_cache.exposure
-                                  ? sensor->ctrl_cache.exposure
-                                  : 10000);
-        ret = max9296_preflight_exposure(sensor, ch0_name, exposure);
-      } else {
-        ret = 0;
-      }
-      break;
-    case V4L2_CID_EXPOSURE_AUTO_CH1:
-      if (!ctrl->val) {
-        u32 exposure = sensor->ctrl_cache.ch1.exposure
-                           ? sensor->ctrl_cache.ch1.exposure
-                           : (sensor->ctrl_cache.exposure
-                                  ? sensor->ctrl_cache.exposure
-                                  : 10000);
-        ret = max9296_preflight_exposure(sensor, ch1_name, exposure);
-      } else {
-        ret = 0;
-      }
-      break;
-    default:
+  switch (ctrl->id) {
+  case V4L2_CID_EXP_TIME:
+    ret = max9296_preflight_exposure(sensor, "shared", ctrl->val);
+    break;
+  case V4L2_CID_EXPOSURE_CH0:
+    ret = max9296_preflight_exposure(sensor, ch0_name, ctrl->val);
+    break;
+  case V4L2_CID_EXPOSURE_CH1:
+    ret = max9296_preflight_exposure(sensor, ch1_name, ctrl->val);
+    break;
+  case V4L2_CID_EXPOSURE_AUTO_CH0:
+    if (!ctrl->val) {
+      u32 exposure = max9296_cached_exposure_value(
+          sensor, &sensor->ctrl_cache.ch0);
+      ret = max9296_preflight_exposure(sensor, ch0_name, exposure);
+    } else {
       ret = 0;
-      break;
     }
-    if (ret)
-      return ret;
+    break;
+  case V4L2_CID_EXPOSURE_AUTO_CH1:
+    if (!ctrl->val) {
+      u32 exposure = max9296_cached_exposure_value(
+          sensor, &sensor->ctrl_cache.ch1);
+      ret = max9296_preflight_exposure(sensor, ch1_name, exposure);
+    } else {
+      ret = 0;
+    }
+    break;
+  default:
+    ret = 0;
+    break;
   }
+  if (ret)
+    return ret;
 
   /* A clustered member update is delivered through the master (dz). Snapshot
    * every requested member before one full-tuple hardware apply. */
@@ -4286,6 +4323,87 @@ finish:
   return ret ? ret : finish_ret;
 }
 
+static bool max9296_fingerprint_mode_is_known(
+    const struct max9296_mode_info *mode) {
+  unsigned int i;
+
+  for (i = 0; i < ARRAY_SIZE(max9296_mode_data); i++)
+    if (mode == &max9296_mode_data[i])
+      return true;
+
+  return mode == &max9296_mode_data_HD_R ||
+         mode == &max9296_mode_data_FHD_R ||
+         mode == &max9296_mode_data_360_R;
+}
+
+static int max9296_preflight_prepare_locked(
+    struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint) {
+  const struct max9296_mode_info *mode = fingerprint->mode;
+  struct max9296_channel_ctrl *channel;
+  char channel_name[8];
+  unsigned int local_channel;
+  unsigned int first_channel;
+  unsigned int channel_count;
+  bool right_mode;
+  int ret;
+
+  lockdep_assert_held(&sensor->lock);
+
+  if (!max9296_fingerprint_mode_is_known(mode) ||
+      fingerprint->width != mode->width ||
+      fingerprint->height != mode->height ||
+      fingerprint->code != MEDIA_BUS_FMT_UYVY8_2X8 ||
+      fingerprint->fps < 1 || fingerprint->fps > mode->max_fps ||
+      fingerprint->crop_enable != sensor->ctrl_cache.crop_enable)
+    return -EINVAL;
+
+  right_mode = mode == &max9296_mode_data_HD_R ||
+               mode == &max9296_mode_data_FHD_R ||
+               mode == &max9296_mode_data_360_R;
+  if ((max9296_mode_is_dual(mode) && fingerprint->enable != 0x03) ||
+      (!max9296_mode_is_dual(mode) && fingerprint->enable != 0x01 &&
+       fingerprint->enable != 0x02) ||
+      (right_mode && fingerprint->enable != 0x02) ||
+      (!max9296_mode_is_dual(mode) && !right_mode &&
+       fingerprint->enable != 0x01))
+    return -EINVAL;
+
+  if (sensor->ctrl_cache.dz < MAX9296_DZ_MIN ||
+      sensor->ctrl_cache.dz > MAX9296_DZ_MAX ||
+      sensor->ctrl_cache.ch0.dz_x < 0 ||
+      sensor->ctrl_cache.ch0.dz_x > 65535 ||
+      sensor->ctrl_cache.ch0.dz_y < 0 ||
+      sensor->ctrl_cache.ch0.dz_y > 65535 ||
+      sensor->ctrl_cache.ch1.dz_x < 0 ||
+      sensor->ctrl_cache.ch1.dz_x > 65535 ||
+      sensor->ctrl_cache.ch1.dz_y < 0 ||
+      sensor->ctrl_cache.ch1.dz_y > 65535)
+    return -EINVAL;
+
+  first_channel = max9296_mode_is_dual(mode)
+                      ? 0
+                      : (fingerprint->enable == 0x02 ? 1 : 0);
+  channel_count = max9296_mode_is_dual(mode) ? 2 : 1;
+  for (local_channel = first_channel;
+       local_channel < first_channel + channel_count; local_channel++) {
+    channel = local_channel ? &sensor->ctrl_cache.ch1
+                            : &sensor->ctrl_cache.ch0;
+    if (channel->ae_on)
+      continue;
+
+    snprintf(channel_name, sizeof(channel_name), "ch%u",
+             sensor->link_status.ch_shift + local_channel);
+    ret = max9296_check_exposure_policy(
+        sensor, channel_name, max9296_cached_exposure_value(sensor, channel),
+        mode, fingerprint->fps, mode->exposure_safe_max_fps);
+    if (ret)
+      return ret;
+  }
+
+  return 0;
+}
+
 /* Program the registers that historically followed firmware completion in
  * s_stream().  Keep this separate from stream commit: it must not enable MIPI,
  * start FSYNC, publish stream_on, or mark the subdevice streaming. */
@@ -4332,10 +4450,6 @@ static int max9296_post_firmware_program_locked(
   if (ret)
     goto failed;
 
-  ret = max9296_apply_cached_crop(sensor);
-  if (ret)
-    goto failed;
-
   if (max9296_mode_is_dual(mode)) {
     ret = maxim_ops_i2c_write(sensor, 0x00, 0x0471, 0x83, 2, 1);
     if (ret)
@@ -4361,6 +4475,10 @@ static int max9296_prepare_hardware_locked(
     const struct max9296_hw_fingerprint *fingerprint) {
   int ret;
 
+  ret = max9296_preflight_prepare_locked(sensor, fingerprint);
+  if (ret)
+    goto failed;
+
   sensor->hardware_valid = false;
   sensor->initialized_epoch = 0;
   sensor->stream_commit_epoch = 0;
@@ -4370,25 +4488,40 @@ static int max9296_prepare_hardware_locked(
 
   ret = max9296_set_mode(sensor, fingerprint);
   if (ret)
-    return ret;
+    goto failed;
 
   sensor->state.firmware = MAX9296_STATE_RUNNING;
   ret = max9296_loadfw(sensor->i2c_client);
   if (ret) {
     sensor->state.firmware = MAX9296_STATE_FAILED;
-    return ret;
+    goto failed;
   }
   sensor->state.firmware = MAX9296_STATE_DONE;
 
   ret = max9296_post_firmware_program_locked(sensor, fingerprint);
   if (ret)
-    return ret;
+    goto failed;
+
+  ret = max9296_apply_cached_crop(sensor);
+  if (ret)
+    goto failed;
+
+  ret = max9296_apply_cached_controls(sensor);
+  if (ret)
+    goto failed;
 
   sensor->initialized_fingerprint = *fingerprint;
   sensor->initialized_epoch = READ_ONCE(max9296_hw_epoch);
   sensor->hardware_valid = true;
 
   return 0;
+
+failed:
+  sensor->hardware_valid = false;
+  sensor->initialized_epoch = 0;
+  sensor->stream_commit_epoch = 0;
+  sensor->ctrl_cache.firmware_ready = false;
+  return ret;
 }
 
 static void max9296_apply_prepare_fingerprint_locked(
@@ -4466,6 +4599,10 @@ static int max9296_prepare_request_locked(
   u64 epoch;
   bool adopted;
   int ret;
+
+  ret = max9296_preflight_prepare_locked(sensor, fingerprint);
+  if (ret)
+    return ret;
 
   /* Keep power acquisition and the first FSYNC reservation in one short
    * transaction.  This closes the gap where a legacy frame-interval write
@@ -4619,6 +4756,10 @@ static int max9296_prepare_request(
     ret = -EBUSY;
     goto unlock;
   }
+
+  ret = max9296_preflight_prepare_locked(sensor, fingerprint);
+  if (ret)
+    goto preserve_lease;
 
   /* One orchestration generation cannot be rebound to another command. */
   if (sensor->prepare_generation == generation && generation != 0 &&
@@ -4844,12 +4985,6 @@ static void max9296_stream_commit_locked(struct max9296_dev *sensor) {
   sensor->pending_mode_change = false;
   sensor->pending_fmt_change = false;
 
-  /* Preserve the old quick-restart control behaviour without using restart as
-   * evidence that firmware survived a board power transition. */
-  if (sensor->restart && sensor->ctrl_cache.firmware_ready) {
-    max9296_apply_cached_controls(sensor);
-  }
-
   sensor->stream_commit_epoch = READ_ONCE(max9296_hw_epoch);
   sensor->stream_on = 1;
   sensor->restart = 0;
@@ -4912,6 +5047,9 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     ret = max9296_normalize_fingerprint_locked(sensor, &fingerprint);
     if (ret)
       goto out;
+    ret = max9296_preflight_prepare_locked(sensor, &fingerprint);
+    if (ret)
+      goto out;
     ret = max9296_update_shared_fsync_locked(
         sensor, fingerprint.fps, true);
     if (ret)
@@ -4939,6 +5077,15 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * worker repeats this under the same mutex to close post-STREAMON updates. */
     ret = max9296_apply_cached_crop(sensor);
     if (ret) {
+      sensor->hardware_valid = false;
+      sensor->initialized_epoch = 0;
+      max9296_drop_fsync_contract_locked(sensor);
+      goto out;
+    }
+    ret = max9296_apply_cached_controls(sensor);
+    if (ret) {
+      sensor->hardware_valid = false;
+      sensor->initialized_epoch = 0;
       max9296_drop_fsync_contract_locked(sensor);
       goto out;
     }
@@ -5262,46 +5409,8 @@ static int max9296_enable(void *data) {
                  KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
                  crop_ret);
         } else if (max9296_enable_output_locked(sensor)) {
-          /*
-           * Consume the request here - only on a pass that actually serves it.
-           *
-           * The clear used to sit at the very end of the pass, where it could
-           * erase a STREAMON that arrived while the pass was running: the app
-           * restarting its pipeline inside that ~600 ms window lost its request
-           * and the deserializer never got its CSI output enable. Clearing it
-           * before the liveness test is no better - a test that then fails would
-           * throw the request away with nothing left to re-raise it, wedging the
-           * channel at no frames. Inside the test both cases are safe: a rejected
-           * pass leaves the flag up for the next iteration, and a STREAMON
-           * landing mid-pass cannot be swallowed because the clear and the writes
-           * are atomic under sensor->lock, which max9296_s_stream() holds for its
-           * whole body. Such a STREAMON either completes before we take the lock,
-           * in which case this pass is the one that serves it, or lands after we
-           * drop it and leaves the flag raised for the next iteration.
-           */
-          usleep_range(10000, 11000);
-
-          // ae
-          maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0290, 2, 2);
-          usleep_range(100000, 101000);
-          maxim_ops_i2c_write(sensor, 0x3c, 0x5002, 0x0299, 2, 2);
-          // awb
-          usleep_range(100000, 101000);
-          maxim_ops_i2c_write(sensor, 0x3c, 0x5100, 0x115f, 2, 2);
-          // lsc
-          usleep_range(100000, 101000);
-          maxim_ops_i2c_write(sensor, 0x3c, 0x54a0, 0x3fff, 2, 2);
-
-          /*
-           * Override the hardcoded AE/AWB init just written above with the V4L2
-           * cached controls. Unconditional by construction: those writes
-           * clobber the registers on every pass, so the restore has to follow
-           * every pass. This used to sit behind a consumable ctrl_cache.pending
-           * gate, which made the outcome depend on whether s_stream(1) had
-           * already spent the flag - a cold boot kept manual AE, a respawn lost
-           * it (#26).
-           */
-          max9296_apply_cached_controls(sensor);
+          printk(KERN_NOTICE "[%s:%d][%s:%d] CSI output enabled",
+                 KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__);
         }
       }
       mutex_unlock(&sensor->lock);

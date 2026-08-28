@@ -926,6 +926,12 @@ def check_source(source: str, failures: list[str]) -> None:
     set_power_on = function(code, "max9296_set_power_on")
     set_power_off = function(code, "max9296_set_power_off")
     board_power = function(code, "max9296_set_power")
+    prepare_hw_start = code.find("static int max9296_prepare_hardware_locked(")
+    prepare_hw = (
+        function(code[prepare_hw_start:], "max9296_prepare_hardware_locked")
+        if prepare_hw_start >= 0
+        else ""
+    )
 
     request_scaffolding = (
         "MAX9296_PREP_IDLE",
@@ -944,6 +950,22 @@ def check_source(source: str, failures: list[str]) -> None:
     for token in request_scaffolding:
         if token not in source:
             failures.append(f"missing Task 3 request scaffolding: {token}")
+
+    truthful_prepare_order = (
+        "max9296_preflight_prepare_locked",
+        "max9296_set_mode",
+        "max9296_loadfw",
+        "max9296_post_firmware_program_locked",
+        "max9296_apply_cached_crop",
+        "max9296_apply_cached_controls",
+        "initialized_fingerprint",
+        "hardware_valid = true",
+    )
+    truthful_positions = [prepare_hw.find(token) for token in truthful_prepare_order]
+    if any(position < 0 for position in truthful_positions) or (
+        truthful_positions != sorted(truthful_positions)
+    ):
+        failures.append("hardware prepare does not preflight/replay before publication")
 
     for token in (
         "max9296_set_power(sensor, true)",
@@ -975,6 +997,7 @@ def check_source(source: str, failures: list[str]) -> None:
     request_lock = request.find("mutex_trylock(&sensor->prepare_request_lock)")
     cancel = request.find("cancel_delayed_work_sync(&sensor->prepare_lease_timeout)")
     lock = request.find("mutex_lock(&sensor->lock)")
+    preflight = request.find("max9296_preflight_prepare_locked")
     contract = request.find("max9296_update_shared_fsync_locked")
     apply = request.find("max9296_apply_prepare_fingerprint_locked")
     prepared = request.find("max9296_prepare_request_locked")
@@ -987,11 +1010,11 @@ def check_source(source: str, failures: list[str]) -> None:
     unlock = request.rfind("mutex_unlock(&sensor->lock)")
     request_unlock = request.rfind("mutex_unlock(&sensor->prepare_request_lock)")
     if not (
-        0 <= request_lock < cancel < lock < contract < apply < prepared < fresh_arm
+        0 <= request_lock < cancel < lock < preflight < contract < apply < prepared < fresh_arm
         < unlock < request_unlock
     ):
         failures.append(
-            "actual prepare path must drain, validate shared FPS before mutation, "
+            "actual prepare path must drain, preflight before shared FPS mutation, "
             "prepare, arm, then release request admission"
         )
     if not (
@@ -1006,6 +1029,7 @@ def check_source(source: str, failures: list[str]) -> None:
     fresh_config_lock = request_locked.find(
         "mutex_lock(&max9296_fsync_config_lock)"
     )
+    fresh_preflight = request_locked.find("max9296_preflight_prepare_locked")
     fresh_power = request_locked.find("max9296_set_power(sensor, true)")
     fresh_contract = request_locked.find(
         "max9296_configure_shared_fsync_locked"
@@ -1015,11 +1039,11 @@ def check_source(source: str, failures: list[str]) -> None:
         "sensor->prepare_generation = generation"
     )
     if not (
-        0 <= fresh_config_lock < fresh_power < fresh_contract < fresh_apply
+        0 <= fresh_preflight < fresh_config_lock < fresh_power < fresh_contract < fresh_apply
         < fresh_request_write
     ):
         failures.append(
-            "fresh prepare does not atomically acquire power/reserve FPS before "
+            "fresh prepare does not preflight then atomically acquire power/reserve FPS before "
             "publishing live/request state"
         )
 
@@ -1130,17 +1154,20 @@ def check_source(source: str, failures: list[str]) -> None:
     if "max9296_prepare_request" not in store:
         failures.append("sysfs prepare does not use the common prepare helper")
     stream_normalize = stream.find("max9296_normalize_fingerprint_locked")
+    stream_preflight = stream.find(
+        "max9296_preflight_prepare_locked", stream_normalize
+    )
     stream_contract = stream.find(
-        "max9296_update_shared_fsync_locked", stream_normalize
+        "max9296_update_shared_fsync_locked", stream_preflight
     )
     stream_epoch = stream.find("epoch = READ_ONCE(max9296_hw_epoch)", stream_contract)
     stream_hardware = stream.find("max9296_prepare_hardware_locked", stream_epoch)
     if not (
-        0 <= stream_normalize < stream_contract < stream_epoch < stream_hardware
+        0 <= stream_normalize < stream_preflight < stream_contract < stream_epoch < stream_hardware
         and "fingerprint.fps, true" in stream[stream_contract:stream_epoch]
     ):
         failures.append(
-            "STREAMON must bind shared FPS before matching/programming hardware"
+            "STREAMON must preflight before binding shared FPS or programming hardware"
         )
 
     for token in (

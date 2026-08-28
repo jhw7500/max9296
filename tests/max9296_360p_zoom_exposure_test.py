@@ -47,6 +47,16 @@ def exposure_allowed(fps: int, safe_max_fps: int) -> bool:
     return 1 <= fps <= safe_max_fps
 
 
+def exposure_replay_plan(ae_auto: bool, fps: int, safe_max_fps: int) -> tuple[str, ...]:
+    if fps < 1:
+        raise ValueError("invalid fps")
+    if fps > safe_max_fps:
+        if ae_auto:
+            return ("configured-auto",)
+        raise BlockingIOError("manual exposure unsafe")
+    return ("manual", "seed-0x500c", "configured-auto" if ae_auto else "manual")
+
+
 def exposure_restore_addresses(dual: bool) -> tuple[int, ...]:
     return (0x11, 0x12) if dual else (0x3C,)
 
@@ -99,6 +109,21 @@ def main() -> int:
         failures.append("30fps must remain inside the conservative exposure-write policy")
     if exposure_allowed(31, 30):
         failures.append("31fps must be fenced by a 30fps exposure-write policy")
+    for high_fps in (31, 60, 120):
+        if exposure_replay_plan(True, high_fps, 30) != ("configured-auto",):
+            failures.append(f"AE auto at {high_fps}fps must skip 0x500c seeding")
+        try:
+            exposure_replay_plan(False, high_fps, 30)
+        except BlockingIOError:
+            pass
+        else:
+            failures.append(f"manual exposure at {high_fps}fps must be rejected")
+    if exposure_replay_plan(True, 30, 30) != (
+        "manual",
+        "seed-0x500c",
+        "configured-auto",
+    ):
+        failures.append("safe AE replay must retain manual, seed, configured order")
 
     if exposure_restore_addresses(True) != (0x11, 0x12):
         failures.append("dual cached exposure must restore through channel addresses")
@@ -260,6 +285,58 @@ def main() -> int:
     apply_channel_controls = function(source, "max9296_apply_channel_controls")
     if "max9296_write_exposure(sensor, i2c_addr" not in apply_channel_controls:
         failures.append("cached dual exposure restore does not use its channel address")
+    if not re.search(
+        r"static\s+int\s+max9296_apply_channel_controls\s*\(", source
+    ):
+        failures.append("channel control replay does not return I2C failures")
+    seed_write = apply_channel_controls.find(
+        "max9296_write_exposure(sensor, i2c_addr"
+    )
+    high_auto_gate = apply_channel_controls.find("skip_exposure_seed")
+    if high_auto_gate < 0 or seed_write < high_auto_gate:
+        failures.append("high-FPS AE auto does not gate manual exposure seeding")
+    if "return first_err;" not in apply_channel_controls:
+        failures.append("channel control replay loses its first I2C failure")
+    if apply_channel_controls.count("ret = max9295_mfp4_set") < 2:
+        failures.append("cached MCP4018 gate failures are not propagated")
+
+    cached_controls = function(source, "max9296_apply_cached_controls")
+    if not re.search(r"static\s+int\s+max9296_apply_cached_controls\s*\(", source):
+        failures.append("cached control replay cannot report failure")
+    ready_pos = cached_controls.find("sensor->ctrl_cache.firmware_ready = true;")
+    return_pos = cached_controls.find("return first_err;")
+    if ready_pos < 0 or return_pos < ready_pos:
+        failures.append("cached controls publish firmware_ready despite failure")
+
+    preflight_prepare = function(source, "max9296_preflight_prepare_locked")
+    for token in (
+        "fingerprint->mode",
+        "fingerprint->fps > mode->max_fps",
+        "fingerprint->crop_enable",
+        "sensor->ctrl_cache.dz",
+        "sensor->ctrl_cache.ch0.dz_x",
+        "sensor->ctrl_cache.ch0.dz_y",
+        "sensor->ctrl_cache.ch1.dz_x",
+        "sensor->ctrl_cache.ch1.dz_y",
+        "max9296_check_exposure_policy",
+    ):
+        if token not in preflight_prepare:
+            failures.append(f"complete prepare preflight is missing: {token}")
+
+    prepare_hardware = function(source, "max9296_prepare_hardware_locked")
+    prepare_order = (
+        "max9296_preflight_prepare_locked",
+        "max9296_set_mode",
+        "max9296_loadfw",
+        "max9296_post_firmware_program_locked",
+        "max9296_apply_cached_crop",
+        "max9296_apply_cached_controls",
+        "sensor->initialized_fingerprint = *fingerprint",
+        "sensor->hardware_valid = true",
+    )
+    positions = [prepare_hardware.find(token) for token in prepare_order]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        failures.append("prepare does not publish hardware in truthful replay order")
 
     # Bench-verified AP1302 register meanings. 0x1012 is only the immediate
     # transition selector; 0x1014 is optical zoom and must not be an X/Y target.
@@ -357,8 +434,8 @@ def main() -> int:
             failures.append(f"persistent crop tuple cluster is incomplete: {token}")
 
     post_firmware = function(source, "max9296_post_firmware_program_locked")
-    if "max9296_apply_cached_crop" not in post_firmware:
-        failures.append("firmware reload does not restore enabled crop before stream commit")
+    if "max9296_apply_cached_crop" in post_firmware:
+        failures.append("preview-context helper still owns crop replay ordering")
 
     stream_on = function(source, "max9296_s_stream")
     crop_replay = stream_on.find("ret = max9296_apply_cached_crop(sensor)")
@@ -456,6 +533,11 @@ def main() -> int:
         failures.append("pending format/topology changes do not suppress live control I2C")
     if "max9296_hw_is_dual(sensor)" not in set_ctrl:
         failures.append("live control addressing does not use programmed hardware topology")
+    exposure_preflight = set_ctrl.find("max9296_preflight_exposure")
+    if exposure_preflight < 0 or exposure_preflight > cache_pos:
+        failures.append("direct exposure is cached before safety preflight")
+    if "power_count > 0 && sensor->ctrl_cache.firmware_ready" in set_ctrl:
+        failures.append("powered-off exposure requests bypass the safety policy")
 
     stream_commit = function(source, "max9296_stream_commit_locked")
     for flag in ("pending_mode_change", "pending_fmt_change"):
@@ -471,6 +553,34 @@ def main() -> int:
     prepare_show = function(source, "sysfs_prepare_show")
     if "crop_enable=%u" not in prepare_show or "prepared.crop_enable" not in prepare_show:
         failures.append("prepare status does not report requested crop_enable")
+
+    for admission_name in (
+        "max9296_prepare_request_locked",
+        "max9296_prepare_request",
+        "max9296_s_stream",
+    ):
+        admission = function(source, admission_name)
+        preflight = admission.find("max9296_preflight_prepare_locked")
+        fsync_contract = admission.find("max9296_update_shared_fsync_locked")
+        if fsync_contract < 0:
+            fsync_contract = admission.find("max9296_configure_shared_fsync_locked")
+        if preflight < 0 or fsync_contract < 0 or preflight > fsync_contract:
+            failures.append(
+                f"{admission_name} publishes FSYNC before exposure preflight"
+            )
+
+    forbidden_worker_tokens = (
+        "AP1302_REG_AE_CTRL",
+        "AP1302_REG_AWB_CTRL",
+        "AP1302_REG_LSC_CTRL",
+        "max9296_apply_cached_controls(sensor)",
+        "0x5002",
+        "0x5100",
+        "0x54a0",
+    )
+    for token in forbidden_worker_tokens:
+        if token in enable_worker:
+            failures.append(f"enable worker still rewrites controls after output: {token}")
 
     if re.search(r"0x510a", source, re.I):
         failures.append("unsafe AP1302 0x510A manual-WB register was introduced")
