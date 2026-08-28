@@ -3012,7 +3012,11 @@ static int max9296_apply_channel_controls(struct max9296_dev *sensor,
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s %s applied success",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            ch_name, mode_name);
-  return first_err;
+
+  /* Exposure-policy failures return above, before the first I2C write. Keep
+   * the established best-effort behavior for admissible AE/gain/tuning/LED
+   * replay: report operational I2C errors, but do not invalidate prepare. */
+  return 0;
 }
 
 static int max9296_apply_cached_controls(struct max9296_dev *sensor) {

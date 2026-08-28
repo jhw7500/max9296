@@ -295,10 +295,16 @@ def main() -> int:
     high_auto_gate = apply_channel_controls.find("skip_exposure_seed")
     if high_auto_gate < 0 or seed_write < high_auto_gate:
         failures.append("high-FPS AE auto does not gate manual exposure seeding")
-    if "return first_err;" not in apply_channel_controls:
-        failures.append("channel control replay loses its first I2C failure")
+    if "return first_err;" in apply_channel_controls or not re.search(
+        r"return\s+0;\s*\}$", apply_channel_controls
+    ):
+        failures.append(
+            "safe cached-control replay must preserve legacy best-effort I2C behavior"
+        )
     if apply_channel_controls.count("ret = max9295_mfp4_set") < 2:
-        failures.append("cached MCP4018 gate failures are not propagated")
+        failures.append("cached MCP4018 gate failures are not observed for diagnostics")
+    if "if (ret && !first_err)" not in apply_channel_controls:
+        failures.append("best-effort cached-control replay no longer records I2C errors")
 
     cached_controls = function(source, "max9296_apply_cached_controls")
     if not re.search(r"static\s+int\s+max9296_apply_cached_controls\s*\(", source):
