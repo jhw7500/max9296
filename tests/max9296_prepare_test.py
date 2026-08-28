@@ -433,6 +433,13 @@ class Camera:
 
 
 def check_model(failures: list[str]) -> None:
+    # Crop enable changes hardware replay semantics even when every format/FPS
+    # field stays equal, so it is part of the prepared hardware identity.
+    crop_off_identity = (640, 360, 120, 1, False)
+    crop_on_identity = (640, 360, 120, 1, True)
+    if crop_off_identity == crop_on_identity:
+        failures.append("crop enable must participate in prepare identity")
+
     valid_commands = (
         "0\n",
         "1 1 2560 720 30 3\n",
@@ -1153,6 +1160,27 @@ def check_source(source: str, failures: list[str]) -> None:
     ):
         if token not in parser:
             failures.append(f"strict prepare parser/tuple validation missing: {token}")
+
+    fingerprint_struct = source[source.find("struct max9296_hw_fingerprint") :]
+    fingerprint_struct = fingerprint_struct[: fingerprint_struct.find("};") + 2]
+    if "bool crop_enable;" not in fingerprint_struct:
+        failures.append("prepare hardware identity omits crop_enable")
+    normalize_start = code.rfind("static int max9296_normalize_fingerprint_locked(")
+    normalize = (
+        function(code[normalize_start:], "max9296_normalize_fingerprint_locked")
+        if normalize_start >= 0
+        else ""
+    )
+    if "fingerprint->crop_enable = sensor->ctrl_cache.crop_enable" not in normalize:
+        failures.append("runtime prepare identity omits cached crop_enable")
+    fingerprint_equal_start = code.rfind("static bool max9296_fingerprint_equal(")
+    fingerprint_equal = (
+        function(code[fingerprint_equal_start:], "max9296_fingerprint_equal")
+        if fingerprint_equal_start >= 0
+        else ""
+    )
+    if "left->crop_enable == right->crop_enable" not in fingerprint_equal:
+        failures.append("prepare matching ignores crop_enable")
     numeric_parse = re.search(
         r"ret\s*=\s*kstrtoull\([^;]+;\s*if\s*\(ret\)\s*\{\s*"
         r"ret\s*=\s*-EINVAL;\s*goto\s+out;\s*\}",

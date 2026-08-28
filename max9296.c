@@ -222,6 +222,7 @@ static int debug;
 #define V4L2_CID_DZ_X_CH1 (V4L2_CID_USER_BASE + 0x1028)
 #define V4L2_CID_DZ_Y_CH0 (V4L2_CID_USER_BASE + 0x1029)
 #define V4L2_CID_DZ_Y_CH1 (V4L2_CID_USER_BASE + 0x102a)
+#define V4L2_CID_CROP_ENABLE (V4L2_CID_USER_BASE + 0x102b)
 
 /*
  * MAX9295 serializer addresses (matches mcp4018_ctrl.sh channel table).
@@ -365,6 +366,7 @@ struct max9296_hw_fingerprint {
   u32 code;
   u32 fps;
   u32 enable;
+  bool crop_enable;
 };
 
 struct max9296_ctrls {
@@ -374,6 +376,8 @@ struct max9296_ctrls {
   struct v4l2_ctrl *dz;
   struct v4l2_ctrl *dz_x;
   struct v4l2_ctrl *dz_y;
+  struct v4l2_ctrl *crop_enable;
+  struct v4l2_ctrl *crop_cluster[5];
   struct v4l2_ctrl *light_freq;
   struct v4l2_ctrl *hue;
 
@@ -440,6 +444,7 @@ struct max9296_channel_ctrl {
 
 struct max9296_ctrl_cache {
   bool firmware_ready;
+  bool crop_enable;
 
   /* Channel-specific settings */
   struct max9296_channel_ctrl ch0;
@@ -2508,10 +2513,24 @@ static int max9296_write_zoom_channel(
                              2);
 }
 
-static int max9296_apply_cached_zoom(struct max9296_dev *sensor) {
-  bool dual = max9296_hw_is_dual(sensor);
+static int max9296_apply_cached_crop(struct max9296_dev *sensor) {
+  bool dual;
   char ch0_name[8], ch1_name[8];
   int ret;
+
+  lockdep_assert_held(&sensor->lock);
+
+  if (!sensor->ctrl_cache.crop_enable)
+    return 0;
+
+  dual = max9296_hw_is_dual(sensor);
+  printk(KERN_NOTICE
+         "[%s:%d][%s:%d] crop apply enable=1 topology=%s "
+         "dz=%d ch0=(%d,%d) ch1=(%d,%d)",
+         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+         dual ? "dual" : "single", sensor->ctrl_cache.dz,
+         sensor->ctrl_cache.ch0.dz_x, sensor->ctrl_cache.ch0.dz_y,
+         sensor->ctrl_cache.ch1.dz_x, sensor->ctrl_cache.ch1.dz_y);
 
   if (!dual) {
     const struct max9296_channel_ctrl *active_ctrl =
@@ -2519,8 +2538,9 @@ static int max9296_apply_cached_zoom(struct max9296_dev *sensor) {
                                : &sensor->ctrl_cache.ch0;
 
     max9296_fmt_ch(ch0_name, sizeof(ch0_name), sensor, AP1302_I2C_ADDR);
-    return max9296_write_zoom_channel(sensor, AP1302_I2C_ADDR, ch0_name,
-                                      active_ctrl, sensor->ctrl_cache.dz);
+    ret = max9296_write_zoom_channel(sensor, AP1302_I2C_ADDR, ch0_name,
+                                     active_ctrl, sensor->ctrl_cache.dz);
+    goto out;
   }
 
   max9296_fmt_ch(ch0_name, sizeof(ch0_name), sensor, AP1302_CH0_I2C_ADDR);
@@ -2529,11 +2549,22 @@ static int max9296_apply_cached_zoom(struct max9296_dev *sensor) {
                                    &sensor->ctrl_cache.ch0,
                                    sensor->ctrl_cache.dz);
   if (ret)
-    return ret;
+    goto out;
 
-  return max9296_write_zoom_channel(sensor, AP1302_CH1_I2C_ADDR, ch1_name,
-                                    &sensor->ctrl_cache.ch1,
-                                    sensor->ctrl_cache.dz);
+  ret = max9296_write_zoom_channel(sensor, AP1302_CH1_I2C_ADDR, ch1_name,
+                                   &sensor->ctrl_cache.ch1,
+                                   sensor->ctrl_cache.dz);
+
+out:
+  if (ret)
+    printk(KERN_WARNING
+           "[%s:%d][%s:%d] crop apply failed topology=%s "
+           "dz=%d ch0=(%d,%d) ch1=(%d,%d) ret=%d",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           dual ? "dual" : "single", sensor->ctrl_cache.dz,
+           sensor->ctrl_cache.ch0.dz_x, sensor->ctrl_cache.ch0.dz_y,
+           sensor->ctrl_cache.ch1.dz_x, sensor->ctrl_cache.ch1.dz_y, ret);
+  return ret;
 }
 
 static int max9296_set_ctrl_hue(struct max9296_dev *sensor, int value) {
@@ -3031,6 +3062,18 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
         sensor->power_count);
   /* v4l2_ctrl_lock() locks our own mutex */
 
+  if (ctrl->id == V4L2_CID_CROP_ENABLE) {
+    bool requested = !!ctrl->val;
+
+    if (sensor->streaming)
+      return -EBUSY;
+    if (sensor->ctrl_cache.crop_enable != requested) {
+      sensor->ctrl_cache.crop_enable = requested;
+      max9296_mark_prepare_stale_locked(sensor);
+    }
+    return 0;
+  }
+
   /* A control that would write EXP_TIME must be rejected before any I2C
    * side effect (including the preceding AE_CTRL manual-mode write).  During
    * probe/power-off there is no I2C transaction, so defaults remain cacheable
@@ -3078,8 +3121,24 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
       return ret;
   }
 
-  /* Always update cache when the request is admissible (even if powered off). */
-  max9296_cache_ctrl(sensor, ctrl);
+  /* A clustered member update is delivered through the master (dz). Snapshot
+   * every requested member before one full-tuple hardware apply. */
+  if (ctrl == sensor->ctrls.dz) {
+    if (sensor->ctrls.dz->is_new)
+      sensor->ctrl_cache.dz = sensor->ctrls.dz->val;
+    if (sensor->ctrls.dz_x_ch0->is_new)
+      sensor->ctrl_cache.ch0.dz_x = sensor->ctrls.dz_x_ch0->val;
+    if (sensor->ctrls.dz_y_ch0->is_new)
+      sensor->ctrl_cache.ch0.dz_y = sensor->ctrls.dz_y_ch0->val;
+    if (sensor->ctrls.dz_x_ch1->is_new)
+      sensor->ctrl_cache.ch1.dz_x = sensor->ctrls.dz_x_ch1->val;
+    if (sensor->ctrls.dz_y_ch1->is_new)
+      sensor->ctrl_cache.ch1.dz_y = sensor->ctrls.dz_y_ch1->val;
+  } else {
+    /* Always update cache when the request is admissible (even if powered
+     * off). Common dz_x/dz_y aliases intentionally update both channels. */
+    max9296_cache_ctrl(sensor, ctrl);
+  }
 
   /* S_FMT may describe the next topology while last_mode still describes the
    * AP1302/MAX9295 addresses currently programmed in hardware. Keep the new
@@ -3117,7 +3176,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   case V4L2_CID_DZ:
   case V4L2_CID_DZ_X:
   case V4L2_CID_DZ_Y:
-    ret = max9296_apply_cached_zoom(sensor);
+    ret = max9296_apply_cached_crop(sensor);
     break;
   case V4L2_CID_HUE:
     ret = max9296_set_ctrl_hue(sensor, ctrl->val);
@@ -3170,9 +3229,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     break;
   case V4L2_CID_DZ_X_CH0:
   case V4L2_CID_DZ_Y_CH0:
-    ret = max9296_write_zoom_channel(sensor, ch0_addr, ch0_name,
-                                     &sensor->ctrl_cache.ch0,
-                                     sensor->ctrl_cache.dz);
+    ret = max9296_apply_cached_crop(sensor);
     break;
   case V4L2_CID_HFLIP_CH0:
   case V4L2_CID_VFLIP_CH0: {
@@ -3235,9 +3292,7 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     break;
   case V4L2_CID_DZ_X_CH1:
   case V4L2_CID_DZ_Y_CH1:
-    ret = max9296_write_zoom_channel(sensor, ch1_addr, ch1_name,
-                                     &sensor->ctrl_cache.ch1,
-                                     sensor->ctrl_cache.dz);
+    ret = max9296_apply_cached_crop(sensor);
     break;
   case V4L2_CID_HFLIP_CH1:
   case V4L2_CID_VFLIP_CH1: {
@@ -3440,6 +3495,16 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
     ctrls->exp_time = v4l2_ctrl_new_custom(hdl, &cfg_exp_time, NULL);
   }
   {
+    static const struct v4l2_ctrl_config cfg_crop_enable = {
+        .ops = &max9296_ctrl_ops,
+        .id = V4L2_CID_CROP_ENABLE,
+        .type = V4L2_CTRL_TYPE_BOOLEAN,
+        .name = "crop_enable",
+        .min = 0,
+        .max = 1,
+        .def = 0,
+        .step = 1,
+    };
     static const struct v4l2_ctrl_config cfg_dz = {
         .ops = &max9296_ctrl_ops,
         .id = V4L2_CID_DZ,
@@ -3471,6 +3536,8 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
         .step = 1,
     };
 
+    ctrls->crop_enable =
+        v4l2_ctrl_new_custom(hdl, &cfg_crop_enable, NULL);
     ctrls->dz = v4l2_ctrl_new_custom(hdl, &cfg_dz, NULL);
     ctrls->dz_x = v4l2_ctrl_new_custom(hdl, &cfg_dz_x, NULL);
     ctrls->dz_y = v4l2_ctrl_new_custom(hdl, &cfg_dz_y, NULL);
@@ -3518,6 +3585,16 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
       *p1 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
     }
   }
+
+  ctrls->crop_cluster[0] = ctrls->dz;
+  ctrls->crop_cluster[1] = ctrls->dz_x_ch0;
+  ctrls->crop_cluster[2] = ctrls->dz_y_ch0;
+  ctrls->crop_cluster[3] = ctrls->dz_x_ch1;
+  ctrls->crop_cluster[4] = ctrls->dz_y_ch1;
+  if (ctrls->crop_cluster[0] && ctrls->crop_cluster[1] &&
+      ctrls->crop_cluster[2] && ctrls->crop_cluster[3] &&
+      ctrls->crop_cluster[4])
+    v4l2_ctrl_cluster(ARRAY_SIZE(ctrls->crop_cluster), ctrls->crop_cluster);
 
   /* MCP4018 digital potentiometer wiper control */
   {
@@ -4104,6 +4181,7 @@ static int max9296_normalize_fingerprint_locked(
   fingerprint->code = sensor->fmt.code;
   fingerprint->fps = fps;
   fingerprint->enable = sensor->enable;
+  fingerprint->crop_enable = sensor->ctrl_cache.crop_enable;
 
   return 0;
 }
@@ -4113,7 +4191,8 @@ static bool max9296_fingerprint_equal(
     const struct max9296_hw_fingerprint *right) {
   return left->mode == right->mode && left->width == right->width &&
          left->height == right->height && left->code == right->code &&
-         left->fps == right->fps && left->enable == right->enable;
+         left->fps == right->fps && left->enable == right->enable &&
+         left->crop_enable == right->crop_enable;
 }
 
 /* Runtime negotiation is allowed after prepare, but it must not silently keep
@@ -4253,7 +4332,7 @@ static int max9296_post_firmware_program_locked(
   if (ret)
     goto failed;
 
-  ret = max9296_apply_cached_zoom(sensor);
+  ret = max9296_apply_cached_crop(sensor);
   if (ret)
     goto failed;
 
@@ -4336,6 +4415,7 @@ static void max9296_apply_prepare_fingerprint_locked(
   WRITE_ONCE(sensor->frame_interval.numerator, 1);
   WRITE_ONCE(sensor->frame_interval.denominator, fingerprint->fps);
   sensor->enable = fingerprint->enable;
+  sensor->ctrl_cache.crop_enable = fingerprint->crop_enable;
   sensor->pending_mode_change = false;
   sensor->pending_fmt_change = false;
 
@@ -4857,7 +4937,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * while powered off and prepare deliberately leaves firmware_ready false.
      * Replay that cache here while CSI output is still disabled; the enable
      * worker repeats this under the same mutex to close post-STREAMON updates. */
-    ret = max9296_apply_cached_zoom(sensor);
+    ret = max9296_apply_cached_crop(sensor);
     if (ret) {
       max9296_drop_fsync_contract_locked(sensor);
       goto out;
@@ -5114,7 +5194,7 @@ static int max9296_fsync(void *data) {
 //-------------------------------------------------------------------------
 static int max9296_enable(void *data) {
   struct max9296_dev *sensor = (struct max9296_dev *)data;
-  int zoom_ret;
+  int crop_ret;
 
   // pr_emerg("\x1b[34m%s() %d line in %s file : \x1b[0m --- %s\n",
   // __FUNCTION__, __LINE__, __FILE__, dev_name(&sensor->i2c_client->dev));
@@ -5172,15 +5252,15 @@ static int max9296_enable(void *data) {
           (sensor->state.fsync == MAX9296_STATE_RUNNING)) {
         /* s_stream() primes the cache before commit, but controls can change
          * after it returns while firmware_ready is still false. Replay the
-         * latest zoom under the same mutex immediately before 0x0313. A
+         * latest enabled crop under the same mutex immediately before 0x0313. A
          * failure leaves stream_on set so the worker retries without emitting
          * a frame from the stale ROI. */
-        zoom_ret = max9296_apply_cached_zoom(sensor);
-        if (zoom_ret) {
+        crop_ret = max9296_apply_cached_crop(sensor);
+        if (crop_ret) {
           printk(KERN_ERR
-                 "[%s:%d][%s:%d] pre-output zoom apply failed: %d; retrying",
+                 "[%s:%d][%s:%d] pre-output crop apply failed: %d; retrying",
                  KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-                 zoom_ret);
+                 crop_ret);
         } else if (max9296_enable_output_locked(sensor)) {
           /*
            * Consume the request here - only on a pass that actually serves it.
@@ -5594,11 +5674,12 @@ static ssize_t sysfs_prepare_show(struct device *dev,
 
   state_name = max9296_prepare_state_name(state);
   max9296_prepare_mode_names(&prepared, &mode, &table);
-  return scnprintf(buf, PAGE_SIZE, "state=%s generation=%llu epoch=%llu mode=%s table=%s width=%u height=%u fps=%u code=0x%x enable=%u errno=%d worker_errno=%d lease=%u match=%u\n",
+  return scnprintf(buf, PAGE_SIZE, "state=%s generation=%llu epoch=%llu mode=%s table=%s width=%u height=%u fps=%u code=0x%x enable=%u crop_enable=%u errno=%d worker_errno=%d lease=%u match=%u\n",
                    state_name, (unsigned long long)generation,
                    (unsigned long long)epoch, mode, table, prepared.width,
                    prepared.height, prepared.fps, prepared.code,
-                   prepared.enable, last_errno, worker_errno, lease, match);
+                   prepared.enable, prepared.crop_enable, last_errno,
+                   worker_errno, lease, match);
 }
 
 static ssize_t sysfs_prepare_store(struct device *dev,
@@ -5636,6 +5717,7 @@ static ssize_t sysfs_prepare_store(struct device *dev,
   fingerprint.code = MEDIA_BUS_FMT_UYVY8_2X8;
   fingerprint.fps = command.fps;
   fingerprint.enable = command.enable;
+  fingerprint.crop_enable = READ_ONCE(sensor->ctrl_cache.crop_enable);
 
   ret = max9296_prepare_request(sensor, &fingerprint, command.generation);
   return ret ? ret : count;
@@ -6306,6 +6388,8 @@ static int max9296_probe(struct i2c_client *client) {
 
   sensor->ctrl_cache.exposure =
       sensor->ctrls.exp_time ? sensor->ctrls.exp_time->val : 10000;
+  sensor->ctrl_cache.crop_enable =
+      sensor->ctrls.crop_enable ? !!sensor->ctrls.crop_enable->val : false;
   sensor->ctrl_cache.dz =
       sensor->ctrls.dz ? sensor->ctrls.dz->val : MAX9296_DZ_DEFAULT;
   sensor->ctrl_cache.dz_x = sensor->ctrls.dz_x
