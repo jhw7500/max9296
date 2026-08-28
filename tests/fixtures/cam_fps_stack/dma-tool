@@ -11,6 +11,8 @@ case "${2:-}" in
     0x300C|0x300c) value=0x0898 ;;
     0x3012) value=0x0100 ;;
     0x3040) value=0x0041 ;;
+    0x30A2|0x30a2) value=0x0003 ;;
+    0x30A6|0x30a6) value=0x0007 ;;
     *) value=0x0000 ;;
 esac
 printf 'channel=%s register=%s value=%s\n' "${1:-?}" "${2:-?}" "$value"

@@ -68,7 +68,7 @@ case "$output" in
     *) fail "single AP1302 context evidence is incomplete" ;;
 esac
 case "$output" in
-    *'AR_TIMING case=SENSOR-640 channel=ch0 x_start=0x0000 y_start=0x0000 x_end=0x077f y_end=0x0437 frame_length=0x0450 line_length=0x0898 read_mode=0x0041 exposure=0x0100'*) ;;
+    *'AR_TIMING case=SENSOR-640 channel=ch0 x_start=0x0000 y_start=0x0000 x_end=0x077f y_end=0x0437 frame_length=0x0450 line_length=0x0898 x_odd_inc=0x0003 y_odd_inc=0x0007 read_mode=0x0041 exposure=0x0100'*) ;;
     *) fail "single AR0234 timing evidence is incomplete" ;;
 esac
 case "$output" in

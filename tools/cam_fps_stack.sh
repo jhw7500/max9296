@@ -285,6 +285,8 @@ if [ "$DEEP" -eq 1 ]; then
 			LLP=$(rd_ar 0x300C)
 			CIT=$(rd_ar 0x3012)
 			READ_MODE=$(rd_ar 0x3040)
+			X_ODD_INC=$(rd_ar 0x30A2)
+			Y_ODD_INC=$(rd_ar 0x30A6)
 			PF=$(hex2dec "$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x00 0x78 4)")
 			printf '  CHIP_VERSION(0x3000)            = %s %s\n' "$ID" "$([ "$ID" = "0x0a56" ] && echo '(AR0234 확인)')"
 			printf '  Y_ADDR_START(0x3002)             = %s\n' "${YS:-?}"
@@ -295,9 +297,12 @@ if [ "$DEEP" -eq 1 ]; then
 			printf '  LINE_LENGTH_PCK(0x300C)         = %s\n' "${LLP:-?}"
 			printf '  COARSE_INTEGRATION_TIME(0x3012) = %s\n' "${CIT:-?}"
 			printf '  READ_MODE(0x3040)                = %s\n' "${READ_MODE:-?}"
-			printf 'AR_TIMING case=%s channel=%s x_start=%s y_start=%s x_end=%s y_end=%s frame_length=%s line_length=%s read_mode=%s exposure=%s\n' \
+			printf '  X_ODD_INC(0x30A2)                = %s\n' "${X_ODD_INC:-?}"
+			printf '  Y_ODD_INC(0x30A6)                = %s\n' "${Y_ODD_INC:-?}"
+			printf 'AR_TIMING case=%s channel=%s x_start=%s y_start=%s x_end=%s y_end=%s frame_length=%s line_length=%s x_odd_inc=%s y_odd_inc=%s read_mode=%s exposure=%s\n' \
 				"$CASE_LABEL" "$lab" "${XS:-?}" "${YS:-?}" "${XE:-?}" "${YE:-?}" \
-				"${FLL:-?}" "${LLP:-?}" "${READ_MODE:-?}" "${CIT:-?}"
+				"${FLL:-?}" "${LLP:-?}" "${X_ODD_INC:-?}" "${Y_ODD_INC:-?}" \
+				"${READ_MODE:-?}" "${CIT:-?}"
 			if [ -n "$FLL" ] && [ -n "$LLP" ] && [ -n "$PF" ] && [ "$PF" -gt 0 ]; then
 				awk -v f="$((FLL))" -v l="$((LLP))" -v cc="$((CIT))" -v pf="$PF" 'BEGIN{
 					px = pf/65536.0*1e6
