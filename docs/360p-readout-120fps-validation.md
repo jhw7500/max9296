@@ -8,6 +8,9 @@
 
 - 640x360은 AP1302와 CSI 출력 해상도로 정상 동작한다. dual ch0/ch1 출력은
   `1280x360 RGBP`, 카메라별 경계는 640 pixel이다.
+- 별도 HD/FHD 직접 비교에서 HD의 AR0234 active window도 FHD와 같은
+  1920x1080, `X/Y_ODD_INC=1`이었다. 현재 HD는 native 1280x720 sensor readout이
+  아니라 FHD 전체 readout을 AP1302에서 1280x720으로 축소하는 경로다.
 - 기본 `KEEP`은 AR0234의 1920x1080 window를 유지하고 AP1302에서 640x360으로
   축소한다. 따라서 640x360 출력이 곧 센서 640x360 readout을 뜻하지 않는다.
 - KEEP에 120 FPS를 요청했을 때 AP/CSI/ISI가 약 113~115 FPS여서 엄격 기준
@@ -288,6 +291,44 @@ artifacts/board-20260828-qualification/final-production-d15d613/
 | `crop-360p-runtime.txt` | `f882997dae79bea8b5e597adde85986625c30f4eeebfbc1f095bd439f8694a83` |
 | `rtsp-ch0.png` | `ef8400399cbb84bdec02b43395c873daf7c06084742b5404a3ab3b45aec17708` |
 | `rtsp-ch1.png` | `e9869a1a269e0c19df1e0e96c97f79c64449e4d3118b8154c8b84175b72f41ce` |
+
+### 7.2 HD와 FHD sensor readout 직접 비교
+
+2026-08-28T17:34~17:37Z에 같은 production module/gstApp, 30 FPS,
+`crop_enable=false`, `dz=100` 조건에서 edgeconf만 HD와 FHD로 바꾸고 각 경우마다
+hard reset했다. `cam_fps_stack.sh -D`로 AP1302 preview context와 AP1302 DMA를 통한
+AR0234 레지스터를 두 채널에서 읽었다.
+
+| 항목 | HD | FHD |
+|---|---|---|
+| 카메라당 AP/CSI 출력 | 1280x720 | 1920x1080 |
+| AP `SENSOR_MODE` / ROI | `0x0000`, 전체 ROI | `0x0000`, 전체 ROI |
+| AR X window | `4..1923` = 1920 pixels | `4..1923` = 1920 pixels |
+| AR Y window | `64..1143` = 1080 lines | `64..1143` = 1080 lines |
+| `X/Y_ODD_INC` | `1/1` | `1/1` |
+| ch0/ch1 base `READ_MODE` | `0x4000` / `0x0000` | `0x4000` / `0x0000` |
+| `LINE_LENGTH_PCK` | `0x042c` = 1068 | `0x093c` = 2364 |
+| `FRAME_LENGTH_LINES` | ch0/ch1 `2777/2779` | ch0/ch1 `1252/1252` |
+| 계산 sensor FPS | `30.35/30.32` | `30.41/30.41` |
+
+active window와 sampling increment가 같으므로 **HD도 AR0234에서 FHD 전체
+1920x1080을 읽고 AP1302가 1280x720으로 축소한다.** HD와 FHD는 blanking/timing
+조합만 다르다. HD ch0의 total timing은 `1068 x 2777 = 2,965,836` pixel clocks,
+FHD는 `2364 x 1252 = 2,959,728` pixel clocks로 거의 같다. 따라서 현재 HD는 센서
+active-pixel 및 AP1302 입력 workload를 1280x720 비율로 줄이지 않는다. 반면 AP1302
+출력 이후 MIPI/GMSL/CSI/ISI와 앱 입력 workload는 실제 1280x720로 감소한다.
+
+원시 증적:
+
+| evidence | SHA-256 |
+|---|---|
+| `hd-vs-fhd-readout-8a5bbe4/hd-readout.txt` | `c8e6adf6238b070e9c4522b5bd335a0c9aa1037451de390f8bd1f4b42d73f65a` |
+| `hd-vs-fhd-readout-8a5bbe4/fhd-readout.txt` | `17c9db95728e847ff8e175f89779c43382a25c7be1c8b42f46d2e9e881a2f458` |
+
+시험 후 original edgeconf SHA-256
+`eba521544a39d0a8ab79786e1d5b7a7c06357942a5d94c61691531960e53654f`를 복원하고
+hard reset했다. 최종 상태는 dual `1280x360`, 30 FPS, crop false,
+`CONSUMED/match=1`, gstApp stream-start였으며 보드 점유를 해제했다.
 
 ## 8. 재시험에 필요한 조건
 
