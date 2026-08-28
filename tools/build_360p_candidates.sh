@@ -102,11 +102,11 @@ build_one() {
     exit 1
   fi
 
-  cp max9296.ko "$output_dir/$artifact"
-  artifact_sha=$(sha256sum "$output_dir/$artifact" | awk '{print $1}')
+  cp max9296.ko "$staging_dir/$artifact"
+  artifact_sha=$(sha256sum "$staging_dir/$artifact" | awk '{print $1}')
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$artifact" "$label" "$git_head" "$worktree_diff" "$staged_diff" \
-    "$compiler_mode" "$artifact_sha" >>"$output_dir/manifest.tsv"
+    "$compiler_mode" "$artifact_sha" >>"$staging_dir/manifest.tsv"
 }
 
 if [ "$dry_run" -eq 1 ]; then
@@ -114,9 +114,15 @@ if [ "$dry_run" -eq 1 ]; then
   printf 'git_head\t%s\n' "$git_head"
 else
   mkdir -p "$(dirname "$output_dir")"
-  mkdir "$output_dir"
+  output_parent=$(cd "$(dirname "$output_dir")" && pwd)
+  output_dir="$output_parent/$(basename "$output_dir")"
+  staging_dir=$(mktemp -d /tmp/max9296-360p-candidates.XXXXXX)
+  cleanup() {
+    rm -rf "$staging_dir"
+  }
+  trap cleanup EXIT HUP INT TERM
   printf 'artifact\tsensor_mode\tgit_head\tgit_diff_stat\tgit_cached_diff_stat\tcompiler_mode\tsha256\n' \
-    >"$output_dir/manifest.tsv"
+    >"$staging_dir/manifest.tsv"
 fi
 
 build_one KEEP 255 max9296-keep.ko
@@ -128,6 +134,13 @@ while [ "$mode" -le 15 ]; do
 done
 
 if [ "$dry_run" -ne 1 ]; then
+  artifact_count=$(find "$staging_dir" -maxdepth 1 -type f -name '*.ko' | wc -l)
+  if [ "$artifact_count" -ne 17 ]; then
+    echo "ERROR: expected 17 candidate modules, found $artifact_count" >&2
+    exit 1
+  fi
+  mkdir "$output_dir"
+  cp -a "$staging_dir/." "$output_dir/"
   printf 'Built 17 candidate modules in %s\n' "$output_dir"
   printf 'Manifest: %s/manifest.tsv\n' "$output_dir"
 fi

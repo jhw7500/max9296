@@ -69,4 +69,37 @@ for contract in \
   fi
 done
 
+# Reproduce the external-module clean behaviour: an output directory below the
+# source tree must not lose artifacts from earlier candidate builds.
+mock_repo="$tmp_dir/mock-repo"
+mkdir -p "$mock_repo/tools"
+cp "$script" "$mock_repo/tools/build_360p_candidates.sh"
+touch "$mock_repo/max9296.c" "$mock_repo/max9296_360p_policy.h"
+cat >"$mock_repo/make-for-imx8" <<'EOF'
+#!/bin/bash
+set -eu
+if [ "${1:-}" = clean ]; then
+  find . -type f -name '*.ko' -delete
+  exit 0
+fi
+printf '%s\n' "$*" >max9296.ko
+EOF
+chmod +x "$mock_repo/make-for-imx8"
+git -C "$mock_repo" init -q
+git -C "$mock_repo" -c user.name=test -c user.email=test@example.invalid \
+  add tools/build_360p_candidates.sh make-for-imx8 max9296.c max9296_360p_policy.h
+git -C "$mock_repo" -c user.name=test -c user.email=test@example.invalid \
+  commit -q -m fixture
+
+(
+  cd "$mock_repo"
+  tools/build_360p_candidates.sh --output artifacts/candidates >/dev/null
+)
+preserved_count=$(find "$mock_repo/artifacts/candidates" -maxdepth 1 \
+  -type f -name '*.ko' | wc -l)
+if [ "$preserved_count" -ne 17 ]; then
+  echo "FAIL: clean builds preserved $preserved_count/17 candidate modules" >&2
+  exit 1
+fi
+
 echo "PASS: 17 isolated 360p candidate build plans"
