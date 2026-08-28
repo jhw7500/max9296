@@ -1,0 +1,122 @@
+THERMAL phase=before zone=thermal_zone0 type=cpu-thermal temp_millic=58000
+THERMAL phase=before zone=thermal_zone1 type=soc-thermal temp_millic=60000
+MEDIA_GRAPH_BEGIN
+Media controller API version 5.10.35
+
+Media device information
+------------------------
+driver          mxc-md
+model           FSL Capture Media Device
+serial          
+bus info        
+hw revision     0x0
+driver version  5.10.35
+
+Device topology
+- entity 1: mxc_isi.0 (16 pads, 2 links)
+            type V4L2 subdev subtype Unknown flags 0
+	pad0: Sink
+		<- "mxc-mipi-csi2.0":4 [ENABLED]
+	pad1: Sink
+	pad2: Sink
+	pad3: Sink
+	pad4: Sink
+	pad5: Sink
+	pad6: Sink
+	pad7: Sink
+	pad8: Sink
+	pad9: Sink
+	pad10: Sink
+	pad11: Sink
+	pad12: Source
+		-> "mxc_isi.0.capture":0 [ENABLED]
+	pad13: Source
+	pad14: Source
+	pad15: Sink
+
+- entity 18: mxc_isi.0.capture (1 pad, 1 link)
+             type Node subtype V4L flags 0
+             device node name /dev/video3
+	pad0: Sink
+		<- "mxc_isi.0":12 [ENABLED]
+
+- entity 22: mxc_isi.1 (16 pads, 2 links)
+             type V4L2 subdev subtype Unknown flags 0
+	pad0: Sink
+	pad1: Sink
+	pad2: Sink
+	pad3: Sink
+	pad4: Sink
+		<- "mxc-mipi-csi2.1":4 [ENABLED]
+	pad5: Sink
+	pad6: Sink
+	pad7: Sink
+	pad8: Sink
+	pad9: Sink
+	pad10: Sink
+	pad11: Sink
+	pad12: Source
+		-> "mxc_isi.1.capture":0 [ENABLED]
+	pad13: Source
+	pad14: Source
+	pad15: Sink
+
+- entity 39: mxc_isi.1.capture (1 pad, 1 link)
+             type Node subtype V4L flags 0
+             device node name /dev/video4
+	pad0: Sink
+		<- "mxc_isi.1":12 [ENABLED]
+
+- entity 43: mxc-mipi-csi2.0 (8 pads, 2 links)
+             type Node subtype V4L flags 0
+             device node name /dev/v4l-subdev0
+	pad0: Sink
+		<- "max9296 1-0048":0 [ENABLED,IMMUTABLE]
+	pad1: Sink
+	pad2: Sink
+	pad3: Sink
+	pad4: Source
+		-> "mxc_isi.0":0 [ENABLED]
+	pad5: Source
+	pad6: Source
+	pad7: Source
+
+- entity 52: mxc-mipi-csi2.1 (8 pads, 2 links)
+             type Node subtype V4L flags 0
+             device node name /dev/v4l-subdev1
+	pad0: Sink
+		<- "max9296 2-0048":0 [ENABLED,IMMUTABLE]
+	pad1: Sink
+	pad2: Sink
+	pad3: Sink
+	pad4: Source
+		-> "mxc_isi.1":4 [ENABLED]
+	pad5: Source
+	pad6: Source
+	pad7: Source
+
+- entity 61: max9296 2-0048 (1 pad, 1 link)
+             type V4L2 subdev subtype Sensor flags 0
+             device node name /dev/v4l-subdev2
+	pad0: Source
+		[fmt:UYVY8_2X8/1280x360@1/120 field:unknown colorspace:srgb xfer:srgb ycbcr:601 quantization:full-range]
+		-> "mxc-mipi-csi2.1":0 [ENABLED,IMMUTABLE]
+
+- entity 63: max9296 1-0048 (1 pad, 1 link)
+             type V4L2 subdev subtype Sensor flags 0
+             device node name /dev/v4l-subdev3
+	pad0: Source
+		[fmt:UYVY8_2X8/2560x720@1/120 field:none colorspace:srgb xfer:srgb ycbcr:601 quantization:full-range]
+		-> "mxc-mipi-csi2.0":0 [ENABLED,IMMUTABLE]
+
+MEDIA_GRAPH_END
+Failed to open /dev/video4: Device or resource busy
+V4L2_FORMAT node=/dev/video4 width=unknown height=unknown pixelformat=unknown bytesperline=unknown sizeimage=unknown
+THERMAL phase=after zone=thermal_zone0 type=cpu-thermal temp_millic=57000
+THERMAL phase=after zone=thermal_zone1 type=soc-thermal temp_millic=59000
+DDR_RESULT ddr_supported=0 cycles=na read_cycles=na write_cycles=na
+RESOURCE_RESULT pid=2300705 duration_ns=20008599383 vmrss_kb_before=35180 vmrss_kb_after=35708 process_ticks_delta=1249 system_cpu_pct=30.6
+DMESG_RESULT overflow=0 crc=0 ecc=0 lost_frame=0 timeout=0 green=0
+DMESG_DELTA_BEGIN
+[27207.058021] isi-capture 32e02000.isi:cap_device: ISI channel[1] is busy
+DMESG_DELTA_END

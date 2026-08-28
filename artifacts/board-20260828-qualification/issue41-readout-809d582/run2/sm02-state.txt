@@ -1,0 +1,4 @@
+CASE=SM02_120
+6b9cf5b6944ea77497224dd697aba25c92863e58368287e9de2cbf36d97576c1  /root/camtest/issue41-809d582-run1/modules/max9296-sm02.ko
+6b9cf5b6944ea77497224dd697aba25c92863e58368287e9de2cbf36d97576c1  /lib/modules/5.10.35-lts-5.10.y+g2fce14defc04/kernel/drivers/media/i2c/max9296.ko
+9f59124ff770e8f399e833634aa239ad8e1907174741daad1e6e6fd6cedeb0d5  /root/shared_v/edgeconf_pim.json

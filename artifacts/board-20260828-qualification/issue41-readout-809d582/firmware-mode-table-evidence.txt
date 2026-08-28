@@ -1,0 +1,96 @@
+MAX9296 / AP1302 / AR0234 firmware mode-table evidence
+Captured: 2026-08-29 KST
+Board: pim-camera-v016 (192.168.214.4)
+Board lock: exclusive jhw-control board lock; automatically released
+
+Firmware provenance
+-------------------
+Path:
+  /home/jhw/ai/opencode/projects/pim-package/dist/pim/lib/firmware/v4l-ap1302-ar0234.fw
+Size:
+  81616 bytes
+SHA-256:
+  071d38572b5039af0c69cdd43fef18ca3bb9fbe29030d4cc16b37fae6164306e
+Git introduction:
+  58a21b446691fb2e7c220cd234ed8e598ce37d6b  camera fw add
+Later content-preserving mode change:
+  28de91b894efb7cfe051fd3f006120bfb875966d  rc.local
+
+The max9296 driver does not parse sensor-mode tables from the blob. It sends
+the bytes through the AP1302 bootdata window starting at 0x8000, wraps the
+window every 8192 bytes, and writes 0xffff to 0x6002 to process bootdata.
+
+Live AP1302 SENSOR0_CONF_0..7 readback
+--------------------------------------
+AP1302 0x11, register 0x60B0, 16 bytes:
+  0xae 0xcc 0xaf 0x10 0xaf 0x90 0x00 0x00
+  0x00 0x00 0x00 0x00 0x00 0x00 0xa3 0x30
+
+AP1302 0x12, register 0x60B0, 16 bytes:
+  0xae 0xcc 0xaf 0x10 0xaf 0x90 0x00 0x00
+  0x00 0x00 0x00 0x00 0x00 0x00 0xa3 0x30
+
+16-bit pointer view:
+  CONF_0=0xAECC
+  CONF_1=0xAF10
+  CONF_2=0xAF90
+  CONF_3=0x0000
+  CONF_4=0x0000
+  CONF_5=0x0000
+  CONF_6=0x0000
+  CONF_7=0xA330
+
+AP1302 Register Reference interpretation:
+  CONF_0..5 map sensor-mode events 0..5.
+  CONF_6 is the sensor-deselect event.
+  CONF_7 is the sensor-select event.
+Therefore only sensor modes 0, 1, and 2 have mapped configuration tables in
+this firmware. Modes 3..5 are null; 6/7 are not readout modes; 8..15 are not
+represented by SENSOR0_CONF_0..7.
+
+Mapped table bytes
+------------------
+AP1302 scratchpad 0xAECC, first 64 bytes (mode 0):
+  a3 18 00 00 30 40 a3 98 00 00 30 a2 00 01 a3 98
+  00 00 30 a6 00 01 a3 94 42 06 09 f4 07 80 a3 94
+  42 06 09 f6 04 b0 a3 14 42 06 09 f8 a3 94 42 06
+  0b aa 00 02 a3 94 42 06 0b ac 00 02 9e 00 ae a0
+
+AP1302 scratchpad 0xAF10, first 64 bytes (mode 1):
+  a3 98 00 00 30 40 30 20 a3 98 00 00 30 a2 00 03
+  a3 98 00 00 30 a6 00 03 a3 9a 00 00 30 b0 ff 7f
+  a3 94 42 06 09 f4 03 c0 a3 94 42 06 09 f6 02 58
+  a3 94 42 06 09 f8 01 00 a3 94 42 06 0b aa 00 04
+
+AP1302 scratchpad 0xAF90, first 64 bytes (mode 2):
+  a3 98 00 00 30 40 30 20 a3 98 00 00 30 a2 00 03
+  a3 98 00 00 30 a6 00 03 a3 99 00 00 30 b0 00 80
+  a3 94 42 06 09 f4 03 c0 a3 94 42 06 09 f6 02 58
+  a3 94 42 06 09 f8 02 00 a3 94 42 06 0b aa 00 04
+
+The mode 1/2 tables both program AR0234 READ_MODE 0x3040=0x3020 and
+X/Y_ODD_INC 0x30A2/0x30A6=0x0003. The distinguishing 0x30B0 operations clear
+bit 7 in mode 1 and set bit 7 in mode 2. AR0234 Register Reference defines
+bit 7 as MONO_CHROME_OPERATION.
+
+Dynamic 640x360@120 confirmation
+---------------------------------
+KEEP and mode 1, both channels:
+  AR0234 0x30B0=0x0028
+
+Mode 2, both channels:
+  AR0234 0x30B0=0x00A8
+
+Mode 1 produced approximately 113 FPS at AP/CSI/ISI, matching KEEP rather
+than improving it. Mode 2 produced 0 FPS at CSI/ISI in the current color
+pipeline. Full raw results are under run2/.
+
+Restored production state
+-------------------------
+AP1302 0x11 PREVIEW_SENSOR_MODE: 0x0000
+AP1302 0x12 PREVIEW_SENSOR_MODE: 0x0000
+cam-operate.service: active
+module SHA-256:
+  b27ae021fe4cb569ed6264712fabebb2a6b2cb6f5ab27278aebdb4113e09fc33
+edgeconf SHA-256:
+  eba521544a39d0a8ab79786e1d5b7a7c06357942a5d94c61691531960e53654f

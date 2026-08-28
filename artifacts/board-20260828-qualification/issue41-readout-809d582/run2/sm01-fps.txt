@@ -1,0 +1,101 @@
+gstApp: 2300705 gstApp -d 11 -m 4
+ch01 = /dev/video4  포맷 1280x360@1/120  모드 dual  AP1302 [0x11 0x12]
+관측 20초 / 1초 간격
+
+### [ch01/ch0] AP1302 preview context (0x11)
+  WIDTH=640 HEIGHT=360 ROI=0/0/16384/16384 ASPECT=0x1000 SENSOR_MODE=0x2001 LINE_TIME=0x0000 MAX_FPS=120.000
+AP_CONTEXT case=SM01_120 channel=ch0 addr=0x11 width=640 height=360 roi_x0=0 roi_y0=0 roi_x1=16384 roi_y1=16384 aspect=0x1000 sensor_mode=0x2001 line_time=0x0000 max_fps=120.000
+### [ch01/ch0] AR0234 레지스터 직접 읽기 (AP1302 DMA, 채널 0)
+  CHIP_VERSION(0x3000)            = 0x0a56 (AR0234 확인)
+  Y_ADDR_START(0x3002)             = 0x0004
+  X_ADDR_START(0x3004)             = 0x0004
+  Y_ADDR_END(0x3006)               = 0x04b3
+  X_ADDR_END(0x3008)               = 0x0783
+  FRAME_LENGTH_LINES(0x300A)      = 0x04c1
+  LINE_LENGTH_PCK(0x300C)         = 0x0264
+  COARSE_INTEGRATION_TIME(0x3012) = 0x04c2
+  READ_MODE(0x3040)                = 0x7020
+  X_ODD_INC(0x30A2)                = 0x0003
+  Y_ODD_INC(0x30A6)                = 0x0003
+AR_TIMING case=SM01_120 channel=ch0 x_start=0x0004 y_start=0x0004 x_end=0x0783 y_end=0x04b3 frame_length=0x04c1 line_length=0x0264 x_odd_inc=0x0003 y_odd_inc=0x0003 read_mode=0x7020 exposure=0x04c2
+  → pixel clock 90.0 MHz, 라인시간 6.80 us
+  → 이론 프레임레이트 = 90000000 / (1217 x 612) = 120.84 fps
+  → 노출 = 1218 x 6.80 us = 8282 us
+
+### [ch01/ch1] AP1302 preview context (0x12)
+  WIDTH=640 HEIGHT=360 ROI=0/0/16384/16384 ASPECT=0x1000 SENSOR_MODE=0x2001 LINE_TIME=0x0000 MAX_FPS=120.000
+AP_CONTEXT case=SM01_120 channel=ch1 addr=0x12 width=640 height=360 roi_x0=0 roi_y0=0 roi_x1=16384 roi_y1=16384 aspect=0x1000 sensor_mode=0x2001 line_time=0x0000 max_fps=120.000
+### [ch01/ch1] AR0234 레지스터 직접 읽기 (AP1302 DMA, 채널 1)
+  CHIP_VERSION(0x3000)            = 0x0a56 (AR0234 확인)
+  Y_ADDR_START(0x3002)             = 0x0004
+  X_ADDR_START(0x3004)             = 0x0004
+  Y_ADDR_END(0x3006)               = 0x04b3
+  X_ADDR_END(0x3008)               = 0x0783
+  FRAME_LENGTH_LINES(0x300A)      = 0x049d
+  LINE_LENGTH_PCK(0x300C)         = 0x0264
+  COARSE_INTEGRATION_TIME(0x3012) = 0x04c2
+  READ_MODE(0x3040)                = 0x3020
+  X_ODD_INC(0x30A2)                = 0x0003
+  Y_ODD_INC(0x30A6)                = 0x0003
+AR_TIMING case=SM01_120 channel=ch1 x_start=0x0004 y_start=0x0004 x_end=0x0783 y_end=0x04b3 frame_length=0x049d line_length=0x0264 x_odd_inc=0x0003 y_odd_inc=0x0003 read_mode=0x3020 exposure=0x04c2
+  → pixel clock 90.0 MHz, 라인시간 6.80 us
+  → 이론 프레임레이트 = 90000000 / (1181 x 612) = 124.52 fps
+  → 노출 = 1218 x 6.80 us = 8282 us
+
+경과   | 대상      | 센서   | ISP출력 | CSI2     | ISI      | 구간별 증감
+---------+-------------+----------+----------+----------+----------+-------------------------
+1s       | ch0 (0x11)  |    114.7 |    114.4 |    112.6 |    112.6 | 센서→ISP -0%  ISP→CSI2 -2%  CSI2→ISI +0%
+1s       | ch1 (0x12)  |    119.8 |    114.5 |    105.1 |    105.1 | 센서→ISP -4%  ISP→CSI2 -8%  CSI2→ISI +0%
+2s       | ch0 (0x11)  |    119.6 |    114.8 |    114.0 |    114.0 | 센서→ISP -4%  ISP→CSI2 -1%  CSI2→ISI +0%
+2s       | ch1 (0x12)  |    119.9 |    114.6 |    113.8 |    113.8 | 센서→ISP -4%  ISP→CSI2 -1%  CSI2→ISI +0%
+3s       | ch0 (0x11)  |    120.4 |    115.4 |    115.4 |    115.4 | 센서→ISP -4%  ISP→CSI2 +0%  CSI2→ISI +0%
+3s       | ch1 (0x12)  |    119.1 |    115.0 |    115.0 |    115.0 | 센서→ISP -3%  ISP→CSI2 +0%  CSI2→ISI +0%
+4s       | ch0 (0x11)  |    119.3 |    115.3 |    115.3 |    115.3 | 센서→ISP -3%  ISP→CSI2 +0%  CSI2→ISI +0%
+4s       | ch1 (0x12)  |    119.4 |    116.7 |    115.9 |    115.9 | 센서→ISP -2%  ISP→CSI2 -1%  CSI2→ISI +0%
+5s       | ch0 (0x11)  |    119.3 |    117.2 |    116.4 |    116.4 | 센서→ISP -2%  ISP→CSI2 -1%  CSI2→ISI +0%
+5s       | ch1 (0x12)  |    119.9 |    118.2 |    115.8 |    115.8 | 센서→ISP -1%  ISP→CSI2 -2%  CSI2→ISI +0%
+6s       | ch0 (0x11)  |    119.5 |    119.1 |    118.3 |    119.1 | 센서→ISP -0%  ISP→CSI2 -1%  CSI2→ISI +1%
+6s       | ch1 (0x12)  |    119.2 |    114.6 |    118.6 |    119.4 | 센서→ISP -4%  ISP→CSI2 +3%  CSI2→ISI +1%
+7s       | ch0 (0x11)  |    119.5 |    111.7 |    113.3 |    113.3 | 센서→ISP -7%  ISP→CSI2 +1%  CSI2→ISI +0%
+7s       | ch1 (0x12)  |    119.6 |    116.8 |    113.6 |    113.6 | 센서→ISP -2%  ISP→CSI2 -3%  CSI2→ISI +0%
+8s       | ch0 (0x11)  |    118.9 |    119.1 |    117.5 |    118.3 | 센서→ISP +0%  ISP→CSI2 -1%  CSI2→ISI +1%
+8s       | ch1 (0x12)  |    118.0 |    118.0 |    117.2 |    118.0 | 센서→ISP -0%  ISP→CSI2 -1%  CSI2→ISI +1%
+9s       | ch0 (0x11)  |    120.5 |    116.0 |    114.4 |    112.8 | 센서→ISP -4%  ISP→CSI2 -1%  CSI2→ISI -1%
+9s       | ch1 (0x12)  |    120.5 |    116.5 |    114.9 |    113.3 | 센서→ISP -3%  ISP→CSI2 -1%  CSI2→ISI -1%
+10s      | ch0 (0x11)  |    118.9 |    118.8 |    118.0 |    118.8 | 센서→ISP -0%  ISP→CSI2 -1%  CSI2→ISI +1%
+10s      | ch1 (0x12)  |    118.8 |    116.8 |    117.6 |    118.4 | 센서→ISP -2%  ISP→CSI2 +1%  CSI2→ISI +1%
+11s      | ch0 (0x11)  |    120.5 |    113.7 |    113.7 |    112.1 | 센서→ISP -6%  ISP→CSI2 +0%  CSI2→ISI -1%
+11s      | ch1 (0x12)  |    118.9 |    117.8 |    113.7 |    112.1 | 센서→ISP -1%  ISP→CSI2 -3%  CSI2→ISI -1%
+12s      | ch0 (0x11)  |    118.7 |    116.9 |    116.1 |    115.3 | 센서→ISP -2%  ISP→CSI2 -1%  CSI2→ISI -1%
+12s      | ch1 (0x12)  |    119.5 |    116.8 |    116.0 |    115.2 | 센서→ISP -2%  ISP→CSI2 -1%  CSI2→ISI -1%
+13s      | ch0 (0x11)  |    120.1 |    110.6 |    109.0 |    109.0 | 센서→ISP -8%  ISP→CSI2 -1%  CSI2→ISI +0%
+13s      | ch1 (0x12)  |    120.0 |    108.5 |    107.7 |    107.7 | 센서→ISP -10%  ISP→CSI2 -1%  CSI2→ISI +0%
+14s      | ch0 (0x11)  |    117.3 |    116.2 |    116.2 |    116.2 | 센서→ISP -1%  ISP→CSI2 +0%  CSI2→ISI +0%
+14s      | ch1 (0x12)  |    119.6 |    117.8 |    117.8 |    117.8 | 센서→ISP -1%  ISP→CSI2 +0%  CSI2→ISI +0%
+15s      | ch0 (0x11)  |    119.1 |    117.9 |    117.1 |    117.9 | 센서→ISP -1%  ISP→CSI2 -1%  CSI2→ISI +1%
+15s      | ch1 (0x12)  |    117.0 |    116.3 |    115.5 |    116.3 | 센서→ISP -1%  ISP→CSI2 -1%  CSI2→ISI +1%
+16s      | ch0 (0x11)  |     59.8 |     79.3 |     81.7 |     81.7 | 센서→ISP +33%  ISP→CSI2 +3%  CSI2→ISI +0%
+16s      | ch1 (0x12)  |    119.5 |     78.7 |     82.7 |     82.7 | 센서→ISP -34%  ISP→CSI2 +5%  CSI2→ISI +0%
+17s      | ch0 (0x11)  |     60.9 |    110.9 |    108.5 |    109.3 | 센서→ISP +82%  ISP→CSI2 -2%  CSI2→ISI +1%
+17s      | ch1 (0x12)  |    120.1 |    111.8 |    108.6 |    109.4 | 센서→ISP -7%  ISP→CSI2 -3%  CSI2→ISI +1%
+18s      | ch0 (0x11)  |    118.8 |    116.3 |    115.5 |    115.5 | 센서→ISP -2%  ISP→CSI2 -1%  CSI2→ISI +0%
+18s      | ch1 (0x12)  |    110.6 |    116.0 |    114.4 |    114.4 | 센서→ISP +5%  ISP→CSI2 -1%  CSI2→ISI +0%
+19s      | ch0 (0x11)  |    119.6 |    115.4 |    115.4 |    115.4 | 센서→ISP -4%  ISP→CSI2 +0%  CSI2→ISI +0%
+19s      | ch1 (0x12)  |    119.7 |    115.7 |    116.5 |    116.5 | 센서→ISP -3%  ISP→CSI2 +1%  CSI2→ISI +0%
+20s      | ch0 (0x11)  |    118.5 |    115.8 |    115.0 |    115.8 | 센서→ISP -2%  ISP→CSI2 -1%  CSI2→ISI +1%
+20s      | ch1 (0x12)  |    119.0 |    114.2 |    115.0 |    115.8 | 센서→ISP -4%  ISP→CSI2 +1%  CSI2→ISI +1%
+---------+-------------+----------+----------+----------+----------+-------------------------
+평균       | ch0 (0x11)  |    113.2 |    113.7 |    113.2 |    113.2 |
+평균       | ch1 (0x12)  |    118.9 |    113.8 |    112.8 |    112.8 |
+
+### ch01 / ch0 (AP1302 0x11) 판정
+  전 구간 손실 없음 (최대 낙차 0.5%, 센서~CSI2 기준)
+FPS_RESULT case=SM01_120 requested=120 channel=ch0 sensor=113.2 isp=113.7 csi=113.2 isi=113.2 loss_pct=0.5 isi_trust=1 sensor_valid=1 isp_valid=1 pass120=0
+
+### ch01 / ch1 (AP1302 0x12) 판정
+  전 구간 손실 없음 (최대 낙차 4.3%, 센서~CSI2 기준)
+FPS_RESULT case=SM01_120 requested=120 channel=ch1 sensor=118.9 isp=113.8 csi=112.8 isi=112.8 loss_pct=4.3 isi_trust=1 sensor_valid=1 isp_valid=1 pass120=0
+
+센서=AP1302 R0x00FC 역수 / ISP=R0x0002 HINF_FRAME_CNT 델타 / CSI2=csi IRQ÷2 / ISI=isi IRQ
+레이트는 sleep 값이 아니라 실제 경과시간으로 나눈 값입니다.
+ch01 는 듀얼 모드입니다. 두 카메라 영상이 하나의 넓은 프레임으로 합쳐지므로 CSI2/ISI 열은 두 행이 같은 값을 공유합니다.

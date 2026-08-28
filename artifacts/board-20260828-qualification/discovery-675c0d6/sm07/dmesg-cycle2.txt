@@ -1,0 +1,500 @@
+[ 5968.939740] [I2C:2][max9296.c:1519] ch1 DMA write success: ap=0x12 reg=0x3270 val=0x0000 attempt=1/3
+[ 5968.939748] [I2C:2][max9296.c:3013] ch1 dual applied success
+[ 5968.988236] [I2C:2][max9296.c:3971] max9296_s_frame_interval (numerator:1 denominator:30)
+[ 5968.988246] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:13824000)
+[ 5968.993317] [RST:2][max9296.c:2181] max9296_s_power (1)
+[ 5968.993332] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:13824000)
+[ 5968.998349] bypass csc
+[ 5968.998353] input fmt YUV4
+[ 5968.998356] output fmt YUYV
+[ 5969.320884] [I2C:2][max9296.c:5005] max9296_s_stream (1)
+[ 5969.320900] [I2C:2][max9296.c:3042] max9296_apply_cached_controls applying cached controls (dual:1)
+[ 5969.320911] [I2C:2][max9296.c:2920] ch0 dual apply (addr:0x11 ae:off awb:auto(0x115f) gain:512 exp:2000 rot:0x01 mcp:on wiper:0x10 delay:0x00)
+[ 5969.321331] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 5969.430841] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 5969.537298] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 5969.537692] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5100(2 byte), val=0x115f(2 byte)(ret:1, retry:0)
+[ 5969.538083] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5006(2 byte), val=0x200(2 byte)(ret:1, retry:0)
+[ 5969.538471] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x100c(2 byte), val=0x1(2 byte)(ret:1, retry:0)
+[ 5969.538857] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 5969.539243] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 5969.539634] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 5969.540024] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 5969.541711] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 5969.542181] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a0(2 byte), val=0x10060a0(4 byte)(ret:1, retry:0)
+[ 5969.542649] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 5969.543034] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 5969.543466] [I2C:2][max9296.c:1519] ch0 DMA write success: ap=0x11 reg=0x3270 val=0x0100 attempt=1/3
+[ 5969.543813] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x90(1 byte)(ret:1, retry:0)
+[ 5969.589107] [I2C:2][max9296.c:1298] ch0 MCP4018(0x2f) write fail: wiper=0x10 gave up after 5/5 attempts ret=-6
+[ 5969.589487] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 5969.589494] [I2C:2][max9296.c:3009] ch0 dual applied fail (ret=-6)
+[ 5969.589503] [I2C:2][max9296.c:2920] ch1 dual apply (addr:0x12 ae:on awb:d65(0x1155) gain:256 exp:2000 rot:0x00 mcp:off wiper:0x3f delay:0x00)
+[ 5969.589901] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 5969.699152] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 5969.805856] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x299(2 byte)(ret:1, retry:0)
+[ 5969.913297] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5100(2 byte), val=0x1155(2 byte)(ret:1, retry:0)
+[ 5969.913713] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5006(2 byte), val=0x100(2 byte)(ret:1, retry:0)
+[ 5969.914127] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x100c(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 5969.914540] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 5969.914976] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 5969.915405] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 5969.915830] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 5969.917629] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 5969.918144] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a0(2 byte), val=0x60a0(4 byte)(ret:1, retry:0)
+[ 5969.918654] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 5969.919121] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 5969.919588] [I2C:2][max9296.c:1519] ch1 DMA write success: ap=0x12 reg=0x3270 val=0x0000 attempt=1/3
+[ 5969.919596] [I2C:2][max9296.c:3013] ch1 dual applied success
+[ 5970.922365] [I2C:1][max9296.c:5322] max9296_fsync side fps : 30, low : 32333, high : 1000
+[ 5971.274644] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x313(2 byte), val=0x82(1 byte)(ret:1, retry:0)
+[ 5971.274653] [I2C:2][max9296.c:5417] CSI output enabled
+[ 5984.347262] isi-capture 32e02000.isi:cap_device: ISI channel[1] is busy
+[ 5997.705694] [I2C:2][max9296.c:5005] max9296_s_stream (0)
+[ 5997.705703] [I2C:2][max9296.c:1680] max9296_disable_stream_mipi (off)
+[ 5997.706085] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x313(2 byte), val=0x0(1 byte)(ret:1, retry:0)
+[ 6011.338426] : Unregistered all entities
+[ 6012.389605] [I2C:2][max9296.c:6631] max9296_remove
+[ 6012.394978] [I2C:1][max9296.c:6631] max9296_remove
+[ 6018.486290] mxc-mipi-csi2-sam 32e40000.csi: supply mipi-phy not found, using dummy regulator
+[ 6018.486695] mxc-mipi-csi2-sam 32e40000.csi: lanes: 4, hs_settle: 13, clk_settle: 0, wclk: 0, freq: 266000000
+[ 6018.487524] mxc-mipi-csi2-sam 32e50000.csi: supply mipi-phy not found, using dummy regulator
+[ 6018.488995] mxc-mipi-csi2-sam 32e50000.csi: lanes: 4, hs_settle: 13, clk_settle: 0, wclk: 0, freq: 266000000
+[ 6019.496255] isi-capture 32e00000.isi:cap_device: deferring 32e00000.isi:cap_device device registration
+[ 6019.497424] isi-m2m 32e00000.isi:m2m_device: deferring 32e00000.isi:m2m_device device registration
+[ 6019.497472] mxc-isi 32e00000.isi: mxc_isi.0 registered successfully
+[ 6019.500391] isi-m2m 32e00000.isi:m2m_device: Register m2m success for ISI.0
+[ 6019.505142] isi-capture 32e02000.isi:cap_device: deferring 32e02000.isi:cap_device device registration
+[ 6019.505328] mxc-isi 32e02000.isi: mxc_isi.1 registered successfully
+[ 6022.523830] [I2C:1][max9296.c:6268] max9296 version : 2.9
+[ 6022.523900] [I2C:1][max9296.c:6395] shared Init
+[ 6022.524584] [I2C:1][max9296.c:1725] max9296_calc_pixel_rate (rate:55296000)
+[ 6022.524727] [I2C:1][max9296.c:3787] max9296_init_controls (pixel_rate:55296000 exp_time:10000)
+[ 6022.524736] [I2C:1][max9296.c:3792] max9296_init_controls (gain_ch0:256 awb_ch0:15 sat_ch0:4096 hue:0 con_ch0:0 hflip_ch0:0 vflip_ch0:0 light_freq:1)
+[ 6022.526179] [I2C:2][max9296.c:6268] max9296 version : 2.9
+[ 6022.526223] [I2C:2][max9296.c:6368] warning reset gpio...
+[ 6022.526241] max9296 2-0048: warning fsync gpio...
+[ 6022.526247] [I2C:2][max9296.c:6395] shared Init
+[ 6022.526342] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:55296000)
+[ 6022.526486] [I2C:2][max9296.c:3787] max9296_init_controls (pixel_rate:55296000 exp_time:10000)
+[ 6022.526492] [I2C:2][max9296.c:3792] max9296_init_controls (gain_ch0:256 awb_ch0:15 sat_ch0:4096 hue:0 con_ch0:0 hflip_ch0:0 vflip_ch0:0 light_freq:1)
+[ 6025.538315] imx8_media_dev: module is from the staging directory, the quality is unknown, you have been warned.
+[ 6025.539933] mx8-img-md: Registered mxc_isi.0.capture as /dev/video3
+[ 6025.540086] mx8-img-md: Registered mxc_isi.1.capture as /dev/video4
+[ 6025.540193] mx8-img-md: Registered sensor subdevice: max9296 2-0048 (1)
+[ 6025.540200] mx8-img-md: Registered sensor subdevice: max9296 1-0048 (2)
+[ 6025.540209] mx8-img-md: created link [mxc_isi.0] => [mxc_isi.0.capture]
+[ 6025.540215] mx8-img-md: created link [mxc-mipi-csi2.0] => [mxc_isi.0]
+[ 6025.540220] mx8-img-md: created link [mxc_isi.1] => [mxc_isi.1.capture]
+[ 6025.540227] mx8-img-md: created link [mxc-mipi-csi2.1] => [mxc_isi.1]
+[ 6025.540233] mx8-img-md: created link [max9296 1-0048] => [mxc-mipi-csi2.0]
+[ 6025.540238] mx8-img-md: created link [max9296 2-0048] => [mxc-mipi-csi2.1]
+[ 6025.540245] mxc-md 32c00000.bus:camera: mxc_md_create_links
+[ 6031.899665] [RST:2][max9296.c:2113] max9296_set_power
+[ 6031.899673] [RST:2][max9296.c:2128] max9296_set_power (on users:1 run)
+[ 6031.899677] [RST:2][max9296.c:1946] max9296_set_power_on
+[ 6031.909871] [RST:2][max9296.c:1904] max9296_reset
+[ 6037.010346] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:13824000)
+[ 6037.010363] [I2C:2][max9296.c:1591] max9296_load_regs
+[ 6037.012541] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x313(2 byte), val=0x0(1 byte)(ret:1, retry:0)
+[ 6037.024905] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x10(2 byte), val=0x31(1 byte)(ret:1, retry:0)
+[ 6037.238146] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6037.249538] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x311(2 byte), val=0xf0(1 byte)(ret:1, retry:0)
+[ 6037.467754] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x308(2 byte), val=0x7f(1 byte)(ret:1, retry:0)
+[ 6037.480259] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x318(2 byte), val=0x5e(1 byte)(ret:1, retry:0)
+[ 6037.492282] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2(2 byte), val=0x43(1 byte)(ret:1, retry:0)
+[ 6037.505130] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x10(2 byte), val=0x21(1 byte)(ret:1, retry:0)
+[ 6037.616982] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x332(2 byte), val=0x30(1 byte)(ret:1, retry:0)
+[ 6037.629850] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x331(2 byte), val=0xf0(1 byte)(ret:1, retry:0)
+[ 6037.642760] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x10(2 byte), val=0x21(1 byte)(ret:1, retry:0)
+[ 6037.754625] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x10(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6037.965446] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x0(2 byte), val=0xc0(1 byte)(ret:1, retry:0)
+[ 6037.977435] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x10(2 byte), val=0x31(1 byte)(ret:1, retry:0)
+[ 6038.087042] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x6b(2 byte), val=0x12(1 byte)(ret:1, retry:0)
+[ 6038.097648] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x73(2 byte), val=0x13(1 byte)(ret:1, retry:0)
+[ 6038.109026] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x7b(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6038.120405] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x83(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6038.131036] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x93(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6038.142438] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x9b(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6038.153830] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0xa3(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6038.165651] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0xab(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6038.176822] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x8b(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6038.188203] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x10(2 byte), val=0x23(1 byte)(ret:1, retry:0)
+[ 6038.298038] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6038.308721] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x318(2 byte), val=0x5e(1 byte)(ret:1, retry:0)
+[ 6038.322476] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2(2 byte), val=0x43(1 byte)(ret:1, retry:0)
+[ 6038.334143] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x42(2 byte), val=0x22(1 byte)(ret:1, retry:0)
+[ 6038.345536] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x43(2 byte), val=0x78(1 byte)(ret:1, retry:0)
+[ 6038.356934] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x318(2 byte), val=0x5e(1 byte)(ret:1, retry:0)
+[ 6038.368345] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x2(2 byte), val=0x43(1 byte)(ret:1, retry:0)
+[ 6038.379061] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x53(2 byte), val=0x13(1 byte)(ret:1, retry:0)
+[ 6038.389765] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x5b(2 byte), val=0x10(1 byte)(ret:1, retry:0)
+[ 6038.401468] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x42(2 byte), val=0x24(1 byte)(ret:1, retry:0)
+[ 6038.413150] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x43(2 byte), val=0x78(1 byte)(ret:1, retry:0)
+[ 6038.424602] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x10(2 byte), val=0x21(1 byte)(ret:1, retry:0)
+[ 6038.532563] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x3(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6038.543706] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x330(2 byte), val=0x4(1 byte)(ret:1, retry:0)
+[ 6038.556231] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x50(2 byte), val=0x0(1 byte)(ret:1, retry:0)
+[ 6038.567032] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x51(2 byte), val=0x2(1 byte)(ret:1, retry:0)
+[ 6038.578429] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x52(2 byte), val=0x1(1 byte)(ret:1, retry:0)
+[ 6038.589879] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x333(2 byte), val=0x4e(1 byte)(ret:1, retry:0)
+[ 6038.600582] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x334(2 byte), val=0xe4(1 byte)(ret:1, retry:0)
+[ 6038.611474] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x44a(2 byte), val=0xc0(1 byte)(ret:1, retry:0)
+[ 6038.622438] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x332(2 byte), val=0x30(1 byte)(ret:1, retry:0)
+[ 6038.633455] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x320(2 byte), val=0x27(1 byte)(ret:1, retry:0)
+[ 6038.645085] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x318(2 byte), val=0x1e(1 byte)(ret:1, retry:0)
+[ 6038.656519] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x331(2 byte), val=0xf0(1 byte)(ret:1, retry:0)
+[ 6038.667082] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x314(2 byte), val=0x0(1 byte)(ret:1, retry:0)
+[ 6038.678511] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x319(2 byte), val=0x10(1 byte)(ret:1, retry:0)
+[ 6038.690531] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x316(2 byte), val=0x5e(1 byte)(ret:1, retry:0)
+[ 6038.701973] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x317(2 byte), val=0xe(1 byte)(ret:1, retry:0)
+[ 6038.713711] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x1(2 byte), val=0x4(1 byte)(ret:1, retry:0)
+[ 6038.725165] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x1(2 byte), val=0x4(1 byte)(ret:1, retry:0)
+[ 6038.736615] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x1(2 byte), val=0x1(1 byte)(ret:1, retry:0)
+[ 6038.749530] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x31d(2 byte), val=0xef(1 byte)(ret:1, retry:0)
+[ 6038.760971] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x10(2 byte), val=0x23(1 byte)(ret:1, retry:0)
+[ 6038.871002] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x3f1(2 byte), val=0x85(1 byte)(ret:1, retry:0)
+[ 6038.979435] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x3f1(2 byte), val=0x85(1 byte)(ret:1, retry:0)
+[ 6039.087029] [I2C:2][max9296.c:4018] start_fw_load
+[ 6039.087472] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0xf05a(2 byte), val=0x14(2 byte)(ret:1, retry:0)
+[ 6039.088013] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0x6024(2 byte), val=0x300000(4 byte)(ret:1, retry:0)
+[ 6039.088510] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0x6034(2 byte), val=0x12c0000(4 byte)(ret:1, retry:0)
+[ 6042.807379] [I2C:2][max9296.c:4042] end_fw_load
+[ 6042.807792] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0x6002(2 byte), val=0xffff(2 byte)(ret:1, retry:0)
+[ 6042.914887] [I2C:2][max9296.c:4165] loaded v4l-ap1302-ar0234.fw firmware (81616 bytes)
+[ 6042.914898] [I2C:2][max9296.c:4443] preview addr=0x11 output=640x360 fps=30 sensor_mode=7
+[ 6042.915618] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x1184(2 byte), val=0x1(2 byte)(ret:1, retry:0)
+[ 6042.916029] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2000(2 byte), val=0x280(2 byte)(ret:1, retry:0)
+[ 6042.916438] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2002(2 byte), val=0x168(2 byte)(ret:1, retry:0)
+[ 6042.916845] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2004(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6042.917253] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2006(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6042.917662] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2008(2 byte), val=0x4000(2 byte)(ret:1, retry:0)
+[ 6042.918073] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x200a(2 byte), val=0x4000(2 byte)(ret:1, retry:0)
+[ 6042.918478] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x200c(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6042.919346] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2014(2 byte), val=0x2007(2 byte)(ret:1, retry:0)
+[ 6042.919760] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x1184(2 byte), val=0x13(2 byte)(ret:1, retry:0)
+[ 6042.919769] [I2C:2][max9296.c:4443] preview addr=0x12 output=640x360 fps=30 sensor_mode=7
+[ 6042.920179] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x1184(2 byte), val=0x1(2 byte)(ret:1, retry:0)
+[ 6042.920592] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2000(2 byte), val=0x280(2 byte)(ret:1, retry:0)
+[ 6042.921002] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2002(2 byte), val=0x168(2 byte)(ret:1, retry:0)
+[ 6042.921411] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2004(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6042.921819] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2006(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6042.922227] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2008(2 byte), val=0x4000(2 byte)(ret:1, retry:0)
+[ 6042.922652] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x200a(2 byte), val=0x4000(2 byte)(ret:1, retry:0)
+[ 6042.923070] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x200c(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6042.923938] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2014(2 byte), val=0x2007(2 byte)(ret:1, retry:0)
+[ 6042.924348] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x1184(2 byte), val=0x13(2 byte)(ret:1, retry:0)
+[ 6042.924757] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0x1186(2 byte), val=0x38a(2 byte)(ret:1, retry:0)
+[ 6042.925129] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x471(2 byte), val=0x83(1 byte)(ret:1, retry:0)
+[ 6043.430544] [I2C:2][max9296.c:3042] max9296_apply_cached_controls applying cached controls (dual:1)
+[ 6043.430557] [I2C:2][max9296.c:2920] ch0 dual apply (addr:0x11 ae:off awb:auto(0x115f) gain:512 exp:2000 rot:0x01 mcp:on wiper:0x10 delay:0x00)
+[ 6043.431841] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6043.540395] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 6043.647260] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6043.647664] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5100(2 byte), val=0x115f(2 byte)(ret:1, retry:0)
+[ 6043.648061] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5006(2 byte), val=0x200(2 byte)(ret:1, retry:0)
+[ 6043.648458] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x100c(2 byte), val=0x1(2 byte)(ret:1, retry:0)
+[ 6043.648849] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 6043.649242] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6043.649633] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6043.650022] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6043.651397] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 6043.651881] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a0(2 byte), val=0x10060a0(4 byte)(ret:1, retry:0)
+[ 6043.652373] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 6043.652799] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 6043.653243] [I2C:2][max9296.c:1519] ch0 DMA write success: ap=0x11 reg=0x3270 val=0x0100 attempt=1/3
+[ 6043.653600] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x90(1 byte)(ret:1, retry:0)
+[ 6043.698761] [I2C:2][max9296.c:1298] ch0 MCP4018(0x2f) write fail: wiper=0x10 gave up after 5/5 attempts ret=-6
+[ 6043.699141] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6043.699148] [I2C:2][max9296.c:3009] ch0 dual applied fail (ret=-6)
+[ 6043.699158] [I2C:2][max9296.c:2920] ch1 dual apply (addr:0x12 ae:on awb:d65(0x1155) gain:256 exp:2000 rot:0x00 mcp:off wiper:0x3f delay:0x00)
+[ 6043.699565] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6043.807388] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 6043.915596] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x299(2 byte)(ret:1, retry:0)
+[ 6044.024426] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5100(2 byte), val=0x1155(2 byte)(ret:1, retry:0)
+[ 6044.024842] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5006(2 byte), val=0x100(2 byte)(ret:1, retry:0)
+[ 6044.025252] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x100c(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6044.025659] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 6044.026070] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6044.026479] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6044.027223] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6044.028624] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 6044.029117] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a0(2 byte), val=0x60a0(4 byte)(ret:1, retry:0)
+[ 6044.029610] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 6044.030026] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 6044.030483] [I2C:2][max9296.c:1519] ch1 DMA write success: ap=0x12 reg=0x3270 val=0x0000 attempt=1/3
+[ 6044.030518] [I2C:2][max9296.c:3013] ch1 dual applied success
+[ 6044.074914] [I2C:2][max9296.c:3971] max9296_s_frame_interval (numerator:1 denominator:30)
+[ 6044.074923] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:13824000)
+[ 6044.079034] [RST:2][max9296.c:2181] max9296_s_power (1)
+[ 6044.079047] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:13824000)
+[ 6044.084081] bypass csc
+[ 6044.084085] input fmt YUV4
+[ 6044.084088] output fmt YUYV
+[ 6044.390922] [I2C:2][max9296.c:5005] max9296_s_stream (1)
+[ 6044.390938] [I2C:2][max9296.c:3042] max9296_apply_cached_controls applying cached controls (dual:1)
+[ 6044.390949] [I2C:2][max9296.c:2920] ch0 dual apply (addr:0x11 ae:off awb:auto(0x115f) gain:512 exp:2000 rot:0x01 mcp:on wiper:0x10 delay:0x00)
+[ 6044.391378] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6044.499935] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 6044.606923] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6044.607341] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5100(2 byte), val=0x115f(2 byte)(ret:1, retry:0)
+[ 6044.607744] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5006(2 byte), val=0x200(2 byte)(ret:1, retry:0)
+[ 6044.608169] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x100c(2 byte), val=0x1(2 byte)(ret:1, retry:0)
+[ 6044.608605] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 6044.609025] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6044.609439] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6044.609856] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6044.611729] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 6044.612219] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a0(2 byte), val=0x10060a0(4 byte)(ret:1, retry:0)
+[ 6044.612698] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 6044.613092] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 6044.613534] [I2C:2][max9296.c:1519] ch0 DMA write success: ap=0x11 reg=0x3270 val=0x0100 attempt=1/3
+[ 6044.613891] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x90(1 byte)(ret:1, retry:0)
+[ 6044.658769] [I2C:2][max9296.c:1298] ch0 MCP4018(0x2f) write fail: wiper=0x10 gave up after 5/5 attempts ret=-6
+[ 6044.659134] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6044.659139] [I2C:2][max9296.c:3009] ch0 dual applied fail (ret=-6)
+[ 6044.659147] [I2C:2][max9296.c:2920] ch1 dual apply (addr:0x12 ae:on awb:d65(0x1155) gain:256 exp:2000 rot:0x00 mcp:off wiper:0x3f delay:0x00)
+[ 6044.659544] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6044.766993] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 6044.876687] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x299(2 byte)(ret:1, retry:0)
+[ 6044.984721] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5100(2 byte), val=0x1155(2 byte)(ret:1, retry:0)
+[ 6044.985741] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5006(2 byte), val=0x100(2 byte)(ret:1, retry:0)
+[ 6044.986143] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x100c(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6044.986787] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 6044.987188] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6044.987577] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6044.987961] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6044.989681] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 6044.990163] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a0(2 byte), val=0x60a0(4 byte)(ret:1, retry:0)
+[ 6044.990716] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 6044.991124] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 6044.991564] [I2C:2][max9296.c:1519] ch1 DMA write success: ap=0x12 reg=0x3270 val=0x0000 attempt=1/3
+[ 6044.991569] [I2C:2][max9296.c:3013] ch1 dual applied success
+[ 6045.997499] [I2C:1][max9296.c:5322] max9296_fsync side fps : 30, low : 32333, high : 1000
+[ 6046.379996] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x313(2 byte), val=0x82(1 byte)(ret:1, retry:0)
+[ 6046.380004] [I2C:2][max9296.c:5417] CSI output enabled
+[ 6059.436888] isi-capture 32e02000.isi:cap_device: ISI channel[1] is busy
+[ 6072.867946] [I2C:2][max9296.c:5005] max9296_s_stream (0)
+[ 6072.867954] [I2C:2][max9296.c:1680] max9296_disable_stream_mipi (off)
+[ 6072.868336] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x313(2 byte), val=0x0(1 byte)(ret:1, retry:0)
+[ 6076.910322] : Unregistered all entities
+[ 6077.960010] [I2C:2][max9296.c:6631] max9296_remove
+[ 6077.969939] [I2C:1][max9296.c:6631] max9296_remove
+[ 6084.056917] mxc-mipi-csi2-sam 32e40000.csi: supply mipi-phy not found, using dummy regulator
+[ 6084.057656] mxc-mipi-csi2-sam 32e40000.csi: lanes: 4, hs_settle: 13, clk_settle: 0, wclk: 0, freq: 266000000
+[ 6084.058498] mxc-mipi-csi2-sam 32e50000.csi: supply mipi-phy not found, using dummy regulator
+[ 6084.060060] mxc-mipi-csi2-sam 32e50000.csi: lanes: 4, hs_settle: 13, clk_settle: 0, wclk: 0, freq: 266000000
+[ 6085.066989] isi-capture 32e00000.isi:cap_device: deferring 32e00000.isi:cap_device device registration
+[ 6085.068153] isi-m2m 32e00000.isi:m2m_device: deferring 32e00000.isi:m2m_device device registration
+[ 6085.068205] mxc-isi 32e00000.isi: mxc_isi.0 registered successfully
+[ 6085.071186] isi-m2m 32e00000.isi:m2m_device: Register m2m success for ISI.0
+[ 6085.071399] isi-capture 32e02000.isi:cap_device: deferring 32e02000.isi:cap_device device registration
+[ 6085.071608] mxc-isi 32e02000.isi: mxc_isi.1 registered successfully
+[ 6088.090412] [I2C:1][max9296.c:6268] max9296 version : 2.9
+[ 6088.090499] [I2C:1][max9296.c:6395] shared Init
+[ 6088.090902] [I2C:1][max9296.c:1725] max9296_calc_pixel_rate (rate:55296000)
+[ 6088.091081] [I2C:1][max9296.c:3787] max9296_init_controls (pixel_rate:55296000 exp_time:10000)
+[ 6088.091092] [I2C:1][max9296.c:3792] max9296_init_controls (gain_ch0:256 awb_ch0:15 sat_ch0:4096 hue:0 con_ch0:0 hflip_ch0:0 vflip_ch0:0 light_freq:1)
+[ 6088.093424] [I2C:2][max9296.c:6268] max9296 version : 2.9
+[ 6088.093467] [I2C:2][max9296.c:6368] warning reset gpio...
+[ 6088.093484] max9296 2-0048: warning fsync gpio...
+[ 6088.093489] [I2C:2][max9296.c:6395] shared Init
+[ 6088.093603] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:55296000)
+[ 6088.093735] [I2C:2][max9296.c:3787] max9296_init_controls (pixel_rate:55296000 exp_time:10000)
+[ 6088.093741] [I2C:2][max9296.c:3792] max9296_init_controls (gain_ch0:256 awb_ch0:15 sat_ch0:4096 hue:0 con_ch0:0 hflip_ch0:0 vflip_ch0:0 light_freq:1)
+[ 6091.104935] imx8_media_dev: module is from the staging directory, the quality is unknown, you have been warned.
+[ 6091.106711] mx8-img-md: Registered mxc_isi.0.capture as /dev/video3
+[ 6091.106842] mx8-img-md: Registered mxc_isi.1.capture as /dev/video4
+[ 6091.106929] mx8-img-md: Registered sensor subdevice: max9296 2-0048 (1)
+[ 6091.106935] mx8-img-md: Registered sensor subdevice: max9296 1-0048 (2)
+[ 6091.106942] mx8-img-md: created link [mxc_isi.0] => [mxc_isi.0.capture]
+[ 6091.106948] mx8-img-md: created link [mxc-mipi-csi2.0] => [mxc_isi.0]
+[ 6091.106953] mx8-img-md: created link [mxc_isi.1] => [mxc_isi.1.capture]
+[ 6091.106957] mx8-img-md: created link [mxc-mipi-csi2.1] => [mxc_isi.1]
+[ 6091.106963] mx8-img-md: created link [max9296 1-0048] => [mxc-mipi-csi2.0]
+[ 6091.106967] mx8-img-md: created link [max9296 2-0048] => [mxc-mipi-csi2.1]
+[ 6091.106973] mxc-md 32c00000.bus:camera: mxc_md_create_links
+[ 6097.452472] [RST:2][max9296.c:2113] max9296_set_power
+[ 6097.452480] [RST:2][max9296.c:2128] max9296_set_power (on users:1 run)
+[ 6097.452484] [RST:2][max9296.c:1946] max9296_set_power_on
+[ 6097.463564] [RST:2][max9296.c:1904] max9296_reset
+[ 6102.580308] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:13824000)
+[ 6102.580327] [I2C:2][max9296.c:1591] max9296_load_regs
+[ 6102.580750] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x313(2 byte), val=0x0(1 byte)(ret:1, retry:0)
+[ 6102.593641] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x10(2 byte), val=0x31(1 byte)(ret:1, retry:0)
+[ 6102.813082] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6102.824465] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x311(2 byte), val=0xf0(1 byte)(ret:1, retry:0)
+[ 6103.042939] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x308(2 byte), val=0x7f(1 byte)(ret:1, retry:0)
+[ 6103.054334] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x318(2 byte), val=0x5e(1 byte)(ret:1, retry:0)
+[ 6103.065604] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2(2 byte), val=0x43(1 byte)(ret:1, retry:0)
+[ 6103.078171] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x10(2 byte), val=0x21(1 byte)(ret:1, retry:0)
+[ 6103.187429] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x332(2 byte), val=0x30(1 byte)(ret:1, retry:0)
+[ 6103.199960] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x331(2 byte), val=0xf0(1 byte)(ret:1, retry:0)
+[ 6103.212501] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x10(2 byte), val=0x21(1 byte)(ret:1, retry:0)
+[ 6103.314520] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x10(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6103.526985] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x0(2 byte), val=0xc0(1 byte)(ret:1, retry:0)
+[ 6103.539256] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x10(2 byte), val=0x31(1 byte)(ret:1, retry:0)
+[ 6103.647086] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x6b(2 byte), val=0x12(1 byte)(ret:1, retry:0)
+[ 6103.658752] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x73(2 byte), val=0x13(1 byte)(ret:1, retry:0)
+[ 6103.671588] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x7b(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6103.683328] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x83(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6103.693992] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x93(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6103.705295] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x9b(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6103.716769] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0xa3(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6103.728152] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0xab(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6103.739564] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x8b(2 byte), val=0x32(1 byte)(ret:1, retry:0)
+[ 6103.750957] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x10(2 byte), val=0x23(1 byte)(ret:1, retry:0)
+[ 6103.861581] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6103.872963] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x318(2 byte), val=0x5e(1 byte)(ret:1, retry:0)
+[ 6103.884345] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2(2 byte), val=0x43(1 byte)(ret:1, retry:0)
+[ 6103.895719] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x42(2 byte), val=0x22(1 byte)(ret:1, retry:0)
+[ 6103.908302] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x43(2 byte), val=0x78(1 byte)(ret:1, retry:0)
+[ 6103.920585] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x318(2 byte), val=0x5e(1 byte)(ret:1, retry:0)
+[ 6103.931977] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x2(2 byte), val=0x43(1 byte)(ret:1, retry:0)
+[ 6103.943378] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x53(2 byte), val=0x13(1 byte)(ret:1, retry:0)
+[ 6103.954394] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x5b(2 byte), val=0x10(1 byte)(ret:1, retry:0)
+[ 6103.965863] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x42(2 byte), val=0x24(1 byte)(ret:1, retry:0)
+[ 6103.977047] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x43(2 byte), val=0x78(1 byte)(ret:1, retry:0)
+[ 6103.989917] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x10(2 byte), val=0x21(1 byte)(ret:1, retry:0)
+[ 6104.098579] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x3(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6104.110181] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x330(2 byte), val=0x4(1 byte)(ret:1, retry:0)
+[ 6104.122776] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x50(2 byte), val=0x0(1 byte)(ret:1, retry:0)
+[ 6104.133931] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x51(2 byte), val=0x2(1 byte)(ret:1, retry:0)
+[ 6104.145652] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x52(2 byte), val=0x1(1 byte)(ret:1, retry:0)
+[ 6104.157071] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x333(2 byte), val=0x4e(1 byte)(ret:1, retry:0)
+[ 6104.168485] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x334(2 byte), val=0xe4(1 byte)(ret:1, retry:0)
+[ 6104.179894] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x44a(2 byte), val=0xc0(1 byte)(ret:1, retry:0)
+[ 6104.191332] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x332(2 byte), val=0x30(1 byte)(ret:1, retry:0)
+[ 6104.202751] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x320(2 byte), val=0x27(1 byte)(ret:1, retry:0)
+[ 6104.214156] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x318(2 byte), val=0x1e(1 byte)(ret:1, retry:0)
+[ 6104.224988] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x331(2 byte), val=0xf0(1 byte)(ret:1, retry:0)
+[ 6104.236514] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x314(2 byte), val=0x0(1 byte)(ret:1, retry:0)
+[ 6104.247479] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x319(2 byte), val=0x10(1 byte)(ret:1, retry:0)
+[ 6104.258499] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x316(2 byte), val=0x5e(1 byte)(ret:1, retry:0)
+[ 6104.269074] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x317(2 byte), val=0xe(1 byte)(ret:1, retry:0)
+[ 6104.280042] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x1(2 byte), val=0x4(1 byte)(ret:1, retry:0)
+[ 6104.291070] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x1(2 byte), val=0x4(1 byte)(ret:1, retry:0)
+[ 6104.303251] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x1(2 byte), val=0x1(1 byte)(ret:1, retry:0)
+[ 6104.314701] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x31d(2 byte), val=0xef(1 byte)(ret:1, retry:0)
+[ 6104.326114] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x10(2 byte), val=0x23(1 byte)(ret:1, retry:0)
+[ 6104.437832] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x3f1(2 byte), val=0x85(1 byte)(ret:1, retry:0)
+[ 6104.548575] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x60] reg=0x3f1(2 byte), val=0x85(1 byte)(ret:1, retry:0)
+[ 6104.653415] [I2C:2][max9296.c:4018] start_fw_load
+[ 6104.654144] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0xf05a(2 byte), val=0x14(2 byte)(ret:1, retry:0)
+[ 6104.654641] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0x6024(2 byte), val=0x300000(4 byte)(ret:1, retry:0)
+[ 6104.655136] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0x6034(2 byte), val=0x12c0000(4 byte)(ret:1, retry:0)
+[ 6108.358471] [I2C:2][max9296.c:4042] end_fw_load
+[ 6108.358884] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0x6002(2 byte), val=0xffff(2 byte)(ret:1, retry:0)
+[ 6108.464528] [I2C:2][max9296.c:4165] loaded v4l-ap1302-ar0234.fw firmware (81616 bytes)
+[ 6108.464539] [I2C:2][max9296.c:4443] preview addr=0x11 output=640x360 fps=30 sensor_mode=7
+[ 6108.464974] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x1184(2 byte), val=0x1(2 byte)(ret:1, retry:0)
+[ 6108.465385] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2000(2 byte), val=0x280(2 byte)(ret:1, retry:0)
+[ 6108.465792] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2002(2 byte), val=0x168(2 byte)(ret:1, retry:0)
+[ 6108.466204] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2004(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6108.466611] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2006(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6108.467019] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2008(2 byte), val=0x4000(2 byte)(ret:1, retry:0)
+[ 6108.467429] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x200a(2 byte), val=0x4000(2 byte)(ret:1, retry:0)
+[ 6108.467837] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x200c(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6108.469866] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x2014(2 byte), val=0x2007(2 byte)(ret:1, retry:0)
+[ 6108.470289] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x1184(2 byte), val=0x13(2 byte)(ret:1, retry:0)
+[ 6108.470298] [I2C:2][max9296.c:4443] preview addr=0x12 output=640x360 fps=30 sensor_mode=7
+[ 6108.470706] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x1184(2 byte), val=0x1(2 byte)(ret:1, retry:0)
+[ 6108.471114] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2000(2 byte), val=0x280(2 byte)(ret:1, retry:0)
+[ 6108.471526] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2002(2 byte), val=0x168(2 byte)(ret:1, retry:0)
+[ 6108.471932] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2004(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6108.472338] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2006(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6108.472755] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2008(2 byte), val=0x4000(2 byte)(ret:1, retry:0)
+[ 6108.473173] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x200a(2 byte), val=0x4000(2 byte)(ret:1, retry:0)
+[ 6108.473584] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x200c(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6108.474447] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x2014(2 byte), val=0x2007(2 byte)(ret:1, retry:0)
+[ 6108.474857] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x1184(2 byte), val=0x13(2 byte)(ret:1, retry:0)
+[ 6108.475272] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x3c] reg=0x1186(2 byte), val=0x38a(2 byte)(ret:1, retry:0)
+[ 6108.475654] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x471(2 byte), val=0x83(1 byte)(ret:1, retry:0)
+[ 6109.001079] [I2C:2][max9296.c:3042] max9296_apply_cached_controls applying cached controls (dual:1)
+[ 6109.001093] [I2C:2][max9296.c:2920] ch0 dual apply (addr:0x11 ae:off awb:auto(0x115f) gain:512 exp:2000 rot:0x01 mcp:on wiper:0x10 delay:0x00)
+[ 6109.001805] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6109.114202] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 6109.225841] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6109.226254] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5100(2 byte), val=0x115f(2 byte)(ret:1, retry:0)
+[ 6109.226662] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5006(2 byte), val=0x200(2 byte)(ret:1, retry:0)
+[ 6109.227069] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x100c(2 byte), val=0x1(2 byte)(ret:1, retry:0)
+[ 6109.227476] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 6109.227882] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6109.228292] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6109.229160] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6109.230565] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 6109.231057] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a0(2 byte), val=0x10060a0(4 byte)(ret:1, retry:0)
+[ 6109.231547] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 6109.231954] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 6109.232408] [I2C:2][max9296.c:1519] ch0 DMA write success: ap=0x11 reg=0x3270 val=0x0100 attempt=1/3
+[ 6109.232789] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x90(1 byte)(ret:1, retry:0)
+[ 6109.285080] [I2C:2][max9296.c:1298] ch0 MCP4018(0x2f) write fail: wiper=0x10 gave up after 5/5 attempts ret=-6
+[ 6109.285462] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6109.285468] [I2C:2][max9296.c:3009] ch0 dual applied fail (ret=-6)
+[ 6109.285478] [I2C:2][max9296.c:2920] ch1 dual apply (addr:0x12 ae:on awb:d65(0x1155) gain:256 exp:2000 rot:0x00 mcp:off wiper:0x3f delay:0x00)
+[ 6109.285891] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6109.393604] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 6109.500936] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x299(2 byte)(ret:1, retry:0)
+[ 6109.613219] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5100(2 byte), val=0x1155(2 byte)(ret:1, retry:0)
+[ 6109.613642] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5006(2 byte), val=0x100(2 byte)(ret:1, retry:0)
+[ 6109.614048] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x100c(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6109.614451] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 6109.614889] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6109.615621] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6109.616042] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6109.617485] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 6109.617976] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a0(2 byte), val=0x60a0(4 byte)(ret:1, retry:0)
+[ 6109.618466] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 6109.618871] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 6109.619324] [I2C:2][max9296.c:1519] ch1 DMA write success: ap=0x12 reg=0x3270 val=0x0000 attempt=1/3
+[ 6109.619332] [I2C:2][max9296.c:3013] ch1 dual applied success
+[ 6109.664907] [I2C:2][max9296.c:3971] max9296_s_frame_interval (numerator:1 denominator:30)
+[ 6109.664915] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:13824000)
+[ 6109.668717] [RST:2][max9296.c:2181] max9296_s_power (1)
+[ 6109.668731] [I2C:2][max9296.c:1725] max9296_calc_pixel_rate (rate:13824000)
+[ 6109.673747] bypass csc
+[ 6109.673752] input fmt YUV4
+[ 6109.673755] output fmt YUYV
+[ 6109.988791] [I2C:2][max9296.c:5005] max9296_s_stream (1)
+[ 6109.988808] [I2C:2][max9296.c:3042] max9296_apply_cached_controls applying cached controls (dual:1)
+[ 6109.988818] [I2C:2][max9296.c:2920] ch0 dual apply (addr:0x11 ae:off awb:auto(0x115f) gain:512 exp:2000 rot:0x01 mcp:on wiper:0x10 delay:0x00)
+[ 6109.989242] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6110.097567] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 6110.205293] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6110.205890] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5100(2 byte), val=0x115f(2 byte)(ret:1, retry:0)
+[ 6110.206330] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x5006(2 byte), val=0x200(2 byte)(ret:1, retry:0)
+[ 6110.206758] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x100c(2 byte), val=0x1(2 byte)(ret:1, retry:0)
+[ 6110.207184] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 6110.207604] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6110.208015] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6110.208832] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6110.210267] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 6110.210767] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a0(2 byte), val=0x10060a0(4 byte)(ret:1, retry:0)
+[ 6110.211256] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 6110.211673] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x11] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 6110.212140] [I2C:2][max9296.c:1519] ch0 DMA write success: ap=0x11 reg=0x3270 val=0x0100 attempt=1/3
+[ 6110.212551] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x90(1 byte)(ret:1, retry:0)
+[ 6110.260726] [I2C:2][max9296.c:1298] ch0 MCP4018(0x2f) write fail: wiper=0x10 gave up after 5/5 attempts ret=-6
+[ 6110.261094] [I2C:2][max9296.c:1122] ch0 Success!! i2c write reg : [0x40] reg=0x2ca(2 byte), val=0x80(1 byte)(ret:1, retry:0)
+[ 6110.261101] [I2C:2][max9296.c:3009] ch0 dual applied fail (ret=-6)
+[ 6110.261109] [I2C:2][max9296.c:2920] ch1 dual apply (addr:0x12 ae:on awb:d65(0x1155) gain:256 exp:2000 rot:0x00 mcp:off wiper:0x3f delay:0x00)
+[ 6110.261838] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x290(2 byte)(ret:1, retry:0)
+[ 6110.371605] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x500c(2 byte), val=0x7d0(4 byte)(ret:1, retry:0)
+[ 6110.477167] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5002(2 byte), val=0x299(2 byte)(ret:1, retry:0)
+[ 6110.584910] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5100(2 byte), val=0x1155(2 byte)(ret:1, retry:0)
+[ 6110.585312] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x5006(2 byte), val=0x100(2 byte)(ret:1, retry:0)
+[ 6110.585706] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x100c(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6110.586098] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x54a0(2 byte), val=0x3fff(2 byte)(ret:1, retry:0)
+[ 6110.586492] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7000(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6110.586887] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7002(2 byte), val=0x0(2 byte)(ret:1, retry:0)
+[ 6110.587277] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x7006(2 byte), val=0x1000(2 byte)(ret:1, retry:0)
+[ 6110.589156] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a8(2 byte), val=0x2(4 byte)(ret:1, retry:0)
+[ 6110.589662] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a0(2 byte), val=0x60a0(4 byte)(ret:1, retry:0)
+[ 6110.590146] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60a4(2 byte), val=0x3203270(4 byte)(ret:1, retry:0)
+[ 6110.590542] [I2C:2][max9296.c:1122] ch1 Success!! i2c write reg : [0x12] reg=0x60ac(2 byte), val=0x302(2 byte)(ret:1, retry:0)
+[ 6110.590986] [I2C:2][max9296.c:1519] ch1 DMA write success: ap=0x12 reg=0x3270 val=0x0000 attempt=1/3
+[ 6110.590991] [I2C:2][max9296.c:3013] ch1 dual applied success
+[ 6111.599815] [I2C:1][max9296.c:5322] max9296_fsync side fps : 30, low : 32333, high : 1000
+[ 6111.974849] [I2C:2][max9296.c:1122] ch? Success!! i2c write reg : [0x48] reg=0x313(2 byte), val=0x82(1 byte)(ret:1, retry:0)
+[ 6111.974858] [I2C:2][max9296.c:5417] CSI output enabled
+[ 6125.016886] isi-capture 32e02000.isi:cap_device: ISI channel[1] is busy

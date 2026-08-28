@@ -15,11 +15,15 @@
   축소한다. 따라서 640x360 출력이 곧 센서 640x360 readout을 뜻하지 않는다.
 - KEEP에 120 FPS를 요청했을 때 AP/CSI/ISI가 약 113~115 FPS여서 엄격 기준
   118.8 FPS를 통과하지 못했다. caps의 120 표시는 지원 근거가 아니다.
-- AP1302 sensor-mode 0~15를 각각 두 번 hard reset해 측정했지만 full-FOV
-  `SENSOR-640`, `HD-ISP`, `FHD-ISP` 세 프로필을 식별하지 못했다.
-- mode 1/2는 1920x1200 window에 2행/2열 skip+binning을 적용한 약 960x600
-  상당 profile이었다. 전용 640x360 readout이 아니고, 암흑 장면 때문에 FOV도
-  입증하지 못했으므로 production 후보로 선택하지 않았다.
+- AP1302 firmware의 `SENSOR0_CONF_0..7` pointer table을 보드에서 읽은 결과 실제
+  readout mapping은 mode 0/1/2만 존재한다. mode 3~5는 null이고 6/7은 공식 문서상
+  readout mode가 아니라 deselect/select event다. 따라서 과거 mode 3~15 sweep의
+  동일 readback은 독립 profile이 아니라 unmapped/fallback 동작이다.
+- mode 1/2는 1920x1200 full-array window에 2행/2열 skip+binning을 적용한 약
+  960x600 상당 profile이다. mode 1의 640x360@120 host 출력은 KEEP과 같은 약
+  113 FPS로 성능 이득이 없었고, mode 2는 AR0234 monochrome bit를 켜
+  640x360@120 color pipeline의 CSI/ISI 출력이 0 FPS가 됐다. 둘 다 production
+  후보가 아니다.
 - qualification 중단 조건을 적용해 3-case 30/60/120 resource matrix는 실행하지
   않았다. production 기본은 `MAX9296_360P_SENSOR_MODE=KEEP`,
   `MAX9296_360P_MAX_FPS=30`이다. 연구용 candidate builder만 120을 명시한다.
@@ -161,17 +165,19 @@ DDR PMU는 이 보드 커널에서 지원되지 않아 수치를 만들지 않�
 | `gstapp-640x360-30-fps.txt` | `626353f44c27e174d1329ab471004b4162e34d33694c826ebdd5aa4bc97abd93` |
 | `gstapp-640x360-30-resource.txt` | `72d91a6f57d97c060be62cbd85dae108ea9a0676a6d99371c3ba0bafbbaadaee` |
 
-## 6. sensor-mode 후보 스윕
+## 6. sensor-mode 후보 스윕과 firmware mapping 정정
 
 공통 조건은 640x360@30, crop false, dz=100, 동일 gstApp/edgeconf다. 각 후보마다
 module hash를 확인하고 hard reset→prepare→stream-start→deep readback을 두 번
 실행했다. 16개 후보 모두 두 사이클에서 `CONSUMED`, `errno=0`, `match=1`이었다.
 
-| 후보 | AP `SENSOR_MODE` | AR window | odd inc | ch1 base `READ_MODE` | 해석 |
-|---|---|---|---|---|---|
-| KEEP | `0x0000` 유지 | 1920x1080 (`4..1923`, `64..1143`) | 1/1 | `0x0000` | FHD readout + AP 축소 |
-| sm00, sm03~sm15 | `0x2000`, `0x2003..0x200f` | 1920x1200 (`4..1923`, `4..1203`) | 1/1 | `0x0000` | full-array 계열 + AP 변환 |
-| sm01, sm02 | `0x2001`, `0x2002` | 1920x1200 | 3/3 | `0x3020` | 약 960x600 상당 2x skip/bin/sum |
+| 후보 | AP `SENSOR_MODE` | firmware mapping | AR window / sampling | 해석 |
+|---|---|---|---|---|
+| KEEP | `0x0000` 유지 | 현재 context 유지 | 1920x1080, odd-inc 1/1 | FHD readout + AP 축소 |
+| sm00 | `0x2000` | `CONF_0=0xAECC` | 1920x1200, odd-inc 1/1 | firmware mode 0 full-array 계열 |
+| sm01 | `0x2001` | `CONF_1=0xAF10` | 1920x1200, odd-inc 3/3, `READ_MODE=0x3020` | 약 960x600 color subsampling |
+| sm02 | `0x2002` | `CONF_2=0xAF90` | 1920x1200, odd-inc 3/3, `READ_MODE=0x3020` | mode 1 계열 + monochrome bit |
+| sm03~sm15 | `0x2003..0x200f` | readout mapping 없음 | sweep에서 mode 0과 같은 값 관측 | 독립 profile로 해석 금지 |
 
 ch0 `READ_MODE`에는 edgeconf의 hflip 때문에 `0x4000`이 추가된다. sm01/sm02의
 `0x3020`은 [AR0234CS Register Reference](<AND9812-D (AR0234CS RR)=R2_PointImage.pdf>)의
@@ -195,6 +201,22 @@ window/read-mode만으로 full-FOV를 주장할 수 없고 세 요구 profile도
 있지만, MIPI/ISI/gstApp은 둘 다 640x360 출력이므로 workload 차이는 주로 AP1302
 입력 이전에 나타난다. FOV/화질/resource가 검증되지 않은 값을 production mode로
 추정하지 않는다.
+
+후속 firmware table 확인으로 위 sweep의 의미를 정정했다. AP1302 Register
+Reference의 `SENSOR0_CONF_0..7(0x60B0..0x60BE)`는 mode 0~5와
+deselect/select event의 sensor setting table pointer다. 양 AP1302에서 읽은 값은
+다음과 같았다.
+
+```text
+AECC AF10 AF90 0000 0000 0000 0000 A330
+```
+
+즉 mode 0/1/2만 실제 table이 있고 mode 3~5는 null이다. 공식 event 정의상
+index 6/7은 deselect/select이므로 mode 6/7을 readout 후보로 세는 것도 잘못이다.
+index 8~15는 이 mapping table의 범위 밖이다. `0xAF10` table은 AR0234
+`0x3040=0x3020`, `0x30A2=0x0003`, `0x30A6=0x0003`을 설정하고 `0x30B0`
+bit 7을 clear한다. `0xAF90`은 같은 sampling에 bit 7을 set한다. AR0234 Register
+Reference에서 이 bit는 `MONO_CHROME_OPERATION`이다.
 
 ## 7. production 배포 상태와 절차
 
@@ -336,9 +358,96 @@ hard reset했다. 최종 상태는 dual `1280x360`, 30 FPS, crop false,
 
 1. 고정된 16:9 chart 또는 rail 검사 대상과 충분한 조도
 2. full-FOV 기준 KEEP frame
-3. AP1302 firmware sensor-mode table 또는 640x360/1280x720 full-FOV profile
+3. 현재 firmware에 없는 640x360/1280x720 full-FOV vendor profile 또는 새 bootdata
 4. 선택 후보마다 30/60/120 세 번의 hard-reset 반복
 5. raw RGBP와 RTSP image, AP/AR timing, CSI/ISI, CPU/RSS/DDR/온도 동시 수집
 
 이 조건 전에는 mode number, central crop, `dz=300`을 sensor readout의 대체 근거로
 사용하지 않는다.
+
+현재 firmware의 sensor-mode table은 확보했으므로 더 이상 mode 번호를 임의로
+sweep할 필요가 없다. 다음 시험은 vendor가 생성한 coherent AP1302 bootdata에서
+16:9 color profile, AP1302 output timing과 MIPI 설정이 함께 제공될 때 재개한다.
+
+## 9. issue #41 firmware/readout 120 FPS 비교
+
+### 9.1 시험 구성
+
+2026-08-29 KST에 driver `809d582`에서 빌드한 exact KEEP/SM01/SM02 module만
+사용했다. 공통 조건은 dual ch0/ch1, 카메라당 640x360, 요청 120 FPS,
+`crop_enable=false`, `dz=100`, 양 채널 AE auto다. 각 case는 module/JSON 설치,
+`depmod`, hard reset, 20초 `cam_fps_stack.sh`, 20초 resource 측정 순서로 실행했다.
+
+재현 runner `tools/run_360p_readout_compare.sh`는 시험 전 module과 edgeconf를 새로
+백업하고, 정상/실패 어느 경우에도 EXIT trap에서 원본 설치, `depmod`, hard reset,
+hash와 시험 전 active/inactive service 상태의 exact 복구 확인까지 수행한다.
+AR0234 `0x30B0` DMA read는 부가 진단이며 core FPS/resource 측정 뒤 실행한다. 도구가
+없거나 실행 불가이면 `SKIP`, 실행 중 오류이면 `FAIL`을 기록하되 core 비교는
+계속한다. 첫 실행에서 이 부가 read가 `DMA_CTRL=0x0032`에 머문 것을 필수 실패로
+처리했던 문제는, 기존 계측 도구의 optional 정책과 맞춰 non-fatal로 수정하고
+failure-injection 회귀 테스트를 추가했다.
+
+### 9.2 FPS 결과
+
+| case | sensor ch0/ch1 | AP HINF ch0/ch1 | CSI ch0/ch1 | ISI ch0/ch1 | 판정 |
+|---|---:|---:|---:|---:|---|
+| KEEP | 113.3 / 119.3 | 113.8 / 113.8 | 113.6 / 113.3 | 113.7 / 113.3 | FAIL, 약 113 FPS |
+| SM01 | 113.2 / 118.9 | 113.7 / 113.8 | 113.2 / 112.8 | 113.2 / 112.8 | FAIL, KEEP 대비 이득 없음 |
+| SM02 | 107.9 / 61.4 | 106.7 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | FAIL, video output 없음 |
+
+KEEP ch0 sensor 평균에는 AP1302 `R0x00FC`의 알려진 half-rate 표본이 섞였다.
+production 판정은 두 채널에서 일관된 AP/CSI/ISI 약 113 FPS를 기준으로 한다.
+SM01의 AR0234 timing은 ch0/ch1 frame length 1217/1181 lines, 이론값
+120.84/124.52 FPS였지만 AP 이후 출력은 KEEP과 같았다. 따라서 sensor sample 수를
+줄여도 현재 병목 또는 AP1302 output pacing은 개선되지 않는다.
+
+SM02의 AR window와 odd increment는 SM01과 같지만 `0x30B0=0x00A8`로
+`MONO_CHROME_OPERATION` bit가 켜졌다. KEEP/SM01은 `0x0028`이다. 현재 RGB color
+firmware/transport 구성에서 SM02는 CSI와 ISI가 모두 0 FPS이므로 CPU 감소값을
+성능 개선으로 해석할 수 없다.
+
+### 9.3 resource와 transport
+
+| case | gstApp RSS before→after | process ticks | system CPU | CPU/SOC 온도 | 유효성 |
+|---|---:|---:|---:|---|---|
+| KEEP | 34,900→37,840 KiB | 1,237 | 30.3% | 58/60→57/59 °C | 유효 |
+| SM01 | 35,180→35,708 KiB | 1,249 | 30.6% | 58/60→57/59 °C | 유효, 차이 없음 |
+| SM02 | 31,672→31,672 KiB | 2 | 13.5% | 56/59→56/58 °C | 0 FPS라 비교 무효 |
+
+세 case 모두 측정 구간 dmesg의 overflow/CRC/ECC/lost-frame/timeout/green keyword는
+0이었다. gstApp이 `/dev/video4`를 점유해 resource tool의 별도 `v4l2-ctl` format
+조회는 `EBUSY`였으므로 해당 줄은 unknown이다. 같은 실행의 FPS tool과 media graph는
+active dual `1280x360@1/120`, AP context 카메라당 640x360을 독립적으로 기록했다.
+
+### 9.4 복구와 결론
+
+runner 종료 결과는 다음과 같다.
+
+```text
+RESTORE_RESULT module=PASS edgeconf=PASS reset=PASS service=active
+```
+
+독립 readback에서도 module SHA-256
+`b27ae021fe4cb569ed6264712fabebb2a6b2cb6f5ab27278aebdb4113e09fc33`,
+edgeconf SHA-256
+`eba521544a39d0a8ab79786e1d5b7a7c06357942a5d94c61691531960e53654f`,
+service active, `SENSOR_MODE=0x0000`을 확인했다. 최종 설정은 640x360@30,
+crop false, dz=100이다.
+
+원시 증적은
+`artifacts/board-20260828-qualification/issue41-readout-809d582/run2/`에 보존한다.
+핵심 파일 hash는 다음과 같다.
+
+| evidence | SHA-256 |
+|---|---|
+| `keep-fps.txt` | `c2857deddc53977bcf43bb656bcc5ff19f00566f0c46b735f8b2d0a38cc5979f` |
+| `sm01-fps.txt` | `a2a556786d500934a5aeaf9b0547af73f67b2a823132076df59c22943aa9f316` |
+| `sm02-fps.txt` | `2b1decf6372e86aaa49957c2b1c1f76af66b5795caae4659ac6cb09f2c62ad76` |
+| `keep-resource.txt` | `610208c1cdba840d226e92287589937aaf8d759800761ddd6688c50dac33ce4d` |
+| `sm01-resource.txt` | `56a6693d3795e64b9e2134a1eeef7ed2b02edf3674471c4ddbeaaee614d206b9` |
+| `sm02-resource.txt` | `d185651a60843adf6fe1ed24cd1b2b6591e58c954bcc756e015abb93376a0afb` |
+
+현재 firmware로는 native/exact 640x360 sensor readout과 엄격 120 FPS를 달성하지
+못했다. production은 KEEP + AP1302 scale @30을 유지하며, 다음 단계는 host에서
+AR0234 register를 덮어쓰는 것이 아니라 vendor AP1302 bootdata에 16:9 color
+subsample profile과 일관된 output/MIPI timing을 함께 추가하는 것이다.

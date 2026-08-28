@@ -1,0 +1,9 @@
+[cam_ap1302_dma_verify.sh] channel=0 i2c_line=2 ap1302=0x11 mode=dual source=edgeconf port=0 sensor_reg=0x30b0
+[cam_ap1302_dma_verify.sh] sensor_sip_reg=0x604a raw=0x0000f320 sensor_id=0x10 addr_16=1 data_16=1 data_size=2
+[cam_ap1302_dma_verify.sh] sipm_err_before err0=0x0000 err1=0x0000
+[cam_ap1302_dma_verify.sh] read-before dma_src=0x032030b0 dma_ctrl=0x0032 raw_dst=0x00a860a4 value=0x00a8
+[cam_ap1302_dma_verify.sh] channel=1 i2c_line=2 ap1302=0x12 mode=dual source=edgeconf port=0 sensor_reg=0x30b0
+[cam_ap1302_dma_verify.sh] sensor_sip_reg=0x604a raw=0x0000f320 sensor_id=0x10 addr_16=1 data_16=1 data_size=2
+[cam_ap1302_dma_verify.sh] sipm_err_before err0=0x0000 err1=0x0000
+[cam_ap1302_dma_verify.sh] read-before dma_src=0x032030b0 dma_ctrl=0x0032 raw_dst=0x00a860a4 value=0x00a8
+AR30B0_RESULT status=PASS

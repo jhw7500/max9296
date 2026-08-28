@@ -1,0 +1,4 @@
+# Preserve target-board text captures byte-for-byte; several vendor tools emit
+# padded fields and trailing spaces that are part of the hashed raw evidence.
+artifacts/board-*/**/*.txt whitespace=-blank-at-eol
+artifacts/board-*/**/*.log whitespace=-blank-at-eol
