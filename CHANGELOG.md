@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - health exporter 22건, probe cleanup, parallel prepare, 360p/노출/공통 줌,
   후보 빌드 17건, FPS/readback, resource capability, UYVY 무결성 테스트 통과.
 - i.MX8 BSP 5.10.35 크로스 빌드 성공(`max9296.ko`, srcversion
-  `68131114AE7814E21E6BCE6`).
+  `C69E103F05DEFDEAAC3E3BB`).
 
 ## [2.8] - 2026-08-27
 
