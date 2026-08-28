@@ -1,0 +1,17 @@
+#!/bin/bash
+set -eu
+
+out=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out=$2; shift 2 ;;
+        --) shift; break ;;
+        *) shift ;;
+    esac
+done
+"$@"
+cat >"$out" <<'EOF'
+1000,,imx8_ddr0/cycles/,1,100.00,
+2000,,imx8_ddr0/read-cycles/,1,100.00,
+3000,,imx8_ddr0/write-cycles/,1,100.00,
+EOF

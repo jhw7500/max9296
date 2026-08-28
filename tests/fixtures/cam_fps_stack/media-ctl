@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+fmt=${CAM_FPS_STACK_TEST_FMT:?CAM_FPS_STACK_TEST_FMT is required}
+
+printf '%s\n' \
+    '- entity 61: max9296 2-0048 (1 pad, 1 link)' \
+    '             type V4L2 subdev subtype Sensor flags 0' \
+    '             device node name /dev/v4l-subdev2' \
+    '    pad0: Source' \
+    "        [fmt:UYVY8_2X8/${fmt} field:unknown]"

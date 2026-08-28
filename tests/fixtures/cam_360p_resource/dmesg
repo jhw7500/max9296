@@ -1,0 +1,18 @@
+#!/bin/bash
+set -eu
+
+state=${CAM_360P_RESOURCE_TEST_STATE:?}
+count_file="$state/dmesg-count"
+count=0
+[ -f "$count_file" ] && count=$(cat "$count_file")
+printf '%s\n' $((count + 1)) >"$count_file"
+printf '%s\n' '[0.0] boot complete'
+if [ "$count" -gt 0 ]; then
+    printf '%s\n' \
+        '[1.0] overflow sample' \
+        '[1.1] crc sample' \
+        '[1.2] ecc sample' \
+        '[1.3] lost frame sample' \
+        '[1.4] timeout sample' \
+        '[1.5] green sample'
+fi

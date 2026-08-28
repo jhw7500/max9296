@@ -1,0 +1,17 @@
+#!/bin/bash
+set -eu
+
+if [ -z "${CAM_FPS_STACK_TEST_STATE:-}" ]; then
+    exec /bin/date "$@"
+fi
+state=$CAM_FPS_STACK_TEST_STATE
+addresses=${CAM_FPS_STACK_TEST_ADDR_COUNT:-1}
+count_file="$state/date-count"
+count=0
+[ -f "$count_file" ] && count=$(cat "$count_file")
+printf '%s\n' $((count + 1)) >"$count_file"
+if [ "$count" -lt "$addresses" ]; then
+    printf '%s\n' 1000000000
+else
+    printf '%s\n' 2000000000
+fi

@@ -1,0 +1,8 @@
+#!/bin/sh
+cat <<'EOF'
+Format Video Capture Multiplanar:
+        Width/Height      : 640/360
+        Pixel Format      : 'UYVY'
+        Bytes per Line    : 1280
+        Size Image        : 460800
+EOF
