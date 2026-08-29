@@ -76,6 +76,7 @@ gstApp 브랜치: `feature/max9296-360p-zoom` (`895d1f2`)
 
 ## 정본 문서와 후속 작업
 
+- 상부 보고 자료: `docs/reports/2026-08-29-max9296-camera-executive-report.md`
 - 전체 판정과 수치: `docs/360p-readout-120fps-validation.md`
 - 설계 계약: `docs/superpowers/specs/2026-08-28-max9296-360p-readout-120fps-design.md`
 - V4L2/edgeconf 사용법: `docs/v4l2-controls-guide.md`
