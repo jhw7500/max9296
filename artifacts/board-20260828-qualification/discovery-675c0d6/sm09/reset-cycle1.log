@@ -1,0 +1,24 @@
+[0] cam-operate 정지
+[1] 모듈 해제
+    - imx8-media-dev rmmod OK
+    - max9296 rmmod OK
+[2] SoC 드라이버 unbind (capture -> m2m -> isi -> csi2)
+    - isi-capture: 32e00000.isi:cap_device OK
+    - isi-capture: 32e02000.isi:cap_device OK
+    - isi-m2m: 32e00000.isi:m2m_device OK
+    - mxc-isi: 32e00000.isi OK
+    - mxc-isi: 32e02000.isi OK
+    - mxc-mipi-csi2-sam: 32e40000.csi OK
+    - mxc-mipi-csi2-sam: 32e50000.csi OK
+[3] SoC 드라이버 bind (csi2 -> isi -> 자식 자동)
+    - mxc-mipi-csi2-sam: 32e40000.csi OK
+    - mxc-mipi-csi2-sam: 32e50000.csi OK
+    - mxc-isi: 32e00000.isi OK
+    - mxc-isi: 32e02000.isi OK
+[4] 모듈 재적재
+[5] 검증
+    video 노드: video0 video1 video2 video3 video4
+    모듈: imx8_media_dev max9296 
+[6] cam-operate 기동
+    cam-operate: active, gstApp: 512794
+하드 리셋 완료 (CSI2 + ISI 재바인드 포함)

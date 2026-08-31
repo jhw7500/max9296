@@ -1,0 +1,29 @@
+{
+  "cam_width": 640,
+  "cam_height": 360,
+  "fps": 30,
+  "i2c2": {
+    "crop_enable": false,
+    "dz": 100,
+    "ch0": {
+      "dz_x": 32768,
+      "dz_y": 32768
+    },
+    "ch1": {
+      "dz_x": 32768,
+      "dz_y": 32768
+    }
+  },
+  "i2c1": {
+    "crop_enable": false,
+    "dz": 100,
+    "ch2": {
+      "dz_x": 32768,
+      "dz_y": 32768
+    },
+    "ch3": {
+      "dz_x": 32768,
+      "dz_y": 32768
+    }
+  }
+}

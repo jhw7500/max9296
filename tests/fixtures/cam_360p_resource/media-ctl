@@ -1,0 +1,2 @@
+#!/bin/sh
+printf '%s\n' 'fixture media graph: max9296 -> mxc-isi'

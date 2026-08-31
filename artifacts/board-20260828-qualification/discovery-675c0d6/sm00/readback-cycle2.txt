@@ -1,0 +1,59 @@
+gstApp: 376359 gstApp -d 11 -m 4
+ch01 = /dev/video4  포맷 1280x360@1/30  모드 dual  AP1302 [0x11 0x12]
+관측 1초 / 1초 간격
+
+### [ch01/ch0] AP1302 preview context (0x11)
+  WIDTH=640 HEIGHT=360 ROI=0/0/16384/16384 ASPECT=0x1000 SENSOR_MODE=0x2000 LINE_TIME=0x0000 MAX_FPS=30.000
+AP_CONTEXT case=sm00-cycle2-30 channel=ch0 addr=0x11 width=640 height=360 roi_x0=0 roi_y0=0 roi_x1=16384 roi_y1=16384 aspect=0x1000 sensor_mode=0x2000 line_time=0x0000 max_fps=30.000
+### [ch01/ch0] AR0234 레지스터 직접 읽기 (AP1302 DMA, 채널 0)
+  CHIP_VERSION(0x3000)            = 0x0a56 (AR0234 확인)
+  Y_ADDR_START(0x3002)             = 0x0004
+  X_ADDR_START(0x3004)             = 0x0004
+  Y_ADDR_END(0x3006)               = 0x04b3
+  X_ADDR_END(0x3008)               = 0x0783
+  FRAME_LENGTH_LINES(0x300A)      = 0x12f1
+  LINE_LENGTH_PCK(0x300C)         = 0x0264
+  COARSE_INTEGRATION_TIME(0x3012) = 0x0125
+  READ_MODE(0x3040)                = 0x4000
+AR_TIMING case=sm00-cycle2-30 channel=ch0 x_start=0x0004 y_start=0x0004 x_end=0x0783 y_end=0x04b3 frame_length=0x12f1 line_length=0x0264 read_mode=0x4000 exposure=0x0125
+  → pixel clock 90.0 MHz, 라인시간 6.80 us
+  → 이론 프레임레이트 = 90000000 / (4849 x 612) = 30.33 fps
+  → 노출 = 293 x 6.80 us = 1992 us
+
+### [ch01/ch1] AP1302 preview context (0x12)
+  WIDTH=640 HEIGHT=360 ROI=0/0/16384/16384 ASPECT=0x1000 SENSOR_MODE=0x2000 LINE_TIME=0x0000 MAX_FPS=30.000
+AP_CONTEXT case=sm00-cycle2-30 channel=ch1 addr=0x12 width=640 height=360 roi_x0=0 roi_y0=0 roi_x1=16384 roi_y1=16384 aspect=0x1000 sensor_mode=0x2000 line_time=0x0000 max_fps=30.000
+### [ch01/ch1] AR0234 레지스터 직접 읽기 (AP1302 DMA, 채널 1)
+  CHIP_VERSION(0x3000)            = 0x0a56 (AR0234 확인)
+  Y_ADDR_START(0x3002)             = 0x0004
+  X_ADDR_START(0x3004)             = 0x0004
+  Y_ADDR_END(0x3006)               = 0x04b3
+  X_ADDR_END(0x3008)               = 0x0783
+  FRAME_LENGTH_LINES(0x300A)      = 0x12f3
+  LINE_LENGTH_PCK(0x300C)         = 0x0264
+  COARSE_INTEGRATION_TIME(0x3012) = 0x0125
+  READ_MODE(0x3040)                = 0x0000
+AR_TIMING case=sm00-cycle2-30 channel=ch1 x_start=0x0004 y_start=0x0004 x_end=0x0783 y_end=0x04b3 frame_length=0x12f3 line_length=0x0264 read_mode=0x0000 exposure=0x0125
+  → pixel clock 90.0 MHz, 라인시간 6.80 us
+  → 이론 프레임레이트 = 90000000 / (4851 x 612) = 30.32 fps
+  → 노출 = 293 x 6.80 us = 1992 us
+
+경과   | 대상      | 센서   | ISP출력 | CSI2     | ISI      | 구간별 증감
+---------+-------------+----------+----------+----------+----------+-------------------------
+1s       | ch0 (0x11)  |     30.0 |     29.7 |     28.8 |     28.8 | 센서→ISP -1%  ISP→CSI2 -3%  CSI2→ISI +0%
+1s       | ch1 (0x12)  |     29.9 |     29.6 |     27.0 |     27.0 | 센서→ISP -1%  ISP→CSI2 -9%  CSI2→ISI +0%
+---------+-------------+----------+----------+----------+----------+-------------------------
+평균       | ch0 (0x11)  |     30.0 |     29.7 |     28.8 |     28.8 |
+평균       | ch1 (0x12)  |     29.9 |     29.6 |     27.0 |     27.0 |
+
+### ch01 / ch0 (AP1302 0x11) 판정
+  전 구간 손실 없음 (최대 낙차 3.0%, 센서~CSI2 기준)
+FPS_RESULT case=sm00-cycle2-30 requested=30 channel=ch0 sensor=30.0 isp=29.7 csi=28.8 isi=28.8 loss_pct=3.0 isi_trust=1 pass120=0
+
+### ch01 / ch1 (AP1302 0x12) 판정
+  최대 낙차: ISP → CSI2 (GMSL/디시리얼라이저) 구간에서 9% 손실
+FPS_RESULT case=sm00-cycle2-30 requested=30 channel=ch1 sensor=29.9 isp=29.6 csi=27.0 isi=27.0 loss_pct=8.8 isi_trust=1 pass120=0
+
+센서=AP1302 R0x00FC 역수 / ISP=R0x0002 HINF_FRAME_CNT 델타 / CSI2=csi IRQ÷2 / ISI=isi IRQ
+레이트는 sleep 값이 아니라 실제 경과시간으로 나눈 값입니다.
+ch01 는 듀얼 모드입니다. 두 카메라 영상이 하나의 넓은 프레임으로 합쳐지므로 CSI2/ISI 열은 두 행이 같은 값을 공유합니다.

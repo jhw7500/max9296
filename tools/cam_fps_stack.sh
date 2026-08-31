@@ -55,6 +55,8 @@
 #     -d, --duration N               총 관측 시간(초). 기본 20
 #     -i, --interval N               샘플 간격(초). 기본 2
 #     -D, --deep                     AR0234 레지스터를 직접 읽어 교차검증 (시작 시 1회)
+#     -L, --label CASE               측정 Case 이름(추론하지 않고 결과에 그대로 기록)
+#     -R, --requested-fps N           요청 FPS. 120 엄격 판정에 사용
 #     -h, --help
 #
 # 예:
@@ -68,7 +70,10 @@ CHANNEL=auto
 DURATION=20
 INTERVAL=2
 DEEP=0
-DMA_TOOL=/opt/pim/bin/cam_ap1302_dma_verify.sh
+CASE_LABEL=UNLABELED
+REQUESTED_FPS=0
+DMA_TOOL=${CAM_FPS_STACK_DMA_TOOL:-/opt/pim/bin/cam_ap1302_dma_verify.sh}
+IRQ_FILE=${CAM_FPS_STACK_IRQ_FILE:-/proc/interrupts}
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -85,6 +90,14 @@ while [ $# -gt 0 ]; do
 		shift
 		;;
 	-D | --deep) DEEP=1 ;;
+	-L | --label)
+		CASE_LABEL="$2"
+		shift
+		;;
+	-R | --requested-fps)
+		REQUESTED_FPS="$2"
+		shift
+		;;
 	-h | --help)
 		sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
@@ -103,6 +116,23 @@ case "$CHANNEL" in auto | ch01 | ch23 | both) ;; *)
 	;;
 esac
 
+case "$DURATION:$INTERVAL:$REQUESTED_FPS" in
+*[^0-9:]*)
+	echo "duration, interval, requested-fps는 음이 아닌 정수여야 합니다." >&2
+	exit 1
+	;;
+esac
+[ "$INTERVAL" -gt 0 ] || {
+	echo "interval은 1 이상이어야 합니다." >&2
+	exit 1
+}
+case "$CASE_LABEL" in
+*[!A-Za-z0-9._-]* | '')
+	echo "label은 영문자, 숫자, '.', '_', '-'만 사용할 수 있습니다: $CASE_LABEL" >&2
+	exit 1
+	;;
+esac
+
 # ch01 = i2c2(adapter 2), video4, mxc_isi.1 / mxc-mipi-csi2.1, DMA 채널 0
 # ch23 = i2c1(adapter 1), video3, mxc_isi.0 / mxc-mipi-csi2.0, DMA 채널 2
 bus_of() { case "$1" in ch01) echo 2 ;; ch23) echo 1 ;; esac }
@@ -117,9 +147,9 @@ cam_hi() { case "$1" in ch01) echo ch1 ;; ch23) echo ch3 ;; esac }
 dma_lo() { case "$1" in ch01) echo 0 ;; ch23) echo 2 ;; esac }
 dma_hi() { case "$1" in ch01) echo 1 ;; ch23) echo 3 ;; esac }
 
-NCPU=$(nproc 2>/dev/null || echo 4)
+NCPU=${CAM_FPS_STACK_NCPU:-$(nproc 2>/dev/null || echo 4)}
 irq_of() {
-	awk -v d="$1" -v n="$NCPU" '$NF==d { s=0; for (i=2; i<=n+1; i++) s+=$i; print s+0; exit }' /proc/interrupts
+	awk -v d="$1" -v n="$NCPU" '$NF==d { s=0; for (i=2; i<=n+1; i++) s+=$i; print s+0; exit }' "$IRQ_FILE"
 }
 now_ns() { date +%s%N; }
 
@@ -127,6 +157,8 @@ ap_rd() { # $1=bus $2=addr $3=hi $4=lo $5=len
 	i2ctransfer -f -y -a "$1" "w2@$2" "$3" "$4" "r$5" 2>/dev/null | sed 's/0x//g' | tr -d ' '
 }
 hex2dec() { [ -n "${1:-}" ] && printf '%d' "$((16#$1))" || echo ""; }
+hex16_fmt() { [ -n "${1:-}" ] && printf '0x%04x' "$((16#$1))" || echo "?"; }
+fixed8_fmt() { [ -n "${1:-}" ] && awk -v raw="$((16#$1))" 'BEGIN{printf "%.3f", raw/256.0}' || echo "?"; }
 
 streaming() {
 	local a b
@@ -138,15 +170,17 @@ streaming() {
 
 fmt_of() { media-ctl -p 2>/dev/null | grep -A4 "entity.*$(sub_of "$1")" | grep -oE '[0-9]+x[0-9]+@1/[0-9]+' | head -1; }
 
-# 듀얼 판정. 드라이버와 같은 기준(폭 2560/3840 = 듀얼 모드 테이블)을 1차로 쓴다.
-#   max9296.c:1966  dual = (MAX9296_MODE_2560x720 || MAX9296_MODE_3840x1080)
+# 듀얼 판정. 드라이버의 듀얼 모드 튜플과 같은 기준을 1차로 쓴다.
+#   1280x360(채널당 640x360), 2560x720, 3840x1080
 # 폭을 못 읽을 때만 0x11 응답으로 보조 판정한다. 스트리밍이 없으면 AP1302 가
 # 응답하지 않아 0x11 만으로는 듀얼을 단일로 오판하기 때문이다.
 is_dual() {
-	local w
-	w=$(fmt_of "$1" | cut -dx -f1)
-	if [ -n "$w" ] && [ "$w" -ge 2560 ] 2>/dev/null; then return 0; fi
-	if [ -n "$w" ]; then return 1; fi
+	local fmt
+	fmt=$(fmt_of "$1")
+	case "$fmt" in
+	1280x360@* | 2560x720@* | 3840x1080@*) return 0 ;;
+	?*) return 1 ;;
+	esac
 	[ -n "$(ap_rd "$(bus_of "$1")" 0x11 0x00 0x02 2)" ]
 }
 
@@ -191,8 +225,10 @@ for c in $CHANS; do
 done
 echo "관측 ${DURATION}초 / ${INTERVAL}초 간격"
 
-WRAP_LIMIT=$((INTERVAL * 60))
-[ "$WRAP_LIMIT" -gt 200 ] && echo "경고: interval ${INTERVAL}초는 60fps 에서 HINF_FRAME_CNT(8비트) 가 순환할 수 있습니다. 4초 이하 권장." >&2
+WRAP_FPS=$REQUESTED_FPS
+[ "$WRAP_FPS" -gt 0 ] || WRAP_FPS=60
+WRAP_LIMIT=$((INTERVAL * WRAP_FPS))
+[ "$WRAP_LIMIT" -gt 240 ] && echo "경고: interval ${INTERVAL}초는 ${WRAP_FPS}fps 에서 HINF_FRAME_CNT(8비트) 가 두 번 이상 순환할 수 있습니다. interval을 줄이십시오." >&2
 
 # ------------------------------------------------------ --deep: AR0234 직접
 if [ "$DEEP" -eq 1 ]; then
@@ -203,6 +239,30 @@ if [ "$DEEP" -eq 1 ]; then
 		i=0
 		for lab in "${labs[@]}"; do
 			echo
+			AP_WIDTH=$(hex2dec "$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x00 2)")
+			AP_HEIGHT=$(hex2dec "$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x02 2)")
+			AP_ROI_X0=$(hex2dec "$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x04 2)")
+			AP_ROI_Y0=$(hex2dec "$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x06 2)")
+			AP_ROI_X1=$(hex2dec "$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x08 2)")
+			AP_ROI_Y1=$(hex2dec "$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x0a 2)")
+			AP_ASPECT_RAW=$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x0c 2)
+			AP_SENSOR_MODE_RAW=$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x14 2)
+			AP_LINE_TIME_RAW=$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x1c 2)
+			AP_MAX_FPS_RAW=$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x20 0x20 2)
+			AP_ASPECT=$(hex16_fmt "$AP_ASPECT_RAW")
+			AP_SENSOR_MODE=$(hex16_fmt "$AP_SENSOR_MODE_RAW")
+			AP_LINE_TIME=$(hex16_fmt "$AP_LINE_TIME_RAW")
+			AP_MAX_FPS_FMT=$(fixed8_fmt "$AP_MAX_FPS_RAW")
+			echo "### [$c/$lab] AP1302 preview context (${adrs[$i]})"
+			printf '  WIDTH=%s HEIGHT=%s ROI=%s/%s/%s/%s ASPECT=%s SENSOR_MODE=%s LINE_TIME=%s MAX_FPS=%s\n' \
+				"${AP_WIDTH:-?}" "${AP_HEIGHT:-?}" "${AP_ROI_X0:-?}" "${AP_ROI_Y0:-?}" \
+				"${AP_ROI_X1:-?}" "${AP_ROI_Y1:-?}" "$AP_ASPECT" "$AP_SENSOR_MODE" \
+				"$AP_LINE_TIME" "$AP_MAX_FPS_FMT"
+			printf 'AP_CONTEXT case=%s channel=%s addr=%s width=%s height=%s roi_x0=%s roi_y0=%s roi_x1=%s roi_y1=%s aspect=%s sensor_mode=%s line_time=%s max_fps=%s\n' \
+				"$CASE_LABEL" "$lab" "${adrs[$i]}" "${AP_WIDTH:-?}" "${AP_HEIGHT:-?}" \
+				"${AP_ROI_X0:-?}" "${AP_ROI_Y0:-?}" "${AP_ROI_X1:-?}" "${AP_ROI_Y1:-?}" \
+				"$AP_ASPECT" "$AP_SENSOR_MODE" "$AP_LINE_TIME" "$AP_MAX_FPS_FMT"
+
 			echo "### [$c/$lab] AR0234 레지스터 직접 읽기 (AP1302 DMA, 채널 ${dchs[$i]})"
 			if [ ! -x "$DMA_TOOL" ]; then
 				echo "  $DMA_TOOL 없음 - 건너뜀"
@@ -217,14 +277,32 @@ if [ "$DEEP" -eq 1 ]; then
 				i=$((i + 1))
 				continue
 			fi
+			YS=$(rd_ar 0x3002)
+			XS=$(rd_ar 0x3004)
+			YE=$(rd_ar 0x3006)
+			XE=$(rd_ar 0x3008)
 			FLL=$(rd_ar 0x300A)
 			LLP=$(rd_ar 0x300C)
 			CIT=$(rd_ar 0x3012)
+			READ_MODE=$(rd_ar 0x3040)
+			X_ODD_INC=$(rd_ar 0x30A2)
+			Y_ODD_INC=$(rd_ar 0x30A6)
 			PF=$(hex2dec "$(ap_rd "$(bus_of "$c")" "${adrs[$i]}" 0x00 0x78 4)")
 			printf '  CHIP_VERSION(0x3000)            = %s %s\n' "$ID" "$([ "$ID" = "0x0a56" ] && echo '(AR0234 확인)')"
+			printf '  Y_ADDR_START(0x3002)             = %s\n' "${YS:-?}"
+			printf '  X_ADDR_START(0x3004)             = %s\n' "${XS:-?}"
+			printf '  Y_ADDR_END(0x3006)               = %s\n' "${YE:-?}"
+			printf '  X_ADDR_END(0x3008)               = %s\n' "${XE:-?}"
 			printf '  FRAME_LENGTH_LINES(0x300A)      = %s\n' "${FLL:-?}"
 			printf '  LINE_LENGTH_PCK(0x300C)         = %s\n' "${LLP:-?}"
 			printf '  COARSE_INTEGRATION_TIME(0x3012) = %s\n' "${CIT:-?}"
+			printf '  READ_MODE(0x3040)                = %s\n' "${READ_MODE:-?}"
+			printf '  X_ODD_INC(0x30A2)                = %s\n' "${X_ODD_INC:-?}"
+			printf '  Y_ODD_INC(0x30A6)                = %s\n' "${Y_ODD_INC:-?}"
+			printf 'AR_TIMING case=%s channel=%s x_start=%s y_start=%s x_end=%s y_end=%s frame_length=%s line_length=%s x_odd_inc=%s y_odd_inc=%s read_mode=%s exposure=%s\n' \
+				"$CASE_LABEL" "$lab" "${XS:-?}" "${YS:-?}" "${XE:-?}" "${YE:-?}" \
+				"${FLL:-?}" "${LLP:-?}" "${X_ODD_INC:-?}" "${Y_ODD_INC:-?}" \
+				"${READ_MODE:-?}" "${CIT:-?}"
 			if [ -n "$FLL" ] && [ -n "$LLP" ] && [ -n "$PF" ] && [ "$PF" -gt 0 ]; then
 				awk -v f="$((FLL))" -v l="$((LLP))" -v cc="$((CIT))" -v pf="$PF" 'BEGIN{
 					px = pf/65536.0*1e6
@@ -246,7 +324,7 @@ printf '%-8s | %-11s | %-8s | %-8s | %-8s | %-8s | %s\n' "경과" "대상" "센�
 echo "$LINE"
 
 # ---------------------------------------------------------------- 샘플 루프
-declare -A PH PT PC PI SUM_S SUM_P SUM_C SUM_I N ISI_SUSPECT ISI_RATIO
+declare -A PH PT PC PI SUM_S SUM_P SUM_C SUM_I N N_S N_P ISI_SUSPECT ISI_RATIO
 for c in $CHANS; do
 	PC[$c]=$(irq_of "$(csi_of "$c")")
 	PI[$c]=$(irq_of "$(isi_of "$c")")
@@ -261,6 +339,8 @@ for c in $CHANS; do
 		SUM_C[$k]=0
 		SUM_I[$k]=0
 		N[$k]=0
+		N_S[$k]=0
+		N_P[$k]=0
 	done
 done
 
@@ -319,8 +399,14 @@ while [ "$T" -lt "$DURATION" ]; do
 				printf "%.1f %.1f %.1f %.1f %s", sen, isp, csi, isi, l
 			}')"
 
-			[ "${TF:-0}" -gt 0 ] 2>/dev/null && SUM_S[$k]=$(awk -v x="${SUM_S[$k]}" -v y="$S" 'BEGIN{print x+y}')
-			[ "$DP" -ge 0 ] && SUM_P[$k]=$(awk -v x="${SUM_P[$k]}" -v y="$P" 'BEGIN{print x+y}')
+			if [ "${TF:-0}" -gt 0 ] 2>/dev/null; then
+				SUM_S[$k]=$(awk -v x="${SUM_S[$k]}" -v y="$S" 'BEGIN{print x+y}')
+				N_S[$k]=$((N_S[$k] + 1))
+			fi
+			if [ "$DP" -ge 0 ]; then
+				SUM_P[$k]=$(awk -v x="${SUM_P[$k]}" -v y="$P" 'BEGIN{print x+y}')
+				N_P[$k]=$((N_P[$k] + 1))
+			fi
 			SUM_C[$k]=$(awk -v x="${SUM_C[$k]}" -v y="$CC2" 'BEGIN{print x+y}')
 			SUM_I[$k]=$(awk -v x="${SUM_I[$k]}" -v y="$II" 'BEGIN{print x+y}')
 			N[$k]=$((N[$k] + 1))
@@ -345,13 +431,17 @@ for c in $CHANS; do
 	for a in ${ADDRS[$c]}; do
 		k="$c/$a"
 		n=${N[$k]}
+		ns=${N_S[$k]}
+		np=${N_P[$k]}
 		[ "$n" -eq 0 ] && {
 			li=$((li + 1))
 			continue
 		}
-		awk -v tag="${labs[$li]} ($a)" -v n="$n" -v s="${SUM_S[$k]}" -v p="${SUM_P[$k]}" \
+		awk -v tag="${labs[$li]} ($a)" -v n="$n" -v ns="$ns" -v np="$np" \
+			-v s="${SUM_S[$k]}" -v p="${SUM_P[$k]}" \
 			-v cc="${SUM_C[$k]}" -v ii="${SUM_I[$k]}" 'BEGIN{
-			printf "%-8s | %-11s | %8.1f | %8.1f | %8.1f | %8.1f |\n", "평균", tag, s/n, p/n, cc/n, ii/n
+			sensor=(ns>0) ? s/ns : -1; isp=(np>0) ? p/np : -1
+			printf "%-8s | %-11s | %8.1f | %8.1f | %8.1f | %8.1f |\n", "평균", tag, sensor, isp, cc/n, ii/n
 		}'
 		li=$((li + 1))
 	done
@@ -363,15 +453,17 @@ for c in $CHANS; do
 	for a in ${ADDRS[$c]}; do
 		k="$c/$a"
 		n=${N[$k]}
+		ns=${N_S[$k]}
+		np=${N_P[$k]}
 		[ "$n" -eq 0 ] && {
 			li=$((li + 1))
 			continue
 		}
 		echo
 		echo "### $c / ${labs[$li]} (AP1302 $a) 판정"
-		awk -v n="$n" -v s="${SUM_S[$k]}" -v p="${SUM_P[$k]}" -v cc="${SUM_C[$k]}" -v ii="${SUM_I[$k]}" \
+		awk -v n="$n" -v ns="$ns" -v np="$np" -v s="${SUM_S[$k]}" -v p="${SUM_P[$k]}" -v cc="${SUM_C[$k]}" -v ii="${SUM_I[$k]}" \
 			-v sus="${ISI_SUSPECT[$c]}" -v rr="${ISI_RATIO[$c]}" 'BEGIN{
-			sen=s/n; isp=p/n; csi=cc/n; isi=ii/n
+			sen=(ns>0) ? s/ns : -1; isp=(np>0) ? p/np : -1; csi=cc/n; isi=ii/n
 			if (csi < 0.5 && (sus || isi < 0.5)) {
 				printf "  스트리밍 없음 - 프레임이 흐르지 않습니다\n"
 				if (sen > 0.5) printf "  (센서는 %.1f fps 로 돌고 있으나 ISP 출력이 없습니다)\n", sen
@@ -391,6 +483,20 @@ for c in $CHANS; do
 				printf "  ! ISI 열 제외: csi/isi 원시 비율 %s (정상 2.0). ISI 인터럽트가 프레임당 1회가 아니라\n    이 구성에서는 ISI fps 를 신뢰할 수 없습니다. 판정은 센서~CSI2 만으로 했습니다.\n", rr
 			else if (csi>0.1 && isi>0.1 && isi < csi*0.9)
 				printf "  → ISI 가 못 받고 있습니다. 대역/버퍼 확인\n"
+		}'
+		awk -v case_name="$CASE_LABEL" -v requested="$REQUESTED_FPS" \
+			-v channel="${labs[$li]}" -v n="$n" -v ns="$ns" -v np="$np" -v s="${SUM_S[$k]}" \
+			-v p="${SUM_P[$k]}" -v cc="${SUM_C[$k]}" -v ii="${SUM_I[$k]}" \
+			-v suspect="${ISI_SUSPECT[$c]}" 'BEGIN{
+			sensor=(ns>0) ? s/ns : -1; isp=(np>0) ? p/np : -1; csi=cc/n; isi=ii/n; loss=0
+			if (sensor>0 && isp>=0 && (sensor-isp)/sensor > loss) loss=(sensor-isp)/sensor
+			if (isp>0 && csi>=0 && (isp-csi)/isp > loss) loss=(isp-csi)/isp
+			if (!suspect && csi>0 && isi>=0 && (csi-isi)/csi > loss) loss=(csi-isi)/csi
+			trust=suspect ? 0 : 1
+			sensor_valid=(n>0 && ns==n) ? 1 : 0
+			isp_valid=(n>0 && np==n) ? 1 : 0
+			pass=(requested==120 && sensor_valid && isp_valid && sensor>=118.8 && isp>=118.8 && csi>=118.8 && trust && isi>=118.8 && loss*100<=1.0) ? 1 : 0
+			printf "FPS_RESULT case=%s requested=%d channel=%s sensor=%.1f isp=%.1f csi=%.1f isi=%.1f loss_pct=%.1f isi_trust=%d sensor_valid=%d isp_valid=%d pass120=%d\n", case_name, requested, channel, sensor, isp, csi, isi, loss*100, trust, sensor_valid, isp_valid, pass
 		}'
 		li=$((li + 1))
 	done
@@ -416,3 +522,5 @@ for c in $CHANS; do
   프레임 수 자체는 안정적이므로 영상 손실은 아니다.
 EOF
 done
+
+exit 0

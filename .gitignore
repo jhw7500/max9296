@@ -29,6 +29,11 @@ __pycache__/
 *.py[cod]
 .ruff_cache/
 
+# Board qualification backups can contain deployment/network credentials.
+# Keep the local recovery copies, but never stage them as evidence.
+artifacts/board-*/**/backup/
+artifacts/board-*/**/edgeconf-*.json
+
 # AI session handoff notes (internal host/path details — keep out of the driver repo)
 HANDOFF.*.md
 

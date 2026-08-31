@@ -1,0 +1,61 @@
+#!/bin/bash
+set -eu
+
+state=${CAM_FPS_STACK_TEST_STATE:?CAM_FPS_STACK_TEST_STATE is required}
+addr=
+hi=
+lo=
+read_len=2
+previous=
+for arg in "$@"; do
+    case "$previous" in
+        addr) hi=$arg; previous=hi; continue ;;
+        hi) lo=$arg; previous=; continue ;;
+    esac
+    case "$arg" in
+        w2@*) addr=${arg#w2@}; previous=addr ;;
+        r*) read_len=${arg#r} ;;
+    esac
+done
+
+reg=$(printf '%s%s' "${hi#0x}" "${lo#0x}" | tr 'A-F' 'a-f')
+emit16() {
+    value=$((16#${1#0x}))
+    printf '0x%02x 0x%02x\n' $(((value >> 8) & 255)) $((value & 255))
+}
+emit32() {
+    value=$((16#${1#0x}))
+    printf '0x%02x 0x%02x 0x%02x 0x%02x\n' \
+        $(((value >> 24) & 255)) $(((value >> 16) & 255)) \
+        $(((value >> 8) & 255)) $((value & 255))
+}
+
+case "$reg" in
+    0002)
+        if [ "${CAM_FPS_STACK_TEST_MISSING_HINF_ADDR:-}" = "$addr" ]; then
+            exit 1
+        fi
+        count_file="$state/hinf-${addr}"
+        count=0
+        [ -f "$count_file" ] && count=$(cat "$count_file")
+        printf '%s\n' $((count + 1)) >"$count_file"
+        if [ "$addr" = 0x12 ]; then first=240; else first=250; fi
+        if [ "$count" -eq 0 ]; then value=$first; else value=$(((first + 120) % 256)); fi
+        printf '0x%02x 0x00\n' "$value"
+        ;;
+    00fc) emit32 0x0000208d ;;
+    0078) emit32 0x004a4000 ;;
+    2000) emit16 0x0280 ;;
+    2002) emit16 0x0168 ;;
+    2004) emit16 0x0000 ;;
+    2006) emit16 0x0000 ;;
+    2008) emit16 0xffff ;;
+    200a) emit16 0xffff ;;
+    200c) emit16 0x0090 ;;
+    2014) emit16 0x0005 ;;
+    201c) emit16 0x1234 ;;
+    2020) emit16 0x7800 ;;
+    *)
+        if [ "$read_len" -eq 4 ]; then emit32 0x00000000; else emit16 0x0000; fi
+        ;;
+esac

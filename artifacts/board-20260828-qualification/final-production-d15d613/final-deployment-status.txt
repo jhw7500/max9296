@@ -1,0 +1,53 @@
+captured_utc=2026-08-28T15:51:42Z
+target=pim-camera-v016 (192.168.214.4, Linux 5.10.35)
+deployed_source_commit=d15d613
+
+INSTALLED_SHA256
+b27ae021fe4cb569ed6264712fabebb2a6b2cb6f5ab27278aebdb4113e09fc33  /lib/modules/5.10.35-lts-5.10.y+g2fce14defc04/kernel/drivers/media/i2c/max9296.ko
+08ae95d148300d5ef25999a4c801287c6613bee738b80c6fe63dae297ba239ee  /usr/local/bin/gstApp
+eba521544a39d0a8ab79786e1d5b7a7c06357942a5d94c61691531960e53654f  /root/shared_v/edgeconf_pim.json
+
+MODULE
+version=2.9
+srcversion=DA89ABE8A6E147911293CE6
+vermagic=5.10.35-lts-5.10.y+g2fce14defc04 SMP preempt mod_unload modversions aarch64
+
+EDGECONF
+{"cam_width":640,"cam_height":360,"fps":30,"i2c2":{"crop_enable":false,"dz":100,"ch0":{"dz_x":32768,"dz_y":32768},"ch1":{"dz_x":32768,"dz_y":32768}}}
+
+RUNTIME
+cam-operate.service=active
+gstApp=1040594 gstApp -d 11 -m 4
+prepare=state=CONSUMED generation=4481500297702844 epoch=2 mode=dual-wide table=dual width=1280 height=360 fps=30 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=0 match=1
+subdev_format=1280x360 MEDIA_BUS_FMT_UYVY8_2X8
+crop_enable=0
+dz=100
+dz_x_ch0=32768
+dz_y_ch0=32768
+dz_x_ch1=32768
+dz_y_ch1=32768
+
+AP1302_READBACK
+# register order per channel: 0x1010, 0x1012, 0x118c, 0x118e
+ch0=0x0100 0x8000 0x0080 0x0080
+ch1=0x0100 0x8000 0x0080 0x0080
+
+FINAL_PROBE_DMESG_COUNTS
+# boundary: final I2C2 driver version 2.9 probe at dmesg timestamp 12310.915940
+crop_register_write_count=0
+manual_wb_0x510a_write_count=0
+transport_error_keyword_count=0
+
+FPS_8_SECOND_AVERAGE
+ch0_sensor=30.0 ch0_ap_hinf=29.9 ch0_csi2=29.5 ch0_isi=29.8 sensor_valid=1 isp_valid=1
+ch1_sensor=30.0 ch1_ap_hinf=30.0 ch1_csi2=29.3 ch1_isi=29.5 sensor_valid=1 isp_valid=1
+
+RTSP_H265_DECODED_PNG
+ef8400399cbb84bdec02b43395c873daf7c06084742b5404a3ab3b45aec17708  rtsp-ch0.png 640x360 RGB_mean=(0.000,0.000,0.000)
+e9869a1a269e0c19df1e0e96c97f79c64449e4d3118b8154c8b84175b72f41ce  rtsp-ch1.png 640x360 RGB_mean=(0.005,1.533,17.482)
+
+EVIDENCE_SHA256
+ffe714af287034868db54c4c523f022204b9b140c7ef5fcce8ed402d6f87a17e  final-production-30-fps.txt
+eeb1a2761696a1e3bf8624de25a81201e64f6db712fe4f8c8967875c5b255da3  crop-fhd-runtime.txt
+8c8d052385f37e4820bf459829fda58b5b7ece00fe1c7edca2ec35c3bc079074  crop-hd-runtime.txt
+f882997dae79bea8b5e597adde85986625c30f4eeebfbc1f095bd439f8694a83  crop-360p-runtime.txt

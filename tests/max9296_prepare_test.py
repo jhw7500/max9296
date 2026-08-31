@@ -35,14 +35,16 @@ def parse_prepare_command(text: str) -> tuple[int, ...]:
         raise ValueError("generation")
     if fps < 1 or fps > 120:
         raise ValueError("fps")
-    if (width, height) in ((2560, 720), (3840, 1080)):
+    if (width, height) in ((2560, 720), (3840, 1080), (1280, 360)):
         if enable != 3:
             raise ValueError("dual mask")
-    elif (width, height) in ((1280, 720), (1920, 1080)):
+    elif (width, height) in ((1280, 720), (1920, 1080), (640, 360)):
         if enable not in (1, 2):
             raise ValueError("single mask")
     else:
         raise ValueError("tuple")
+    if fps > (120 if height == 360 else 30):
+        raise ValueError("mode fps")
     return (1, generation, width, height, fps, enable)
 
 
@@ -431,14 +433,24 @@ class Camera:
 
 
 def check_model(failures: list[str]) -> None:
+    # Crop enable changes hardware replay semantics even when every format/FPS
+    # field stays equal, so it is part of the prepared hardware identity.
+    crop_off_identity = (640, 360, 120, 1, False)
+    crop_on_identity = (640, 360, 120, 1, True)
+    if crop_off_identity == crop_on_identity:
+        failures.append("crop enable must participate in prepare identity")
+
     valid_commands = (
         "0\n",
         "1 1 2560 720 30 3\n",
-        "1 2 3840 1080 120 3",
+        "1 2 3840 1080 30 3",
         "1 3 1280 720 1 1",
-        "1 4 1280 720 60 2",
+        "1 4 1280 720 30 2",
         "1 5 1920 1080 30 1",
         "1 6 1920 1080 30 2",
+        "1 7 1280 360 120 3",
+        "1 8 640 360 120 1",
+        "1 9 640 360 120 2",
         "1 18446744073709551615 2560 720 30 3",
     )
     for command in valid_commands:
@@ -462,8 +474,13 @@ def check_model(failures: list[str]) -> None:
         "1 1 2560 4294967296 30 3",
         "1 1 2560 720 0 3",
         "1 1 2560 720 121 3",
+        "1 1 3840 1080 31 3",
+        "1 1 1280 720 31 1",
+        "1 1 1920 1080 120 2",
         "1 1 2560 720 30 1",
         "1 1 1280 720 30 3",
+        "1 1 1280 360 30 1",
+        "1 1 640 360 30 3",
         "1 1 640 480 30 1",
         "1 1 2560 720 30 3\n2",
         "1 1 2560 720 30 3\x00ignored",
@@ -909,6 +926,12 @@ def check_source(source: str, failures: list[str]) -> None:
     set_power_on = function(code, "max9296_set_power_on")
     set_power_off = function(code, "max9296_set_power_off")
     board_power = function(code, "max9296_set_power")
+    prepare_hw_start = code.find("static int max9296_prepare_hardware_locked(")
+    prepare_hw = (
+        function(code[prepare_hw_start:], "max9296_prepare_hardware_locked")
+        if prepare_hw_start >= 0
+        else ""
+    )
 
     request_scaffolding = (
         "MAX9296_PREP_IDLE",
@@ -927,6 +950,22 @@ def check_source(source: str, failures: list[str]) -> None:
     for token in request_scaffolding:
         if token not in source:
             failures.append(f"missing Task 3 request scaffolding: {token}")
+
+    truthful_prepare_order = (
+        "max9296_preflight_prepare_locked",
+        "max9296_set_mode",
+        "max9296_loadfw",
+        "max9296_post_firmware_program_locked",
+        "max9296_apply_cached_crop",
+        "max9296_apply_cached_controls",
+        "initialized_fingerprint",
+        "hardware_valid = true",
+    )
+    truthful_positions = [prepare_hw.find(token) for token in truthful_prepare_order]
+    if any(position < 0 for position in truthful_positions) or (
+        truthful_positions != sorted(truthful_positions)
+    ):
+        failures.append("hardware prepare does not preflight/replay before publication")
 
     for token in (
         "max9296_set_power(sensor, true)",
@@ -958,6 +997,7 @@ def check_source(source: str, failures: list[str]) -> None:
     request_lock = request.find("mutex_trylock(&sensor->prepare_request_lock)")
     cancel = request.find("cancel_delayed_work_sync(&sensor->prepare_lease_timeout)")
     lock = request.find("mutex_lock(&sensor->lock)")
+    preflight = request.find("max9296_preflight_prepare_locked")
     contract = request.find("max9296_update_shared_fsync_locked")
     apply = request.find("max9296_apply_prepare_fingerprint_locked")
     prepared = request.find("max9296_prepare_request_locked")
@@ -970,11 +1010,11 @@ def check_source(source: str, failures: list[str]) -> None:
     unlock = request.rfind("mutex_unlock(&sensor->lock)")
     request_unlock = request.rfind("mutex_unlock(&sensor->prepare_request_lock)")
     if not (
-        0 <= request_lock < cancel < lock < contract < apply < prepared < fresh_arm
+        0 <= request_lock < cancel < lock < preflight < contract < apply < prepared < fresh_arm
         < unlock < request_unlock
     ):
         failures.append(
-            "actual prepare path must drain, validate shared FPS before mutation, "
+            "actual prepare path must drain, preflight before shared FPS mutation, "
             "prepare, arm, then release request admission"
         )
     if not (
@@ -989,6 +1029,7 @@ def check_source(source: str, failures: list[str]) -> None:
     fresh_config_lock = request_locked.find(
         "mutex_lock(&max9296_fsync_config_lock)"
     )
+    fresh_preflight = request_locked.find("max9296_preflight_prepare_locked")
     fresh_power = request_locked.find("max9296_set_power(sensor, true)")
     fresh_contract = request_locked.find(
         "max9296_configure_shared_fsync_locked"
@@ -998,11 +1039,11 @@ def check_source(source: str, failures: list[str]) -> None:
         "sensor->prepare_generation = generation"
     )
     if not (
-        0 <= fresh_config_lock < fresh_power < fresh_contract < fresh_apply
+        0 <= fresh_preflight < fresh_config_lock < fresh_power < fresh_contract < fresh_apply
         < fresh_request_write
     ):
         failures.append(
-            "fresh prepare does not atomically acquire power/reserve FPS before "
+            "fresh prepare does not preflight then atomically acquire power/reserve FPS before "
             "publishing live/request state"
         )
 
@@ -1113,17 +1154,20 @@ def check_source(source: str, failures: list[str]) -> None:
     if "max9296_prepare_request" not in store:
         failures.append("sysfs prepare does not use the common prepare helper")
     stream_normalize = stream.find("max9296_normalize_fingerprint_locked")
+    stream_preflight = stream.find(
+        "max9296_preflight_prepare_locked", stream_normalize
+    )
     stream_contract = stream.find(
-        "max9296_update_shared_fsync_locked", stream_normalize
+        "max9296_update_shared_fsync_locked", stream_preflight
     )
     stream_epoch = stream.find("epoch = READ_ONCE(max9296_hw_epoch)", stream_contract)
     stream_hardware = stream.find("max9296_prepare_hardware_locked", stream_epoch)
     if not (
-        0 <= stream_normalize < stream_contract < stream_epoch < stream_hardware
+        0 <= stream_normalize < stream_preflight < stream_contract < stream_epoch < stream_hardware
         and "fingerprint.fps, true" in stream[stream_contract:stream_epoch]
     ):
         failures.append(
-            "STREAMON must bind shared FPS before matching/programming hardware"
+            "STREAMON must preflight before binding shared FPS or programming hardware"
         )
 
     for token in (
@@ -1134,6 +1178,7 @@ def check_source(source: str, failures: list[str]) -> None:
         "generation == 0",
         "fps < 1",
         "fps > 120",
+        "command->fps > max9296_mode_data[command->mode_id].max_fps",
         "MAX9296_MODE_2560x720",
         "MAX9296_MODE_1280x720",
         "MAX9296_MODE_3840x1080",
@@ -1142,6 +1187,27 @@ def check_source(source: str, failures: list[str]) -> None:
     ):
         if token not in parser:
             failures.append(f"strict prepare parser/tuple validation missing: {token}")
+
+    fingerprint_struct = source[source.find("struct max9296_hw_fingerprint") :]
+    fingerprint_struct = fingerprint_struct[: fingerprint_struct.find("};") + 2]
+    if "bool crop_enable;" not in fingerprint_struct:
+        failures.append("prepare hardware identity omits crop_enable")
+    normalize_start = code.rfind("static int max9296_normalize_fingerprint_locked(")
+    normalize = (
+        function(code[normalize_start:], "max9296_normalize_fingerprint_locked")
+        if normalize_start >= 0
+        else ""
+    )
+    if "fingerprint->crop_enable = sensor->ctrl_cache.crop_enable" not in normalize:
+        failures.append("runtime prepare identity omits cached crop_enable")
+    fingerprint_equal_start = code.rfind("static bool max9296_fingerprint_equal(")
+    fingerprint_equal = (
+        function(code[fingerprint_equal_start:], "max9296_fingerprint_equal")
+        if fingerprint_equal_start >= 0
+        else ""
+    )
+    if "left->crop_enable == right->crop_enable" not in fingerprint_equal:
+        failures.append("prepare matching ignores crop_enable")
     numeric_parse = re.search(
         r"ret\s*=\s*kstrtoull\([^;]+;\s*if\s*\(ret\)\s*\{\s*"
         r"ret\s*=\s*-EINVAL;\s*goto\s+out;\s*\}",

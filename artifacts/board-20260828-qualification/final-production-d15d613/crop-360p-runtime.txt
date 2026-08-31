@@ -1,0 +1,39 @@
+CASE=360P-CROP-TRUE
+state=CONSUMED generation=4432356053156519 epoch=2 mode=dual-wide table=dual width=1280 height=360 fps=30 code=0x2006 enable=3 crop_enable=1 errno=0 worker_errno=0 lease=0 match=1
+ioctl: VIDIOC_SUBDEV_G_FMT (pad=0)
+	Width/Height      : 1280/360
+	Mediabus Code     : 0x2006 (MEDIA_BUS_FMT_UYVY8_2X8)
+	Field             : Unknown (0xffff8000)
+	Colorspace        : sRGB
+	Transfer Function : sRGB
+	YCbCr/HSV Encoding: ITU-R 601
+	Quantization      : Full Range
+crop_enable: 1
+INITIAL AP=0x11 1010=0x01 0x80
+1012=0x80 0x00
+118c=0x00 0x40
+118e=0x00 0xc0
+INITIAL AP=0x12 1010=0x01 0x80
+1012=0x80 0x00
+118c=0x00 0xc0
+118e=0x00 0x40
+RUNTIME AP=0x11 1010=0x02 0x00
+1012=0x80 0x00
+118c=0x00 0x80
+118e=0x00 0x40
+RUNTIME AP=0x12 1010=0x02 0x00
+1012=0x80 0x00
+118c=0x00 0x80
+118e=0x00 0xc0
+ENABLE_TRANSITION_RC=255 crop_enable: Device or resource busy
+VIDIOC_S_EXT_CTRLS: failed: Device or resource busy
+crop_enable: 1
+ioctl: VIDIOC_SUBDEV_G_FMT (pad=0)
+	Width/Height      : 1280/360
+	Mediabus Code     : 0x2006 (MEDIA_BUS_FMT_UYVY8_2X8)
+	Field             : Unknown (0xffff8000)
+	Colorspace        : sRGB
+	Transfer Function : sRGB
+	YCbCr/HSV Encoding: ITU-R 601
+	Quantization      : Full Range
+active

@@ -5,6 +5,87 @@ All notable changes to the MAX9296 driver will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9] - 2026-08-28
+
+### Fixed
+- 듀얼 합성 모드에서 서로 다른 채널별 디지털 줌 배율이 AP1302 센서 판독 높이를
+  다르게 만들 수 있는 위험을 공통 배율 ABI로 구조적으로 차단했다.
+- 녹색 화면은 센서/ISP 손상이 아니라 `1280x360 RGBP` raw를 UYVY로 해석한
+  consumer format mismatch임을 raw RGB565 및 RTSP decode로 확인했다.
+- 후보 빌더를 tracked working-tree의 임시 snapshot에서 실행해 연구용 120 FPS
+  module/object가 양산용 generic build 경로에 남거나 기존 후보 artifact를 다음
+  `make clean`이 삭제하지 않게 했다.
+- 엄격 120 FPS 판정은 유효한 sensor/AP HINF 표본 전부와 CSI/ISI가 각각
+  118.8 FPS 이상일 때만 통과하며, AP 읽기 실패를 0 FPS 평균이나 합격으로
+  처리하지 않는다.
+
+### Added
+- single 640x360과 dual 1280x360(채널당 640x360)의 AP1302 preview context를
+  width/height/full-ROI/aspect 단위로 원자 적용한다. 기본 `KEEP`은 AP1302/CSI
+  출력만 바꾸며 AR0234 sensor readout 변경을 주장하지 않는다.
+- `crop_enable` boolean V4L2 제어(기본 false)와 prepare fingerprint를 추가했다.
+  false에서는 `0x1010`, `0x1012`, `0x118c`, `0x118e` 쓰기가 0회이고 true에서는
+  공통 배율·채널별 중심 전체 tuple을 factor-last 순서로 적용한다.
+- 640x360 sensor-mode `KEEP`, 0~15 후보를 같은 revision에서 격리 빌드하는 도구와
+  AP1302/AR0234 readback, 엄격한 120 FPS, CPU/RSS/DDR/온도, raw UYVY 녹색·stride
+  측정 게이트를 추가했다.
+
+### Changed
+- 디지털 줌 배율은 공통 `dz`만 노출하고 기본값을 AP1302 기본값과 같은
+  `100`(1.00x)으로 변경했다. 채널별 `dz_chX` 컨트롤과 캐시는 제거했다.
+- 조준 자유도는 채널별 `dz_x_chX`/`dz_y_chX`로 유지한다. 펌웨어 재로드와
+  스트림 재시작 때도 공통 배율과 채널별 중심을 복원한다.
+- 1920x1080/1280x720/640x360 production 일반 상한과 모든 모드의 노출 쓰기
+  안전 상한을 30 FPS로 유지한다. 후보 조사용 build만
+  `MAX9296_360P_MAX_FPS=120`을 명시한다. qualification build의 high-FPS AE auto는
+  exposure seed만 생략하고, 수동 노출은 첫 mode I2C 전에 거부한다.
+- streaming 중 `crop_enable` 변경은 `-EBUSY`; 배율·중심 tuple은 runtime 변경
+  가능하다. 동일 enable 값의 no-op은 성공하고 실제 전환만 `-EBUSY`다.
+  true→false의 기존 hardware crop 제거에는 hard reset/firmware reload가 필요하며
+  gstApp 재시작만으로는 충분하지 않다.
+- 드라이버 버전 2.8 -> 2.9.
+
+### 검증
+- health exporter 22건, probe cleanup, parallel prepare, 360p/노출/공통 줌,
+  후보 빌드 17건, FPS/readback, resource capability, UYVY 무결성 테스트 통과.
+- KEEP 640x360에 120 FPS를 요청한 보드 실측은 AP/CSI/ISI 약 113~115 FPS로
+  엄격 기준 118.8 FPS를 통과하지 못했다. sensor-mode 0~15를 두 번씩 hard reset해
+  확인했으나 검증 가능한 full-FOV 640x360 전용 readout profile은 없었다.
+- i.MX8 BSP 5.10.35 크로스 빌드 성공(`max9296.ko`, srcversion
+  `DA89ABE8A6E147911293CE6`, SHA-256
+  `b27ae021fe4cb569ed6264712fabebb2a6b2cb6f5ab27278aebdb4113e09fc33`).
+
+## [2.8] - 2026-08-27
+
+### Added
+- `1280x360` 듀얼(채널당 640x360)과 `640x360` 싱글 left/right 모드를 V4L2
+  format 및 parallel prepare ABI에 추가.
+- 공유 `dz`/`dz_x`/`dz_y`와 채널별 `*_chX` 디지털 줌 컨트롤. 줌 배율은
+  100~300%를 AP1302 8.8 fixed-point로 변환하고, 중심 좌표는 0~65535 정규화 ABI를
+  `DZ_CENTER_X/Y(0x118c/0x118e)`로 변환한다. 캐시는 펌웨어 재로드 뒤 복원된다.
+
+### Safety
+- 모드의 일반 `max_fps`와 별도로 `exposure_safe_max_fps=30` 정책을 추가했다.
+  31~120 FPS의 `EXP_TIME(0x500c)` 쓰기는 I2C 전에 `-EBUSY`로 거부하고 채널,
+  모드, FPS, 요청 노출값, 안전 상한을 로그에 남긴다.
+- 모든 `0x500c` 쓰기를 단일 guarded helper로 통합했으며, SoC 정지 이력이 있는
+  수동 WB `0x510a` 쓰기는 추가하지 않았다.
+- `0x1012`는 중심 X가 아니라 줌 전이 속도임을 레지스터 문서와 보드에서 확인해
+  즉시 적용값 `0x8000`만 사용한다. 중심 조준은 `0x118c/0x118e`를 사용한다.
+
+### Changed
+- 드라이버 버전 2.7 -> 2.8.
+- live control I2C 주소는 요청 중인 `current_mode`가 아니라 실제 프로그램된
+  `last_mode` 토폴로지를 기준으로 선택한다. pending S_FMT 값은 캐시만 하고 성공한
+  STREAMON 이후 하드웨어 쓰기를 재개한다.
+
+### 검증
+- 호스트 계약/회귀 테스트: health exporter 22건, probe cleanup, parallel prepare,
+  360p/노출/줌 테스트 통과.
+- i.MX8 BSP 5.10.35 크로스 빌드 성공(`max9296.ko`).
+- AP1302 레지스터 사전 보드 측정: 채널별 `0x118c/0x118e` 이동 독립성 및
+  `0x1012` step 동작 확인.
+
 ## [2.7] - 2026-08-21
 
 ### Changed

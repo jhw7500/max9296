@@ -1,0 +1,9 @@
+#!/bin/bash
+set -eu
+
+proc=${CAM_360P_RESOURCE_PROC_ROOT:?}
+sys=${CAM_360P_RESOURCE_SYS_ROOT:?}
+printf '%s\n' 'VmRSS:       11000 kB' >"$proc/4242/status"
+printf '%s\n' '4242 (gstApp) S 1 1 1 0 0 0 0 0 0 0 130 30 0 0 0 0' >"$proc/4242/stat"
+printf '%s\n' 'cpu 120 0 60 920 0 0 0 0 0 0' >"$proc/stat"
+printf '%s\n' 46000 >"$sys/class/thermal/thermal_zone0/temp"

@@ -1,0 +1,7 @@
+[cam_ap1302_dma_verify.sh] channel=0 i2c_line=2 ap1302=0x11 mode=dual source=edgeconf port=0 sensor_reg=0x30b0
+[cam_ap1302_dma_verify.sh] sensor_sip_reg=0x604a raw=0x0000036c sensor_id=0x36 addr_16=1 data_16=1 data_size=2
+[cam_ap1302_dma_verify.sh] sipm_err_before err0=0x0000 err1=0x0000
+[cam_ap1302_dma_verify.sh] DMA stuck (ctrl=0x0032), attempting reset...
+[cam_ap1302_dma_verify.sh] DMA reset failed (ctrl=0x0032)
+[cam_ap1302_dma_verify.sh] DMA read did not return idle ctrl=0x0032
+[cam_ap1302_dma_verify.sh] DMA read-before failed

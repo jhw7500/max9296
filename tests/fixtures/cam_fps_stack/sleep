@@ -1,0 +1,16 @@
+#!/bin/bash
+set -eu
+
+state=${CAM_FPS_STACK_TEST_STATE:?CAM_FPS_STACK_TEST_STATE is required}
+irq=${CAM_FPS_STACK_IRQ_FILE:?CAM_FPS_STACK_IRQ_FILE is required}
+csi_fps=${CAM_FPS_STACK_TEST_CSI_FPS:-${CAM_FPS_STACK_TEST_REQUESTED:-120}}
+isi_fps=${CAM_FPS_STACK_TEST_ISI_FPS:-${CAM_FPS_STACK_TEST_REQUESTED:-120}}
+duration=${1:-1}
+csi=$(awk '$NF=="32e50000.csi" {print $2}' "$irq")
+isi=$(awk '$NF=="32e02000.isi" {print $2}' "$irq")
+csi_delta=$(awk -v f="$csi_fps" -v d="$duration" 'BEGIN{printf "%d", 2*f*d}')
+isi_delta=$(awk -v f="$isi_fps" -v d="$duration" 'BEGIN{printf "%d", f*d}')
+printf '%s\n' \
+    "10: $((csi + csi_delta)) 32e50000.csi" \
+    "11: $((isi + isi_delta)) 32e02000.isi" >"$irq"
+printf '%s\n' tick >"$state/slept"

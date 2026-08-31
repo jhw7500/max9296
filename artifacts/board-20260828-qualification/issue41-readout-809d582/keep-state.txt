@@ -1,0 +1,4 @@
+CASE=KEEP_120
+4097f59e702725eeab24367143864ec0c3912a508ddfc3413ec079fbc39f7c15  /root/camtest/issue41-809d582-run1/modules/max9296-keep.ko
+4097f59e702725eeab24367143864ec0c3912a508ddfc3413ec079fbc39f7c15  /lib/modules/5.10.35-lts-5.10.y+g2fce14defc04/kernel/drivers/media/i2c/max9296.ko
+9f59124ff770e8f399e833634aa239ad8e1907174741daad1e6e6fd6cedeb0d5  /root/shared_v/edgeconf_pim.json
