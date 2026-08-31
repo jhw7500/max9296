@@ -11,6 +11,7 @@ for executable in \
   tools/build_360p_candidates.sh \
   tools/cam_360p_resource.sh \
   tools/uyvy_frame_check.py \
+  tools/rgb565_frame_check.py \
   tests/fixtures/cam_fps_stack/date \
   tests/fixtures/cam_fps_stack/dma-tool \
   tests/fixtures/cam_fps_stack/i2ctransfer \
