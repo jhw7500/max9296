@@ -1,0 +1,3 @@
+ae_on_ch0: Device or resource busy
+VIDIOC_S_EXT_CTRLS: failed: Device or resource busy
+rc=255

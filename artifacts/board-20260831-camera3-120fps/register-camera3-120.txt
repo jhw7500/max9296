@@ -1,0 +1,4 @@
+[cam_ar0234_led_flash_read.sh] channel=0 i2c_line=2 ap1302=0x11 mode=dual source=edgeconf port=0 reg=0x3270
+[cam_ar0234_led_flash_read.sh] raw=0x0100 masked=0x0100 enable=1 delay=0 extra=0x0000
+[cam_ar0234_led_flash_read.sh] channel=1 i2c_line=2 ap1302=0x12 mode=dual source=edgeconf port=0 reg=0x3270
+[cam_ar0234_led_flash_read.sh] raw=0x0000 masked=0x0000 enable=0 delay=0 extra=0x0000

@@ -1,0 +1,8 @@
+package=pim-mp 0.6.3+jhw.camera3 arm64
+driver_version=2.10
+driver_srcversion=8EBDAFE29DF1EA7734A71CB
+driver_sha=7a5e0a330b6992c1d10731d1ba02f415cea6e2c428feb5de76625f0b4d066241
+edge_sha=87f9bbb1910f1dd385aef96496d03e5a94feace9ac3acb7bc2197e2d6400ad03
+{"width":640,"height":360,"fps":30,"crop":false,"dz":100,"ch0":true,"ch1":true,"ch2":false,"ch3":false}
+active
+588096 gstApp -d 11 -m 4

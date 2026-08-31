@@ -2,13 +2,16 @@
 
 검증일: 2026-08-28  
 대상: `pim-camera-v016` (`192.168.214.4`, Linux 5.10.35)  
-판정: **production은 AP1302 `KEEP` readout + 640x360 출력 + 30 FPS**
+판정: **운영 기본은 640x360@30, 일반 드라이버의 120 요청은 약 113~115 FPS 실측**
 
 > 정책 갱신(2026-08-31): AR0234의 120 FPS 사양보다 낮은 compile-time 제한을
 > 두지 않도록 일반 `MAX9296_360P_MAX_FPS` 기본값을 120으로 변경했다. 패키지
 > edgeconf 초기 선택은 30 FPS이고, `fps=120`을 명시하면 같은 일반 드라이버에서
 > 요청할 수 있다. 아래 113~115 FPS 실측과 엄격 120 실패 판정은 그대로 유효하며,
 > 요청 상한 120을 실제 전달 보장으로 해석하지 않는다. 노출 안전 상한은 30 FPS다.
+> 2026-08-31 재검증에서 활성 AR0234의 `LED_FLASH_CONTROL(0x3270)` delay 128이
+> 고속 전달률을 크게 낮추는 것을 확인했다. 120 FPS fragment는 활성 채널 delay를
+> 0으로 설정해야 하며 패키지 migration은 이 명시값을 보존한다.
 
 ## 1. 최종 판정
 
@@ -31,8 +34,8 @@
   640x360@120 color pipeline의 CSI/ISI 출력이 0 FPS가 됐다. 둘 다 production
   후보가 아니다.
 - qualification 중단 조건을 적용해 3-case 30/60/120 resource matrix는 실행하지
-  않았다. production 기본은 `MAX9296_360P_SENSOR_MODE=KEEP`,
-  `MAX9296_360P_MAX_FPS=30`이다. 연구용 candidate builder만 120을 명시한다.
+  않았다. sensor mode 기본은 `MAX9296_360P_SENSOR_MODE=KEEP`이고 일반 드라이버의
+  `MAX9296_360P_MAX_FPS` 기본값은 120이다. 패키지 운영 JSON은 30 FPS를 유지한다.
 
 ## 2. 소스와 산출물
 
@@ -48,6 +51,7 @@
 | `675c0d6` | 후보 빌더의 artifact 보존 회귀 수정 |
 | `de9908f` | AR0234 odd-increment readback 추가 |
 | `d15d613` | production 30 FPS 판정, 엄격 FPS 계측, 최종 문서/증적 |
+| `e871ed1` | 일반 모듈의 360p 요청 상한을 120으로 변경, version 2.10 |
 
 gstApp revision은 `b9f4767`, `741b61a`, `895d1f2`다. 각각 edgeconf parsing,
 crop tuple의 prepare 전 적용, 640x360 prepare target을 담당한다.
@@ -457,3 +461,67 @@ crop false, dz=100이다.
 못했다. production은 KEEP + AP1302 scale @30을 유지하며, 다음 단계는 host에서
 AR0234 register를 덮어쓰는 것이 아니라 vendor AP1302 bootdata에 16:9 color
 subsample profile과 일관된 output/MIPI timing을 함께 추가하는 것이다.
+
+## 10. 2026-08-31 max9296 2.10 / camera3 재검증
+
+### 10.1 배포 상태
+
+일반 드라이버의 360p 요청 상한을 120으로 바꾼 `e871ed1`을 clean cross-build했다.
+최종 모듈은 version 2.10, `srcversion=8EBDAFE29DF1EA7734A71CB`, SHA-256
+`7a5e0a330b6992c1d10731d1ba02f415cea6e2c428feb5de76625f0b4d066241`다.
+`pim-mp 0.6.3+jhw.camera3`로 설치했으며 원복 후 운영 JSON은
+SHA-256 `87f9bbb1910f1dd385aef96496d03e5a94feace9ac3acb7bc2197e2d6400ad03`,
+640x360@30, crop false, dz=100이다.
+
+### 10.2 초기 저하와 원인 분리
+
+초기 camera2 JSON으로 요청한 dual 640x360@120은 sensor가 약 111~114 FPS였지만
+ISP ch0 86.7, CSI 양 채널 약 45.6 FPS로 떨어졌다. 과거 qualification driver 2.9를
+현재 앱/JSON에 다시 설치해도 CSI가 약 46 FPS여서 2.10 변경은 원인에서 제외됐다.
+
+과거 성공 JSON과 현재 120 JSON을 key-sort하여 비교한 유일한 차이는 네 채널의
+`led_flash.flash_delay`였다. 현재 JSON은 모두 128이고 과거 JSON은 ch0~ch3이
+0/5/10/15였다. gstApp 소스에서 LED가 활성인 ch0은 delay를 포함한
+`LED_FLASH_CONTROL=0x0100|delay`를 쓰고, LED가 비활성인 ch1은 delay 값과 무관하게
+0을 쓴다.
+
+교차 시험 결과는 다음과 같다.
+
+| driver / app / JSON | CSI ch0/ch1 | 판정 |
+|---|---:|---|
+| 2.10 / 현재 app / 현재 JSON(delay 128) | 45.7 / 45.6 | 저하 재현 |
+| 과거 2.9 / 현재 app / 현재 JSON | 46.1 / 46.0 | driver 변경 원인 아님 |
+| 2.10 / 현재 app / 과거 JSON | 115.0 / 114.6 | JSON으로 회복 |
+| 2.10 / 과거 app / 현재 JSON | 14.5 / 14.4 | app 교체만으로 회복 안 됨 |
+| 2.10 / 과거 app / 과거 JSON | 114.0 / 113.6 | JSON 영향 교차 확인 |
+
+마지막으로 현재 driver/app/JSON에서 활성 ch0의 delay만 `128→0`으로 바꿨다.
+실제 register는 `0x0100`, 비활성 ch1은 `0x0000`이었고 CSI/ISI는
+ch0 `112.6/112.6`, ch1 `112.4/112.4` FPS로 회복됐다. 따라서 이 보드의 초기
+저하 원인은 활성 AR0234의 flash delay 128로 확정한다.
+
+### 10.3 camera3 package fragment 결과
+
+camera3는 `update_edgeconf.sh`가 명시된 flash delay를 덮어쓰지 않도록 바꾸고,
+`max9296_640x360_120_fragment.json`에 640x360, fps 120, AE auto, crop false,
+dz 100, center 32768, flash delay 0을 넣었다. 설치 전 JSON의 명시값 0/5/10/15가
+설치 후 그대로 남는 migration 시험도 보드에서 통과했다.
+
+| channel | sensor | ISP | CSI2 | ISI | sensor→CSI loss | 엄격 120 |
+|---|---:|---:|---:|---:|---:|---|
+| ch0 | 117.5 | 114.9 | 113.3 | 112.8* | 2.2% | FAIL |
+| ch1 | 118.9 | 114.4 | 113.1 | 112.5* | 3.8% | FAIL |
+
+ISI raw ratio 1.99가 도구의 정확한 2.0 판정 경계 밖이라 `*`가 붙었으나 CSI 값은
+유효하고 overflow/CRC/ECC/lost-frame/timeout은 모두 0이다. 30초 resource 측정은
+system CPU 30.0%, gstApp RSS 37,096 KiB 유지, CPU/SOC 54/56 °C 유지였다. gstApp이
+`/dev/video4`를 점유해 별도 format 조회만 `EBUSY`였으며 계측 자체는 완료됐다.
+
+요청 협상과 약 113 FPS 전달은 정상이나 strict `>=118.8 FPS`에는 미달한다.
+따라서 사용자는 `640x360@120 요청`, `실측 약 113~115 FPS`, `정확한 120 미보장`을
+구분해야 한다. 120 FPS에서 수동 AE 전환은 예상대로 I2C 전에 `-EBUSY`로 거부됐다.
+
+운영 JSON으로 복원한 뒤 20초 회귀는 ch0 sensor/ISP/CSI/ISI
+`29.9/29.9/29.8/29.9`, ch1 `30.0/29.9/29.7/29.8` FPS이며 서비스는 active다.
+원시 증적과 SHA-256 목록은
+`artifacts/board-20260831-camera3-120fps/README.md`에 보존한다.

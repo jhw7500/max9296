@@ -1,0 +1,118 @@
+gstApp: 388485 gstApp -d 11 -m 4
+ch01 = /dev/video4  포맷 1280x360@1/120  모드 dual  AP1302 [0x11 0x12]
+관측 20초 / 1초 간격
+
+### [ch01/ch0] AP1302 preview context (0x11)
+  WIDTH=640 HEIGHT=360 ROI=0/0/16384/16384 ASPECT=0x1000 SENSOR_MODE=0x0000 LINE_TIME=0x0000 MAX_FPS=120.000
+AP_CONTEXT case=OLD_DRIVER_CURRENT_APP_640X360_120 channel=ch0 addr=0x11 width=640 height=360 roi_x0=0 roi_y0=0 roi_x1=16384 roi_y1=16384 aspect=0x1000 sensor_mode=0x0000 line_time=0x0000 max_fps=120.000
+### [ch01/ch0] AR0234 레지스터 직접 읽기 (AP1302 DMA, 채널 0)
+  CHIP_VERSION(0x3000)            = 0x0a56 (AR0234 확인)
+  Y_ADDR_START(0x3002)             = 0x0040
+  X_ADDR_START(0x3004)             = 0x0004
+  Y_ADDR_END(0x3006)               = 0x0477
+  X_ADDR_END(0x3008)               = 0x0783
+  FRAME_LENGTH_LINES(0x300A)      = 0x0494
+  LINE_LENGTH_PCK(0x300C)         = 0x0264
+  COARSE_INTEGRATION_TIME(0x3012) = 0x04c0
+  READ_MODE(0x3040)                = 0x4000
+  X_ODD_INC(0x30A2)                = 0x0001
+  Y_ODD_INC(0x30A6)                = 0x0001
+AR_TIMING case=OLD_DRIVER_CURRENT_APP_640X360_120 channel=ch0 x_start=0x0004 y_start=0x0040 x_end=0x0783 y_end=0x0477 frame_length=0x0494 line_length=0x0264 x_odd_inc=0x0001 y_odd_inc=0x0001 read_mode=0x4000 exposure=0x04c0
+  → pixel clock 90.0 MHz, 라인시간 6.80 us
+  → 이론 프레임레이트 = 90000000 / (1172 x 612) = 125.48 fps
+  → 노출 = 1216 x 6.80 us = 8269 us
+
+### [ch01/ch1] AP1302 preview context (0x12)
+  WIDTH=640 HEIGHT=360 ROI=0/0/16384/16384 ASPECT=0x1000 SENSOR_MODE=0x0000 LINE_TIME=0x0000 MAX_FPS=120.000
+AP_CONTEXT case=OLD_DRIVER_CURRENT_APP_640X360_120 channel=ch1 addr=0x12 width=640 height=360 roi_x0=0 roi_y0=0 roi_x1=16384 roi_y1=16384 aspect=0x1000 sensor_mode=0x0000 line_time=0x0000 max_fps=120.000
+### [ch01/ch1] AR0234 레지스터 직접 읽기 (AP1302 DMA, 채널 1)
+  CHIP_VERSION(0x3000)            = 0x0a56 (AR0234 확인)
+  Y_ADDR_START(0x3002)             = 0x0040
+  X_ADDR_START(0x3004)             = 0x0004
+  Y_ADDR_END(0x3006)               = 0x0477
+  X_ADDR_END(0x3008)               = 0x0783
+  FRAME_LENGTH_LINES(0x300A)      = 0x0494
+  LINE_LENGTH_PCK(0x300C)         = 0x0264
+  COARSE_INTEGRATION_TIME(0x3012) = 0x04ce
+  READ_MODE(0x3040)                = 0x0000
+  X_ODD_INC(0x30A2)                = 0x0001
+  Y_ODD_INC(0x30A6)                = 0x0001
+AR_TIMING case=OLD_DRIVER_CURRENT_APP_640X360_120 channel=ch1 x_start=0x0004 y_start=0x0040 x_end=0x0783 y_end=0x0477 frame_length=0x0494 line_length=0x0264 x_odd_inc=0x0001 y_odd_inc=0x0001 read_mode=0x0000 exposure=0x04ce
+  → pixel clock 90.0 MHz, 라인시간 6.80 us
+  → 이론 프레임레이트 = 90000000 / (1172 x 612) = 125.48 fps
+  → 노출 = 1230 x 6.80 us = 8364 us
+
+경과   | 대상      | 센서   | ISP출력 | CSI2     | ISI      | 구간별 증감
+---------+-------------+----------+----------+----------+----------+-------------------------
+1s       | ch0 (0x11)  |    119.9 |     88.8 |     42.6 |    10.0* | 센서→ISP -26%  ISP→CSI2 -52%  CSI2→ISI (ISI 비신뢰)
+1s       | ch1 (0x12)  |    120.1 |    110.5 |     40.3 |     9.4* | 센서→ISP -8%  ISP→CSI2 -64%  CSI2→ISI (ISI 비신뢰)
+2s       | ch0 (0x11)  |    119.6 |     85.3 |     50.0 |    17.2* | 센서→ISP -29%  ISP→CSI2 -41%  CSI2→ISI (ISI 비신뢰)
+2s       | ch1 (0x12)  |    118.8 |    107.5 |     50.1 |    17.2* | 센서→ISP -10%  ISP→CSI2 -53%  CSI2→ISI (ISI 비신뢰)
+3s       | ch0 (0x11)  |    120.5 |     88.5 |     39.7 |     5.8* | 센서→ISP -27%  ISP→CSI2 -55%  CSI2→ISI (ISI 비신뢰)
+3s       | ch1 (0x12)  |    120.3 |    104.1 |     39.7 |     5.8* | 센서→ISP -13%  ISP→CSI2 -62%  CSI2→ISI (ISI 비신뢰)
+4s       | ch0 (0x11)  |    120.1 |     88.4 |     47.1 |     9.9* | 센서→ISP -26%  ISP→CSI2 -47%  CSI2→ISI (ISI 비신뢰)
+4s       | ch1 (0x12)  |    120.3 |    112.7 |     46.9 |     9.9* | 센서→ISP -6%  ISP→CSI2 -58%  CSI2→ISI (ISI 비신뢰)
+5s       | ch0 (0x11)  |     61.6 |     88.1 |     47.3 |    13.1* | 센서→ISP +43%  ISP→CSI2 -46%  CSI2→ISI (ISI 비신뢰)
+5s       | ch1 (0x12)  |    119.5 |    105.4 |     47.4 |    13.1* | 센서→ISP -12%  ISP→CSI2 -55%  CSI2→ISI (ISI 비신뢰)
+6s       | ch0 (0x11)  |    119.6 |     85.8 |     44.1 |     9.8* | 센서→ISP -28%  ISP→CSI2 -49%  CSI2→ISI (ISI 비신뢰)
+6s       | ch1 (0x12)  |    119.2 |    108.3 |     44.0 |     9.8* | 센서→ISP -9%  ISP→CSI2 -59%  CSI2→ISI (ISI 비신뢰)
+7s       | ch0 (0x11)  |    120.5 |     86.8 |     46.2 |    13.0* | 센서→ISP -28%  ISP→CSI2 -47%  CSI2→ISI (ISI 비신뢰)
+7s       | ch1 (0x12)  |    120.0 |    103.7 |     46.6 |    13.1* | 센서→ISP -14%  ISP→CSI2 -55%  CSI2→ISI (ISI 비신뢰)
+8s       | ch0 (0x11)  |    120.3 |     88.9 |     46.9 |     8.2* | 센서→ISP -26%  ISP→CSI2 -47%  CSI2→ISI (ISI 비신뢰)
+8s       | ch1 (0x12)  |    120.2 |    113.2 |     46.8 |     8.2* | 센서→ISP -6%  ISP→CSI2 -59%  CSI2→ISI (ISI 비신뢰)
+9s       | ch0 (0x11)  |    120.4 |     85.6 |     45.7 |    13.0* | 센서→ISP -29%  ISP→CSI2 -47%  CSI2→ISI (ISI 비신뢰)
+9s       | ch1 (0x12)  |    118.6 |    100.8 |     45.5 |    13.0* | 센서→ISP -15%  ISP→CSI2 -55%  CSI2→ISI (ISI 비신뢰)
+10s      | ch0 (0x11)  |    119.9 |     85.9 |     45.8 |    11.4* | 센서→ISP -28%  ISP→CSI2 -47%  CSI2→ISI (ISI 비신뢰)
+10s      | ch1 (0x12)  |    119.2 |    109.9 |     45.9 |    11.5* | 센서→ISP -8%  ISP→CSI2 -58%  CSI2→ISI (ISI 비신뢰)
+11s      | ch0 (0x11)  |    112.5 |     85.1 |     45.4 |     9.7* | 센서→ISP -24%  ISP→CSI2 -47%  CSI2→ISI (ISI 비신뢰)
+11s      | ch1 (0x12)  |    120.5 |    110.1 |     45.0 |     9.6* | 센서→ISP -9%  ISP→CSI2 -59%  CSI2→ISI (ISI 비신뢰)
+12s      | ch0 (0x11)  |     62.0 |     88.0 |     49.7 |    17.9* | 센서→ISP +42%  ISP→CSI2 -44%  CSI2→ISI (ISI 비신뢰)
+12s      | ch1 (0x12)  |    118.9 |    107.9 |     50.2 |    18.1* | 센서→ISP -9%  ISP→CSI2 -53%  CSI2→ISI (ISI 비신뢰)
+13s      | ch0 (0x11)  |    117.9 |     87.4 |     46.1 |     9.7* | 센서→ISP -26%  ISP→CSI2 -47%  CSI2→ISI (ISI 비신뢰)
+13s      | ch1 (0x12)  |    118.8 |    112.4 |     46.1 |     9.7* | 센서→ISP -5%  ISP→CSI2 -59%  CSI2→ISI (ISI 비신뢰)
+14s      | ch0 (0x11)  |     61.9 |     88.2 |     46.2 |     9.9* | 센서→ISP +43%  ISP→CSI2 -48%  CSI2→ISI (ISI 비신뢰)
+14s      | ch1 (0x12)  |    119.9 |    108.8 |     46.2 |     9.9* | 센서→ISP -9%  ISP→CSI2 -58%  CSI2→ISI (ISI 비신뢰)
+15s      | ch0 (0x11)  |    119.9 |     88.0 |     46.5 |     9.8* | 센서→ISP -27%  ISP→CSI2 -47%  CSI2→ISI (ISI 비신뢰)
+15s      | ch1 (0x12)  |    120.0 |    108.3 |     46.1 |     9.7* | 센서→ISP -10%  ISP→CSI2 -57%  CSI2→ISI (ISI 비신뢰)
+16s      | ch0 (0x11)  |    120.5 |     86.8 |     48.3 |    13.9* | 센서→ISP -28%  ISP→CSI2 -44%  CSI2→ISI (ISI 비신뢰)
+16s      | ch1 (0x12)  |    118.7 |    111.2 |     48.6 |    14.0* | 센서→ISP -6%  ISP→CSI2 -56%  CSI2→ISI (ISI 비신뢰)
+17s      | ch0 (0x11)  |    119.3 |     86.5 |     44.9 |    10.6* | 센서→ISP -27%  ISP→CSI2 -48%  CSI2→ISI (ISI 비신뢰)
+17s      | ch1 (0x12)  |    115.9 |    102.7 |     44.8 |    10.6* | 센서→ISP -11%  ISP→CSI2 -56%  CSI2→ISI (ISI 비신뢰)
+18s      | ch0 (0x11)  |     61.7 |     86.2 |     48.0 |    13.8* | 센서→ISP +40%  ISP→CSI2 -44%  CSI2→ISI (ISI 비신뢰)
+18s      | ch1 (0x12)  |    119.7 |    116.8 |     48.2 |    13.9* | 센서→ISP -2%  ISP→CSI2 -59%  CSI2→ISI (ISI 비신뢰)
+19s      | ch0 (0x11)  |    120.5 |     86.2 |     45.2 |    10.7* | 센서→ISP -28%  ISP→CSI2 -48%  CSI2→ISI (ISI 비신뢰)
+19s      | ch1 (0x12)  |    120.0 |    107.9 |     44.9 |    10.6* | 센서→ISP -10%  ISP→CSI2 -58%  CSI2→ISI (ISI 비신뢰)
+20s      | ch0 (0x11)  |     63.4 |     84.9 |     45.7 |    13.1* | 센서→ISP +34%  ISP→CSI2 -46%  CSI2→ISI (ISI 비신뢰)
+20s      | ch1 (0x12)  |    120.0 |    108.0 |     45.8 |    13.1* | 센서→ISP -10%  ISP→CSI2 -58%  CSI2→ISI (ISI 비신뢰)
+---------+-------------+----------+----------+----------+----------+-------------------------
+평균       | ch0 (0x11)  |    105.1 |     87.0 |     46.1 |     11.5 |
+평균       | ch1 (0x12)  |    119.4 |    108.5 |     46.0 |     11.5 |
+
+### ch01 / ch0 (AP1302 0x11) 판정
+  최대 낙차: ISP → CSI2 (GMSL/디시리얼라이저) 구간에서 47% 손실
+  → ISP 가 센서 프레임을 버리고 있습니다. 트리거 분주/스킵 정책 확인 (R0x1186, R0x6112)
+  → GMSL 링크 또는 디시리얼라이저에서 손실. MAX9296 CTRL3(0x0013) 링크 락 확인
+  ! ISI 열 제외: csi/isi 원시 비율 7.06 (정상 2.0). ISI 인터럽트가 프레임당 1회가 아니라
+    이 구성에서는 ISI fps 를 신뢰할 수 없습니다. 판정은 센서~CSI2 만으로 했습니다.
+FPS_RESULT case=OLD_DRIVER_CURRENT_APP_640X360_120 requested=120 channel=ch0 sensor=105.1 isp=87.0 csi=46.1 isi=11.5 loss_pct=47.0 isi_trust=0 sensor_valid=1 isp_valid=1 pass120=0
+
+### ch01 / ch1 (AP1302 0x12) 판정
+  최대 낙차: ISP → CSI2 (GMSL/디시리얼라이저) 구간에서 58% 손실
+  → GMSL 링크 또는 디시리얼라이저에서 손실. MAX9296 CTRL3(0x0013) 링크 락 확인
+  ! ISI 열 제외: csi/isi 원시 비율 7.06 (정상 2.0). ISI 인터럽트가 프레임당 1회가 아니라
+    이 구성에서는 ISI fps 를 신뢰할 수 없습니다. 판정은 센서~CSI2 만으로 했습니다.
+FPS_RESULT case=OLD_DRIVER_CURRENT_APP_640X360_120 requested=120 channel=ch1 sensor=119.4 isp=108.5 csi=46.0 isi=11.5 loss_pct=57.6 isi_trust=0 sensor_valid=1 isp_valid=1 pass120=0
+
+센서=AP1302 R0x00FC 역수 / ISP=R0x0002 HINF_FRAME_CNT 델타 / CSI2=csi IRQ÷2 / ISI=isi IRQ
+레이트는 sleep 값이 아니라 실제 경과시간으로 나눈 값입니다.
+ch01 는 듀얼 모드입니다. 두 카메라 영상이 하나의 넓은 프레임으로 합쳐지므로 CSI2/ISI 열은 두 행이 같은 값을 공유합니다.
+
+! ch01 : ISI 열(*) 신뢰 불가 — csi/isi 원시 비율 7.06 (정상 2.0)
+  ISI 는 프레임당 인터럽트 1회가 정상이나 이 구성에서는 그보다 많이 올린다.
+  실측: 단일 1920x1080/1280x720 @30 → 비율 2.000 (프레임당 1회, 정확)
+        4채널 듀얼 2560x720 @60     → 프레임 59 fps 로 일정한데
+                                       ISI IRQ/frame 이 1.37~2.95 로 흔들림
+  정수도 고정도 아니라 나눠서 보정할 수 없다. CSI2 열(csi IRQ÷2)은 같은 구간에서
+  59 fps 로 일정하므로, 전달 레이트는 ISI 대신 CSI2 열을 보면 된다.
+  초과분은 정상 프레임 완료가 아닌 다른 이벤트로 보이나 원인 미확인이며,
+  프레임 수 자체는 안정적이므로 영상 손실은 아니다.
