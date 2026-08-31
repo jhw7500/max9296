@@ -1,5 +1,14 @@
 # MAX9296 Driver Release Notes
 
+## Version 2.10 (2026-08-31)
+
+- 640x360 single/dual의 일반 FPS 요청 상한을 AR0234 사양에 맞춰 120으로 변경했다.
+- HD/FHD 상한과 모든 모드의 수동 노출 안전 상한은 30 FPS로 유지한다.
+- 패키지 edgeconf 기본 선택은 640x360@30이며 `fps=120`을 명시하면 같은 일반
+  드라이버에서 120 FPS를 요청할 수 있다.
+- KEEP/FHD-readout 경로의 기존 실측은 113~115 FPS다. 120은 협상 상한이며 실제
+  120 FPS 전달을 보장하지 않는다.
+
 ## Version 2.0 (2026-02-11)
 
 ### 🎉 Overview

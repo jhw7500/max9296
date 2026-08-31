@@ -5,6 +5,24 @@ All notable changes to the MAX9296 driver will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10] - 2026-08-31
+
+### Changed
+- AR0234의 120 FPS 사양보다 낮은 compile-time 협상 제한을 두지 않도록 일반
+  640x360 `MAX9296_360P_MAX_FPS` 기본값을 30에서 120으로 올렸다. 별도
+  qualification 플래그 없이 single 640x360과 dual 1280x360에서 1~120 FPS를
+  요청할 수 있다.
+- HD/FHD의 일반 상한은 30 FPS로 유지한다. 배포 edgeconf의 초기 선택값도
+  640x360@30을 유지하며, 120 FPS가 필요할 때 `.VHL_CAM.fps=120`으로 선택한다.
+- 드라이버 버전을 2.9에서 2.10으로 올렸다.
+
+### Safety
+- 모든 모드의 `EXP_TIME(0x500c)` 쓰기 안전 상한은 30 FPS로 유지한다.
+  640x360의 31~120 FPS에서는 AE auto가 exposure seed를 생략하고, 수동 노출 및
+  manual AE 전환은 I2C 전에 `-EBUSY`로 거부한다.
+- 120은 요청 허용 상한이며 실제 전달 FPS 보장은 아니다. 기존 KEEP/FHD-readout
+  실측 113~115 FPS와 엄격 118.8 FPS 미달 결과를 그대로 공개한다.
+
 ## [2.9] - 2026-08-28
 
 ### Fixed

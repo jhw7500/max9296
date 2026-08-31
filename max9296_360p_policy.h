@@ -3,11 +3,13 @@
 
 #define MAX9296_360P_SENSOR_MODE_KEEP 0xffU
 
-/* Board qualification of the KEEP/FHD-readout path measured 113-115 fps at
- * a 120 fps request. Production therefore exposes only the repeatedly
- * qualified 30 fps cadence. Candidate artifacts override this to 120. */
+/* AR0234 is rated for 120 fps, so the normal 640x360 policy must not impose
+ * a lower negotiation ceiling.  End-to-end qualification of the current
+ * KEEP/FHD-readout path measured 113-115 fps at a 120 fps request; callers
+ * must treat 120 as the allowed request limit, not a guaranteed delivered
+ * cadence.  Manual exposure remains independently fenced at 30 fps. */
 #ifndef MAX9296_360P_MAX_FPS
-#define MAX9296_360P_MAX_FPS 30U
+#define MAX9296_360P_MAX_FPS 120U
 #endif
 
 #ifndef MAX9296_360P_SENSOR_MODE

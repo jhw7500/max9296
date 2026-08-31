@@ -172,10 +172,10 @@ def main() -> int:
         failures.append("conservative 30fps exposure safety policy is missing")
     if '#include "max9296_360p_policy.h"' not in source:
         failures.append("driver does not consume the tested 360p policy")
-    if "#define MAX9296_360P_MAX_FPS 30U" not in policy:
-        failures.append("measured production 360p limit is not 30fps")
+    if "#define MAX9296_360P_MAX_FPS 120U" not in policy:
+        failures.append("default 360p request limit is not the sensor-rated 120fps")
     if "#ifndef MAX9296_360P_MAX_FPS" not in policy:
-        failures.append("qualification builds cannot override the production FPS limit")
+        failures.append("special builds cannot override the default 360p FPS limit")
     if "#define MAX9296_360P_MAX_FPS" in source:
         failures.append("driver source shadows the tested 360p FPS policy")
     if source.count("MAX9296_360P_MAX_FPS,") < 3:

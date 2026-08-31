@@ -18,10 +18,10 @@ Single 모드에서는 AP1302 주소 0x3c를 사용한다.
 
 해상도와 디지털 crop은 독립이다. 공개 카메라당 해상도는 1920x1080,
 1280x720, 640x360이며 dual V4L2 폭은 각각 3840, 2560, 1280이다. FHD/HD
-production 일반 상한과 모든 모드의 노출 쓰기 안전 상한은 30 FPS다. 640x360
-120 FPS는 `MAX9296_360P_MAX_FPS=120` qualification build에서만 협상되며, KEEP
-경로 실측이 약 113~115 FPS로 엄격 기준 118.8 FPS를 통과하지 못해 양산에서는
-사용하지 않는다. crop을 켜도 출력 크기는 변하지 않는다.
+일반 상한과 모든 모드의 노출 쓰기 안전 상한은 30 FPS다. 640x360 일반 상한은
+AR0234 사양에 맞춰 120 FPS이며 별도 qualification build 없이 협상된다. 다만 KEEP
+경로 실측은 약 113~115 FPS로 엄격 기준 118.8 FPS를 통과하지 못했으므로 120은
+요청 허용 상한이지 실제 전달 보장이 아니다. crop을 켜도 출력 크기는 변하지 않는다.
 
 기본 640x360 `KEEP` 정책은 AP1302/CSI 출력을 640x360으로 바꾸지만 AR0234
 sensor readout 모드를 강제로 선택하지 않는다. 따라서 전용 sensor-readout 후보와
@@ -123,11 +123,11 @@ v4l2-ctl -d $DEV -c contrast_ch0=4096
 v4l2-ctl -d $DEV -c hflip_ch0=1
 ```
 
-노출 레지스터 `0x500c` 쓰기는 30 FPS 이하에서만 허용된다. qualification build의
+노출 레지스터 `0x500c` 쓰기는 30 FPS 이하에서만 허용된다. 일반 640x360의
 31~120 FPS에서는 `exp_time`, `exp_time_chX`, 수동 AE 전환이 I2C 전에
 `-EBUSY`로 거부된다. high-FPS AE auto 경로는 exposure seed만 생략하며
-gain/AWB/flip 등은 그대로 적용한다. production build는 30 FPS를 넘는 frame
-interval 자체를 `-EINVAL`로 거부한다. `0x510a` 수동 WB 쓰기는 추가하지 않았다.
+gain/AWB/flip 등은 그대로 적용한다. HD/FHD는 30 FPS를 넘는 frame interval을
+`-EINVAL`로 거부한다. `0x510a` 수동 WB 쓰기는 추가하지 않았다.
 
 ### 3.2 디지털 줌
 

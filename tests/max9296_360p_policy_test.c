@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 #ifndef MAX9296_360P_EXPECTED_MAX_FPS
-#define MAX9296_360P_EXPECTED_MAX_FPS 30U
+#define MAX9296_360P_EXPECTED_MAX_FPS 120U
 #endif
 
 static unsigned int checks;
@@ -40,6 +40,8 @@ static void test_only_360p_exposes_the_high_fps_policy(void) {
   CHECK(max9296_mode_max_fps(1280U, 720U) == 30U);
   CHECK(max9296_mode_max_fps(640U, 360U) ==
         MAX9296_360P_EXPECTED_MAX_FPS);
+  CHECK(max9296_mode_max_fps(1280U, 360U) ==
+        MAX9296_360P_EXPECTED_MAX_FPS);
   CHECK(max9296_mode_max_fps(640U, 480U) == 0U);
 
   CHECK(max9296_preview_sensor_mode_override(1920U, 1080U) ==
@@ -55,6 +57,7 @@ static void test_only_360p_exposes_the_high_fps_policy(void) {
         (MAX9296_360P_EXPECTED_MAX_FPS >= 31U));
   CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 120U) ==
         (MAX9296_360P_EXPECTED_MAX_FPS >= 120U));
+  CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 121U) == 0U);
 }
 
 static void test_full_fov_roi_is_normalized(void) {
