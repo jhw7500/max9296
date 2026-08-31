@@ -7,6 +7,28 @@ script=tools/build_360p_candidates.sh
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 
+for executable in \
+  tools/build_360p_candidates.sh \
+  tools/cam_360p_resource.sh \
+  tools/uyvy_frame_check.py \
+  tests/fixtures/cam_fps_stack/date \
+  tests/fixtures/cam_fps_stack/dma-tool \
+  tests/fixtures/cam_fps_stack/i2ctransfer \
+  tests/fixtures/cam_fps_stack/media-ctl \
+  tests/fixtures/cam_fps_stack/sleep \
+  tests/fixtures/cam_360p_resource/dmesg \
+  tests/fixtures/cam_360p_resource/media-ctl \
+  tests/fixtures/cam_360p_resource/perf \
+  tests/fixtures/cam_360p_resource/sleep \
+  tests/fixtures/cam_360p_resource/v4l2-ctl
+do
+  mode=$(git ls-files -s -- "$executable" | awk '{print $1}')
+  if [ "$mode" != 100755 ]; then
+    echo "FAIL: $executable is committed with mode ${mode:-missing}, expected 100755" >&2
+    exit 1
+  fi
+done
+
 if [ ! -x "$script" ]; then
   echo "FAIL: $script is missing or not executable" >&2
   exit 1

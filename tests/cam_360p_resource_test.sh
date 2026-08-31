@@ -25,9 +25,13 @@ prepare_tree() {
 run_resource() {
     local name=$1
     local supported=$2
+    local wrap=${3:-0}
     local root="$TMP_ROOT/$name"
     prepare_tree "$root"
     mkdir -p "$root/state"
+    if [ "$wrap" -eq 1 ]; then
+        : >"$root/state/dmesg-wrap"
+    fi
     if [ "$supported" -eq 1 ]; then
         mkdir -p "$root/sys/bus/event_source/devices/imx8_ddr0/events"
         : >"$root/sys/bus/event_source/devices/imx8_ddr0/events/cycles"
@@ -58,6 +62,13 @@ output=$(run_resource supported 1) || fail "supported DDR run failed"
 case "$output" in
     *'DDR_RESULT ddr_supported=1 cycles=1000 read_cycles=2000 write_cycles=3000'*) ;;
     *) fail "supported DDR counters were not collected" ;;
+esac
+
+echo "=== dmesg delta after equal-length ring-buffer wrap ==="
+output=$(run_resource wrapped 0 1) || fail "wrapped dmesg run failed"
+case "$output" in
+    *'DMESG_RESULT overflow=1 crc=0 ecc=0 lost_frame=0 timeout=0 green=0'*) ;;
+    *) fail "new dmesg entry was lost after ring-buffer wrap" ;;
 esac
 
 echo "PASS: cam_360p_resource capability and metric contracts"

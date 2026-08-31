@@ -98,6 +98,33 @@ capture_dmesg() {
     dmesg --color=never 2>/dev/null || true
 }
 
+derive_dmesg_delta() {
+    local before=$1
+    local after=$2
+    local delta=$3
+    local marker marker_line
+
+    if [ ! -s "$before" ]; then
+        cp "$after" "$delta"
+        return
+    fi
+
+    marker=$(tail -n 1 "$before")
+    marker_line=
+    if [ -n "$marker" ]; then
+        marker_line=$(grep -nF -x -- "$marker" "$after" 2>/dev/null |
+            head -n 1 | cut -d: -f1)
+    fi
+
+    if [ -n "$marker_line" ]; then
+        tail -n +$((marker_line + 1)) "$after" >"$delta"
+    else
+        # The old tail was evicted (or the log was cleared). Treat the complete
+        # current snapshot as new so qualification errors cannot be hidden.
+        cp "$after" "$delta"
+    fi
+}
+
 count_pattern() {
     local pattern=$1
     local file=$2
@@ -143,7 +170,6 @@ read -r CPU_BUSY_BEFORE CPU_TOTAL_BEFORE <<EOF
 $(read_cpu_totals)
 EOF
 capture_dmesg >"$TMP_DIR/dmesg-before"
-DMESG_BEFORE_LINES=$(wc -l <"$TMP_DIR/dmesg-before")
 emit_thermal before
 emit_media_and_format
 
@@ -175,12 +201,8 @@ read -r CPU_BUSY_AFTER CPU_TOTAL_AFTER <<EOF
 $(read_cpu_totals)
 EOF
 capture_dmesg >"$TMP_DIR/dmesg-after"
-DMESG_AFTER_LINES=$(wc -l <"$TMP_DIR/dmesg-after")
-if [ "$DMESG_AFTER_LINES" -ge "$DMESG_BEFORE_LINES" ]; then
-    tail -n +$((DMESG_BEFORE_LINES + 1)) "$TMP_DIR/dmesg-after" >"$TMP_DIR/dmesg-delta"
-else
-    cp "$TMP_DIR/dmesg-after" "$TMP_DIR/dmesg-delta"
-fi
+derive_dmesg_delta "$TMP_DIR/dmesg-before" "$TMP_DIR/dmesg-after" \
+    "$TMP_DIR/dmesg-delta"
 
 DURATION_NS=$((END_NS - START_NS))
 PROCESS_TICKS_DELTA=na

@@ -6,6 +6,19 @@ count_file="$state/dmesg-count"
 count=0
 [ -f "$count_file" ] && count=$(cat "$count_file")
 printf '%s\n' $((count + 1)) >"$count_file"
+if [ -f "$state/dmesg-wrap" ]; then
+    if [ "$count" -eq 0 ]; then
+        printf '%s\n' \
+            '[0.0] entry that will be evicted' \
+            '[0.5] last entry before sampling'
+    else
+        printf '%s\n' \
+            '[0.5] last entry before sampling' \
+            '[1.0] overflow after ring wrap'
+    fi
+    exit 0
+fi
+
 printf '%s\n' '[0.0] boot complete'
 if [ "$count" -gt 0 ]; then
     printf '%s\n' \
