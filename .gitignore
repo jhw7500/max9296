@@ -34,6 +34,9 @@ __pycache__/
 artifacts/board-*/**/backup/
 artifacts/board-*/**/edgeconf-*.json
 
+# Raw board runtime logs stay local; commit only reviewed summaries/evidence.
+artifacts/board-*/raw/
+
 # AI session handoff notes (internal host/path details — keep out of the driver repo)
 HANDOFF.*.md
 
