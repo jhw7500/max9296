@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract tests for 360p modes, exposure fencing, and AP1302 zoom controls."""
+"""Contract tests for 360p modes, exposure warnings, and AP1302 zoom controls."""
 
 from __future__ import annotations
 
@@ -44,17 +44,19 @@ def center_u16_to_fixed8(position: int) -> int:
     return (position * 0x100 + 0x7FFF) // 0xFFFF
 
 
-def exposure_allowed(fps: int, safe_max_fps: int) -> bool:
-    return 1 <= fps <= safe_max_fps
+def exposure_policy(fps: int, mode_max_fps: int, safe_max_fps: int) -> str:
+    if fps < 1 or fps > mode_max_fps:
+        return "invalid"
+    return "warn" if fps > safe_max_fps else "allow"
 
 
 def exposure_replay_plan(ae_auto: bool, fps: int, safe_max_fps: int) -> tuple[str, ...]:
-    if fps < 1:
+    if fps < 1 or fps > 120:
         raise ValueError("invalid fps")
     if fps > safe_max_fps:
         if ae_auto:
             return ("configured-auto",)
-        raise BlockingIOError("manual exposure unsafe")
+        return ("warn", "manual", "seed-0x500c", "manual")
     return ("manual", "seed-0x500c", "configured-auto" if ae_auto else "manual")
 
 
@@ -107,19 +109,24 @@ def main() -> int:
         if actual != expected:
             failures.append(f"{label} conversion: got 0x{actual:x}, expected 0x{expected:x}")
 
-    if not exposure_allowed(30, 30):
-        failures.append("30fps must remain inside the conservative exposure-write policy")
-    if exposure_allowed(31, 30):
-        failures.append("31fps must be fenced by a 30fps exposure-write policy")
+    if exposure_policy(30, 120, 30) != "allow":
+        failures.append("30fps must remain inside the qualified exposure range")
+    if exposure_policy(31, 120, 30) != "warn":
+        failures.append("31fps must warn without rejecting a mode-valid exposure write")
+    if exposure_policy(121, 120, 30) != "invalid":
+        failures.append("mode-invalid exposure FPS must remain rejected")
     for high_fps in (31, 60, 120):
         if exposure_replay_plan(True, high_fps, 30) != ("configured-auto",):
             failures.append(f"AE auto at {high_fps}fps must skip 0x500c seeding")
-        try:
-            exposure_replay_plan(False, high_fps, 30)
-        except BlockingIOError:
-            pass
-        else:
-            failures.append(f"manual exposure at {high_fps}fps must be rejected")
+        if exposure_replay_plan(False, high_fps, 30) != (
+            "warn",
+            "manual",
+            "seed-0x500c",
+            "manual",
+        ):
+            failures.append(
+                f"manual exposure at {high_fps}fps must warn and write the seed"
+            )
     if exposure_replay_plan(True, 30, 30) != (
         "manual",
         "seed-0x500c",
@@ -279,9 +286,26 @@ def main() -> int:
         write = exposure_write.find("maxim_ops_i2c_write")
         if gate < 0 or write < 0 or gate > write:
             failures.append("exposure FPS policy is not checked before I2C")
-        for field in ("channel", "mode", "fps", "exposure", "safe_max_fps"):
-            if field not in exposure_write:
-                failures.append(f"exposure rejection log lacks {field}")
+    exposure_policy_check = function(source, "max9296_check_exposure_policy")
+    for field in (
+        "channel",
+        "mode",
+        "fps",
+        "exposure",
+        "safe_max_fps",
+        "frame_period_us",
+        "over_period",
+    ):
+        if field not in exposure_policy_check:
+            failures.append(f"exposure warning path lacks {field}")
+    if "max9296_exposure_policy_decision" not in exposure_policy_check:
+        failures.append("driver does not consume the tested exposure policy decision")
+    if "MAX9296_EXPOSURE_POLICY_WARN" not in exposure_policy_check:
+        failures.append("driver lacks the high-FPS warning branch")
+    if "-EBUSY" in exposure_policy_check:
+        failures.append("mode-valid high-FPS exposure is still rejected with -EBUSY")
+    if "warn_high_fps" not in exposure_policy_check:
+        failures.append("exposure preflight cannot suppress duplicate high-FPS warnings")
 
     direct_exposure_writes = re.findall(
         r"maxim_ops_i2c_write\s*\([^;]*?AP1302_REG_EXP_TIME", source, re.S
@@ -608,7 +632,7 @@ def main() -> int:
             print(f"FAIL: {failure}", file=sys.stderr)
         return 1
 
-    print("PASS: 360p modes, exposure fence, and common zoom-factor contracts")
+    print("PASS: 360p modes, exposure warning, and common zoom-factor contracts")
     return 0
 
 

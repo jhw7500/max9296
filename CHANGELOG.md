@@ -5,6 +5,25 @@ All notable changes to the MAX9296 driver will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11] - 2026-09-01
+
+### Changed
+- 모드가 허용하는 FPS 범위에서는 `EXP_TIME(0x500c)` 수동 쓰기를 더 이상
+  30 FPS 기준으로 차단하지 않는다. 31~120 FPS에서는 채널, 모드, FPS,
+  요청 노출값, frame period와 기존 검증 상한을 경고로 남긴 뒤 I2C 쓰기를
+  진행한다.
+- 640x360@120에서 JSON 초기 수동 노출과 런타임 `exp_time`/`exp_time_chN`
+  변경을 모두 허용한다. AE auto의 고속 초기 exposure seed 생략 동작은 유지한다.
+- 모드 상한을 넘는 FPS, 0 FPS 또는 잘못된 검증 상한은 계속 `-EINVAL`로
+  거부한다. SoC 정지 이력이 있는 수동 WB `0x510a`는 추가하지 않았다.
+- 드라이버 버전을 2.10에서 2.11로 올렸다.
+
+### Operational note
+- 120 FPS의 nominal frame period는 약 8,333 us다. `exp_time=5000`처럼
+  10,000 us보다 작은 값도 설정할 수 있으며, frame period 이상 값도 시험을
+  막지는 않지만 `over_period=1` 경고가 남는다. 실제 영상과 전달 FPS는 보드에서
+  함께 확인해야 한다.
+
 ## [2.10] - 2026-08-31
 
 ### Changed

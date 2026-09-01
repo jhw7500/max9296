@@ -1,5 +1,19 @@
 # MAX9296 Driver Release Notes
 
+## Version 2.11 (2026-09-01)
+
+- 30 FPS 초과의 mode-valid 수동 노출을 `-EBUSY`로 차단하던 정책을 경고 후
+  적용으로 변경했다. 실제 `0x500c` 쓰기 직전에 채널, 모드, FPS, 요청값,
+  frame period, 기존 검증 상한과 `over_period` 여부를 기록한다.
+- 640x360@120에서 JSON 초기값은 `ae_on=false`일 때 적용되고, 실행 중에는
+  V4L2 `exp_time`/`exp_time_chN`으로 변경할 수 있다. `ae_on=true`인 고속
+  기동에서는 기존처럼 초기 exposure seed를 생략하고 AP1302 auto AE를 사용한다.
+- 120 FPS의 nominal frame period는 약 8,333 us다. 예를 들어
+  `exp_time=5000`은 기본 10,000 us보다 짧으며 설정 가능하다. frame period
+  이상 값도 시험 목적으로 쓰지만 `over_period=1` 경고가 남는다.
+- 모드가 허용하지 않는 FPS는 계속 I2C 전에 `-EINVAL`로 거부한다. 수동 WB
+  `0x510a` 쓰기는 추가하지 않았다.
+
 ## Version 2.10 (2026-08-31)
 
 - 640x360 single/dual의 일반 FPS 요청 상한을 AR0234 사양에 맞춰 120으로 변경했다.

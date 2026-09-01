@@ -43,7 +43,7 @@
 
 #include "max9296_360p_policy.h"
 
-#define SW_VERSION "2.10"
+#define SW_VERSION "2.11"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
@@ -2404,30 +2404,43 @@ static int max9296_write_per_channel(struct max9296_dev *sensor,
 
 static int max9296_check_exposure_policy(
     struct max9296_dev *sensor, const char *channel, u32 exposure,
-    const struct max9296_mode_info *mode, u32 fps, u32 safe_max_fps) {
-  int ret;
+    const struct max9296_mode_info *mode, u32 fps, u32 safe_max_fps,
+    bool warn_high_fps) {
+  enum max9296_exposure_policy_result decision =
+      max9296_exposure_policy_decision(fps, mode ? mode->max_fps : 0,
+                                       safe_max_fps);
 
-  if (!mode || !fps || fps > mode->max_fps)
-    ret = -EINVAL;
-  else if (!safe_max_fps || fps > safe_max_fps)
-    ret = -EBUSY;
-  else
-    return 0;
+  if (decision == MAX9296_EXPOSURE_POLICY_INVALID) {
+    printk(KERN_WARNING
+           "[%s:%d][%s:%d] exposure write rejected channel=%s "
+           "mode=%ux%u(id=%d) fps=%u exposure=%u safe_max_fps=%u ret=%d",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, channel,
+           mode ? mode->width : 0, mode ? mode->height : 0,
+           mode ? mode->id : -1, fps, exposure, safe_max_fps, -EINVAL);
+    return -EINVAL;
+  }
 
-  printk(KERN_WARNING
-         "[%s:%d][%s:%d] exposure write rejected channel=%s "
-         "mode=%ux%u(id=%d) fps=%u exposure=%u safe_max_fps=%u ret=%d",
-         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, channel,
-         mode ? mode->width : 0, mode ? mode->height : 0,
-         mode ? mode->id : -1, fps, exposure, safe_max_fps, ret);
-  return ret;
+  if (decision == MAX9296_EXPOSURE_POLICY_WARN && warn_high_fps) {
+    u32 frame_period_us = max9296_exposure_frame_period_us(fps);
+
+    printk(KERN_WARNING
+           "[%s:%d][%s:%d] exposure write outside qualified range "
+           "channel=%s mode=%ux%u(id=%d) fps=%u exposure=%u "
+           "frame_period_us=%u over_period=%u safe_max_fps=%u action=write",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, channel,
+           mode->width, mode->height, mode->id, fps, exposure,
+           frame_period_us, exposure >= frame_period_us ? 1U : 0U,
+           safe_max_fps);
+  }
+
+  return 0;
 }
 
 /*
  * All AP1302 EXP_TIME (0x500c) traffic must pass this function.  The normal
  * frame-rate limit and the exposure-write safety limit are intentionally
- * separate mode properties: formats may still negotiate above 30 fps, but a
- * risky exposure write is rejected before the I2C transaction.
+ * separate mode properties: formats may still negotiate above 30 fps, and a
+ * mode-valid exposure write proceeds after an operator-visible warning.
  */
 static int max9296_write_exposure(struct max9296_dev *sensor, u32 i2c_addr,
                                   const char *channel, u32 exposure) {
@@ -2437,7 +2450,7 @@ static int max9296_write_exposure(struct max9296_dev *sensor, u32 i2c_addr,
   int ret;
 
   ret = max9296_check_exposure_policy(sensor, channel, exposure, mode, fps,
-                                      safe_max_fps);
+                                      safe_max_fps, true);
   if (ret)
     return ret;
 
@@ -2452,7 +2465,7 @@ static int max9296_preflight_exposure(struct max9296_dev *sensor,
   u32 safe_max_fps = mode ? mode->exposure_safe_max_fps : 0;
 
   return max9296_check_exposure_policy(sensor, channel, exposure, mode, fps,
-                                       safe_max_fps);
+                                       safe_max_fps, false);
 }
 
 static u32 max9296_cached_exposure_value(
@@ -3122,10 +3135,13 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     return 0;
   }
 
-  /* A control that would write EXP_TIME must be rejected before any I2C
-   * side effect (including the preceding AE_CTRL manual-mode write).  During
-   * probe/power-off there is no I2C transaction, so defaults remain cacheable
-   * and the same policy is enforced when firmware restoration reaches HW. */
+  /* Validate a control that would write EXP_TIME before any I2C side effect
+   * (including the preceding AE_CTRL manual-mode write).  Mode-invalid FPS is
+   * rejected; mode-valid FPS above the qualified range is allowed and warned
+   * by max9296_write_exposure() immediately before the register transaction.
+   * During probe/power-off there is no I2C transaction, so defaults remain
+   * cacheable and the same policy is enforced when firmware restoration
+   * reaches HW. */
   switch (ctrl->id) {
   case V4L2_CID_EXP_TIME:
     ret = max9296_preflight_exposure(sensor, "shared", ctrl->val);
@@ -4399,7 +4415,7 @@ static int max9296_preflight_prepare_locked(
              sensor->link_status.ch_shift + local_channel);
     ret = max9296_check_exposure_policy(
         sensor, channel_name, max9296_cached_exposure_value(sensor, channel),
-        mode, fingerprint->fps, mode->exposure_safe_max_fps);
+        mode, fingerprint->fps, mode->exposure_safe_max_fps, false);
     if (ret)
       return ret;
   }

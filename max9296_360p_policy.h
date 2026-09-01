@@ -7,10 +7,34 @@
  * a lower negotiation ceiling.  End-to-end qualification of the current
  * KEEP/FHD-readout path measured 113-115 fps at a 120 fps request; callers
  * must treat 120 as the allowed request limit, not a guaranteed delivered
- * cadence.  Manual exposure remains independently fenced at 30 fps. */
+ * cadence.  Manual exposure above the qualified 30 fps range is allowed for
+ * characterization, but callers must warn before issuing the register write. */
 #ifndef MAX9296_360P_MAX_FPS
 #define MAX9296_360P_MAX_FPS 120U
 #endif
+
+enum max9296_exposure_policy_result {
+  MAX9296_EXPOSURE_POLICY_INVALID = 0,
+  MAX9296_EXPOSURE_POLICY_ALLOW,
+  MAX9296_EXPOSURE_POLICY_WARN,
+};
+
+static inline enum max9296_exposure_policy_result
+max9296_exposure_policy_decision(unsigned int fps, unsigned int mode_max_fps,
+                                 unsigned int qualified_max_fps) {
+  if (!fps || !mode_max_fps || !qualified_max_fps || fps > mode_max_fps)
+    return MAX9296_EXPOSURE_POLICY_INVALID;
+
+  if (fps > qualified_max_fps)
+    return MAX9296_EXPOSURE_POLICY_WARN;
+
+  return MAX9296_EXPOSURE_POLICY_ALLOW;
+}
+
+static inline unsigned int
+max9296_exposure_frame_period_us(unsigned int fps) {
+  return fps ? 1000000U / fps : 0U;
+}
 
 #ifndef MAX9296_360P_SENSOR_MODE
 #define MAX9296_360P_SENSOR_MODE MAX9296_360P_SENSOR_MODE_KEEP

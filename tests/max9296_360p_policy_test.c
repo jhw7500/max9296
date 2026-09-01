@@ -60,6 +60,22 @@ static void test_only_360p_exposes_the_high_fps_policy(void) {
   CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 121U) == 0U);
 }
 
+static void test_high_fps_manual_exposure_warns_without_rejection(void) {
+  CHECK(max9296_exposure_policy_decision(0U, 120U, 30U) ==
+        MAX9296_EXPOSURE_POLICY_INVALID);
+  CHECK(max9296_exposure_policy_decision(121U, 120U, 30U) ==
+        MAX9296_EXPOSURE_POLICY_INVALID);
+  CHECK(max9296_exposure_policy_decision(30U, 120U, 0U) ==
+        MAX9296_EXPOSURE_POLICY_INVALID);
+  CHECK(max9296_exposure_policy_decision(30U, 120U, 30U) ==
+        MAX9296_EXPOSURE_POLICY_ALLOW);
+  CHECK(max9296_exposure_policy_decision(31U, 120U, 30U) ==
+        MAX9296_EXPOSURE_POLICY_WARN);
+  CHECK(max9296_exposure_policy_decision(120U, 120U, 30U) ==
+        MAX9296_EXPOSURE_POLICY_WARN);
+  CHECK(max9296_exposure_frame_period_us(120U) == 8333U);
+}
+
 static void test_full_fov_roi_is_normalized(void) {
   CHECK(MAX9296_PREVIEW_ROI_X0 == 0x0000U);
   CHECK(MAX9296_PREVIEW_ROI_Y0 == 0x0000U);
@@ -72,6 +88,7 @@ int main(void) {
   test_sensor_mode_preserves_unowned_bits();
   test_high_fps_policy_uses_fixed8_values();
   test_only_360p_exposes_the_high_fps_policy();
+  test_high_fps_manual_exposure_warns_without_rejection();
   test_full_fov_roi_is_normalized();
 
   printf("max9296 360p policy: %u checks, %u failures -> %s\n", checks,
