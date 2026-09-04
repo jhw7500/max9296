@@ -486,6 +486,44 @@ ap_write(0x1184, 0x0013);            /* ATOMIC FINISH */
 > 인터벌을 걸어 **거부를 조용히 삼킨다.** 드라이버가 막던 시절에 이 스크립트로
 > 재현하면 오류 없이 30 fps 급 결과만 나왔다.
 
+### 보드 확인 (2026-09-04, pim-camera-v016, 드라이버 2.12)
+
+드라이버 상한 해제는 확인됐다. **전달률은 측정하지 못했다.**
+
+모드별 FPS 상한 11케이스가 전부 설계대로였다.
+
+| 모드 | ACCEPT | REJECT |
+|---|---|---|
+| 1280x720 / 2560x720 | ~60 | 61 |
+| 1920x1080 / 3840x1080 | ~30 | 31 |
+| 640x360 | ~120 | 121 |
+
+```text
+max9296_s_frame_interval mode=1280x720 fps=61 max_fps=60 rejected
+max9296_s_frame_interval mode=2560x720 fps=61 max_fps=60 rejected
+```
+
+**end-to-end 로는 아직 HD 60 이 돌지 않는다.** edgeconf 를 1280x720@60 으로 병합해
+gstApp 을 기동하면 prepare 이전에 애플리케이션이 거부한다.
+
+```text
+gstApp: [MAX9296_PREPARE] invalid request tuple=1280x720 fps=60,60 enable=1,1,0,0
+```
+
+출처는 gstApp `max9296Prepare.cpp:22-23` 의 `kMaxFpsHdFhd = 30` /
+`kMaxFps360p = 120` 이다. `:426-428` 이 640x360 에만 120 을 주고 나머지에는 30 을
+적용한 뒤 `:451` 에서 초과를 `-EINVAL` 로 막는다. 드라이버가 이번에 분리한 HD/FHD 를
+gstApp 은 아직 한 상수로 묶고 있다. 보드에서 `1280x720@30` 과 `640x360@60` 은 정상
+기동하고 `1280x720@60` 만 거부되는 것으로 교차 확인했다.
+
+측정 방법에 대한 기록: 이번 확인에서 `cam_fps_probe.sh` 로 잰 전달률은 폐기했다.
+같은 조건이 58.27 과 82.57 로 재현되지 않았고, 그 값들은 카메라가 없는 도메인
+(`1-0048`, `health_raw` 의 serializer `device_id: null` / errno `-61`) 에서 나온
+것이었다. §8 이 규정한 대로 probe 는 "되는가" 를 시험하는 도구이고 레이트 측정은
+`cam_fps_stack.sh` / `cam_fps_watch.sh` 로 한다. 계기 자체는 운영 640x360@30
+스트림에서 센서 30.0 / ISP 29.9 / CSI2 29.7 / ISI 29.9, 계층별 손실 1% 이하로
+검증했다.
+
 ---
 
 ## 8. 재현 절차

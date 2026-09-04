@@ -168,6 +168,12 @@ v4l2-ctl -d /dev/v4l-subdev2 -c hflip_ch0=1,vflip_ch0=1   # ch0 180°
 `cam_width`/`cam_height`가 출력 크기를 정하고, `crop_enable`/`dz`는 그 안에서
 디지털 확대·중심 조준만 한다 — 출력 해상도를 바꾸지 않는다.
 
+> ⚠️ 위 `max_fps`는 **드라이버가 허용하는 협상 상한**이지 운영에서 바로 쓸 수 있는
+> 값이 아니다. 1280x720의 60은 드라이버 2.12에서 열렸지만 gstApp
+> (`max9296Prepare.cpp`의 `kMaxFpsHdFhd = 30`)이 아직 HD를 30으로 묶고 있어,
+> HD 60 요청은 prepare 이전에 `[MAX9296_PREPARE] invalid request`로 거부된다.
+> 2026-09-04 보드 확인.
+
 ---
 
 ## 배포

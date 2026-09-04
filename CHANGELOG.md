@@ -28,6 +28,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 640x360 고속 preview 경로는 출력 해상도 640x360으로 계속 게이트된다. HD 상한을
   올려도 이 경로로 들어가지 않으며, 테스트가 이를 어서션으로 고정한다.
 
+### 보드 검증 (2026-09-04, pim-camera-v016)
+
+드라이버 2.12를 적재해 실측했다. **상한 해제는 확인됐고, 전달률은 측정하지
+못했다.**
+
+- 모드별 FPS 상한 11케이스가 전부 설계대로였다. 1280x720/2560x720은 60 ACCEPT
+  61 REJECT(`max9296_s_frame_interval ... fps=61 max_fps=60 rejected`),
+  1920x1080/3840x1080은 30 ACCEPT 31 REJECT, 640x360은 120 ACCEPT 121 REJECT다.
+  2.11에서 `-EINVAL`이던 HD 60 요청이 통과한다.
+
+### 알려진 한계 — end-to-end HD 60은 아직 불가
+
+**이 변경은 드라이버 계층의 상한만 해제한다.** gstApp에 같은 성격의 상한이 한 벌
+더 있어서 운영 경로로는 HD 60을 쓸 수 없다.
+
+```
+gstApp: [MAX9296_PREPARE] invalid request tuple=1280x720 fps=60,60 enable=1,1,0,0
+```
+
+출처는 gstApp `max9296Prepare.cpp:22-23`의 `kMaxFpsHdFhd = 30` / `kMaxFps360p = 120`
+이며, `:426-428`이 640x360에만 120을 주고 나머지는 30을 적용한 뒤 `:451`에서
+초과를 `-EINVAL`로 막는다. 즉 드라이버가 이번에 분리한 HD/FHD를 gstApp은 아직 한
+상수로 묶고 있다. 보드에서 `1280x720@30`과 `640x360@60`은 정상 기동하고
+`1280x720@60`만 거부되는 것으로 교차 확인했다.
+
+전달률은 gstApp이 기동하지 못해 측정할 수 없었다. 측정 계기(`cam_fps_stack.sh`)
+자체는 운영 640x360@30 스트림에서 센서 30.0 / ISP 29.9 / CSI2 29.7 / ISI 29.9,
+계층별 손실 1% 이하로 검증했다.
+
 ## [2.11] - 2026-09-01
 
 ### Changed
