@@ -20,6 +20,8 @@ cc -std=c11 -Wall -Wextra -Werror \
 cc -std=c11 -Wall -Wextra -Werror \
     -DMAX9296_360P_MAX_FPS=30U \
     -DMAX9296_360P_EXPECTED_MAX_FPS=30U \
+    -DMAX9296_HD_MAX_FPS=30U \
+    -DMAX9296_HD_EXPECTED_MAX_FPS=30U \
     "$repo_dir/tests/max9296_360p_policy_test.c" \
     -o "$restricted_bin"
 

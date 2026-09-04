@@ -102,6 +102,11 @@ directory를 사용하도록 수정했다.
 `-EBUSY`, 잘못된 mode/FPS는 `-EINVAL`이다. AE auto는 high-FPS에서 초기 exposure
 seed만 생략하고 나머지 AE/gain/AWB/flip 제어를 유지한다.
 
+> 정책 갱신(2026-09-01): 위 `-EBUSY` 는 측정 시점 동작이다. 이후 모드가 허용하는
+> FPS 범위의 manual exposure는 거부하지 않고 `action=write` 경고를 남긴 뒤 쓴다.
+> `-EINVAL`(모드 상한 초과 FPS, 0 FPS, 잘못된 검증 상한)만 I2C 전에 반환한다.
+> AE auto의 seed 생략은 그대로다.
+
 MCP4018이 없는 ch0의 operational `-ENXIO`는 기존처럼 로그만 남기고 prepare를
 실패시키지 않는다. 노출 정책 위반만 첫 I2C 전에 반환한다. source와 테스트에는
 SoC 정지 이력이 있는 manual-WB `0x510A` 쓰기가 없고 AWB는 `0x5100`만 사용한다.
@@ -520,6 +525,11 @@ system CPU 30.0%, gstApp RSS 37,096 KiB 유지, CPU/SOC 54/56 °C 유지였다. 
 요청 협상과 약 113 FPS 전달은 정상이나 strict `>=118.8 FPS`에는 미달한다.
 따라서 사용자는 `640x360@120 요청`, `실측 약 113~115 FPS`, `정확한 120 미보장`을
 구분해야 한다. 120 FPS에서 수동 AE 전환은 예상대로 I2C 전에 `-EBUSY`로 거부됐다.
+
+> 정책 갱신(2026-09-01): 위 거부는 측정 시점(드라이버 2.10) 동작이다. 이후 모드가
+> 허용하는 FPS 범위의 수동 노출은 거부하지 않고 `action=write` 경고를 남긴 뒤 쓴다.
+> 모드 상한을 넘는 FPS만 `-EINVAL`로 거부한다. 위 FPS 실측과 판정 자체는 이 변경과
+> 무관하게 그대로 유효하다.
 
 운영 JSON으로 복원한 뒤 20초 회귀는 ch0 sensor/ISP/CSI/ISI
 `29.9/29.9/29.8/29.9`, ch1 `30.0/29.9/29.7/29.8` FPS이며 서비스는 active다.

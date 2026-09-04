@@ -66,10 +66,14 @@ before `prepare`; the prepare fingerprint includes enable state. A streaming
 enable transition fails with `EBUSY`. Use a hard reset/firmware reload to clear
 an old true crop reliably; restarting gstApp alone is not a hardware epoch.
 
-At 640x360 above 30 FPS, AE-auto preparation skips the `0x500c` exposure seed
-but preserves the remaining AE/gain/AWB controls. A pending manual exposure is
-rejected before the first mode-table I2C write. No manual-WB `0x510a` write is
-part of this ABI.
+Above the 30 FPS exposure-safety limit — 640x360 at 31-120 FPS and 1280x720 at
+31-60 FPS — AE-auto preparation skips the `0x500c` exposure seed but preserves
+the remaining AE/gain/AWB controls. A pending manual exposure is **applied after
+an operator-visible warning**, not rejected: the write proceeds and the log
+records the channel, mode, FPS, requested exposure, frame period, `over_period`
+and `action=write`. Only an FPS the mode does not allow — or a zero FPS or an
+invalid safety limit — is rejected, with `-EINVAL`, before the first mode-table
+I2C write. No manual-WB `0x510a` write is part of this ABI.
 
 ## Parallel use
 

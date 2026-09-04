@@ -190,9 +190,17 @@ def main() -> int:
     if "invalid fps %u (valid: 1~%u)" not in source:
         failures.append("FPS rejection log still advertises a stale fixed limit")
     if "#define MAX9296_DEFAULT_MAX_FPS 30" not in source:
-        failures.append("HD/FHD ordinary max_fps policy is missing")
-    if source.count("MAX9296_DEFAULT_MAX_FPS,") < 7:
-        failures.append("one or more HD/FHD mode tables still advertise over 30fps")
+        failures.append("FHD ordinary max_fps policy is missing")
+    if source.count("MAX9296_DEFAULT_MAX_FPS,") < 3:
+        failures.append("one or more FHD mode tables no longer cap at 30fps")
+    if "#define MAX9296_HD_MAX_FPS 60U" not in policy:
+        failures.append("default HD request limit is not the measured 60fps")
+    if "#ifndef MAX9296_HD_MAX_FPS" not in policy:
+        failures.append("special builds cannot override the default HD FPS limit")
+    if "#define MAX9296_HD_MAX_FPS" in source:
+        failures.append("driver source shadows the tested HD FPS policy")
+    if source.count("MAX9296_HD_MAX_FPS,") < 4:
+        failures.append("init, single, dual, and right-hand HD modes do not share the policy limit")
 
     enum_interval = function(source, "max9296_enum_frame_interval")
     if "max9296_find_mode(sensor, fie->width, fie->height, false)" not in enum_interval:

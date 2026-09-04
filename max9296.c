@@ -869,7 +869,7 @@ static const struct max9296_mode_info max9296_mode_init_data = {
     720,
     max9296_init_setting_1080p_crop_720p_2ch_30fps,
     ARRAY_SIZE(max9296_init_setting_1080p_crop_720p_2ch_30fps),
-    MAX9296_DEFAULT_MAX_FPS,
+    MAX9296_HD_MAX_FPS,
     MAX9296_EXPOSURE_SAFE_MAX_FPS,
 };
 
@@ -880,7 +880,7 @@ static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
         720,
         max9296_init_setting_1080p_crop_720p_2ch_30fps,
         ARRAY_SIZE(max9296_init_setting_1080p_crop_720p_2ch_30fps),
-        MAX9296_DEFAULT_MAX_FPS,
+        MAX9296_HD_MAX_FPS,
         MAX9296_EXPOSURE_SAFE_MAX_FPS,
     },
     {
@@ -889,7 +889,7 @@ static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
         720,
         max9296_init_setting_720p_30fps_L,
         ARRAY_SIZE(max9296_init_setting_720p_30fps_L),
-        MAX9296_DEFAULT_MAX_FPS,
+        MAX9296_HD_MAX_FPS,
         MAX9296_EXPOSURE_SAFE_MAX_FPS,
     },
     {
@@ -935,7 +935,7 @@ static const struct max9296_mode_info max9296_mode_data_HD_R = {
     720,
     max9296_init_setting_720p_30fps_R,
     ARRAY_SIZE(max9296_init_setting_720p_30fps_R),
-    MAX9296_DEFAULT_MAX_FPS,
+    MAX9296_HD_MAX_FPS,
     MAX9296_EXPOSURE_SAFE_MAX_FPS,
 };
 
