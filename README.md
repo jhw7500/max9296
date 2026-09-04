@@ -12,7 +12,7 @@ AR0234 Sensor -> AP1302 ISP -> MAX9295 Serializer
 
 | 항목 | 값 |
 |---|---|
-| 드라이버 버전 | 2.11 (`SW_VERSION`, `max9296.c:46`) |
+| 드라이버 버전 | 2.12 (`SW_VERSION`, `max9296.c:46`) |
 | 대상 커널 | linux-imx 5.10.35 (NXP BSP) |
 | vermagic | `5.10.35-lts-5.10.y+g2fce14defc04 SMP preempt mod_unload modversions aarch64` |
 | DT compatible | `maxim,max9296` |

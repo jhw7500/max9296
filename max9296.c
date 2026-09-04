@@ -43,7 +43,7 @@
 
 #include "max9296_360p_policy.h"
 
-#define SW_VERSION "2.11"
+#define SW_VERSION "2.12"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \

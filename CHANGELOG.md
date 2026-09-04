@@ -5,11 +5,10 @@ All notable changes to the MAX9296 driver will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-드라이버 버전은 2.11로 유지한다.
+## [2.12] - 2026-09-04
 
 ### Changed
+- 드라이버 버전을 2.11에서 2.12로 올렸다.
 - 1280x720과 2560x720의 일반 FPS 협상 상한을 30에서 60으로 올렸다
   (`MAX9296_HD_MAX_FPS`, `max9296_360p_policy.h`). `docs/fps-limit-analysis.md`가
   1280x720 @60 요청에서 54.0~55.5 FPS를 펌웨어·드라이버·DTS 변경 없이 실측했고,
