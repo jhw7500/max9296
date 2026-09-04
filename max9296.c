@@ -5694,6 +5694,15 @@ static int max9296_parse_prepare_command(
     goto invalid;
   }
 
+  /*
+   * This first pass always reads the left/default table, while the request may
+   * later resolve to a right-hand table (max9296_mode_data_*_R) depending on
+   * `enable`.  That is safe only because both tables share the same max_fps
+   * macro for a given resolution.  If a right-hand table ever takes a different
+   * ceiling, this check would admit or reject the wrong requests; the accurate
+   * gate is max9296_preflight_prepare_locked(), which validates against
+   * fingerprint->mode->max_fps.
+   */
   if (command->fps > max9296_mode_data[command->mode_id].max_fps)
     goto invalid;
 
