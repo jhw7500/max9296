@@ -38,22 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1920x1080/3840x1080은 30 ACCEPT 31 REJECT, 640x360은 120 ACCEPT 121 REJECT다.
   2.11에서 `-EINVAL`이던 HD 60 요청이 통과한다.
 
-### 알려진 한계 — end-to-end HD 60은 아직 불가
+### 범위 — 드라이버 협상 상한만 해제한다
 
-**이 변경은 드라이버 계층의 상한만 해제한다.** gstApp에 같은 성격의 상한이 한 벌
-더 있어서 운영 경로로는 HD 60을 쓸 수 없다.
+`max_fps`는 드라이버가 허용하는 **요청 상한**이며, 그 FPS가 실제로 전달된다는
+보장도 상위 스택이 그 조합을 지원한다는 보장도 아니다. 640x360의 120이 요청
+상한이지 전달 보장이 아닌 것과 같은 성격이다.
 
-```
-gstApp: [MAX9296_PREPARE] invalid request tuple=1280x720 fps=60,60 enable=1,1,0,0
-```
-
-출처는 gstApp `max9296Prepare.cpp:22-23`의 `kMaxFpsHdFhd = 30` / `kMaxFps360p = 120`
-이며, `:426-428`이 640x360에만 120을 주고 나머지는 30을 적용한 뒤 `:451`에서
-초과를 `-EINVAL`로 막는다. 즉 드라이버가 이번에 분리한 HD/FHD를 gstApp은 아직 한
-상수로 묶고 있다. 보드에서 `1280x720@30`과 `640x360@60`은 정상 기동하고
-`1280x720@60`만 거부되는 것으로 교차 확인했다.
-
-전달률은 gstApp이 기동하지 못해 측정할 수 없었다. 측정 계기(`cam_fps_stack.sh`)
+HD 60의 실제 전달률은 이번에 측정하지 못했다. 측정 계기(`cam_fps_stack.sh`)
 자체는 운영 640x360@30 스트림에서 센서 30.0 / ISP 29.9 / CSI2 29.7 / ISI 29.9,
 계층별 손실 1% 이하로 검증했다.
 

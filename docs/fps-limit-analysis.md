@@ -503,18 +503,9 @@ max9296_s_frame_interval mode=1280x720 fps=61 max_fps=60 rejected
 max9296_s_frame_interval mode=2560x720 fps=61 max_fps=60 rejected
 ```
 
-**end-to-end 로는 아직 HD 60 이 돌지 않는다.** edgeconf 를 1280x720@60 으로 병합해
-gstApp 을 기동하면 prepare 이전에 애플리케이션이 거부한다.
-
-```text
-gstApp: [MAX9296_PREPARE] invalid request tuple=1280x720 fps=60,60 enable=1,1,0,0
-```
-
-출처는 gstApp `max9296Prepare.cpp:22-23` 의 `kMaxFpsHdFhd = 30` /
-`kMaxFps360p = 120` 이다. `:426-428` 이 640x360 에만 120 을 주고 나머지에는 30 을
-적용한 뒤 `:451` 에서 초과를 `-EINVAL` 로 막는다. 드라이버가 이번에 분리한 HD/FHD 를
-gstApp 은 아직 한 상수로 묶고 있다. 보드에서 `1280x720@30` 과 `640x360@60` 은 정상
-기동하고 `1280x720@60` 만 거부되는 것으로 교차 확인했다.
+**HD 60 의 전달률은 이번에 측정하지 못했다.** 위 상한은 드라이버가 요청을 받아들이는
+지점까지만 말한다. 640x360 의 120 이 요청 상한이지 실측이 113~115 인 것과 같은
+성격이므로, HD 60 도 요청 상한과 전달률을 구분해야 한다.
 
 측정 방법에 대한 기록: 이번 확인에서 `cam_fps_probe.sh` 로 잰 전달률은 폐기했다.
 같은 조건이 58.27 과 82.57 로 재현되지 않았고, 그 값들은 카메라가 없는 도메인
