@@ -186,6 +186,8 @@ v4l2-ctl -d /dev/v4l-subdev2 -c hflip_ch0=1,vflip_ch0=1   # ch0 180°
 | [`V4L2_CTRL_GUIDE.md`](V4L2_CTRL_GUIDE.md) | 런타임 제어 가이드 (중심 문서) |
 | [`CHANGELOG.md`](CHANGELOG.md) | 변경 이력 (Keep a Changelog / SemVer) — 버전 이력의 정본 |
 | [`RELEASE_NOTES.md`](RELEASE_NOTES.md) | 릴리즈 요약 (일부 버전만 수록) |
+| [`docs/v4l2-controls-guide.md`](docs/v4l2-controls-guide.md) | 컨트롤 요약본 (318줄). 같은 주제를 다루므로 상세는 위 `V4L2_CTRL_GUIDE.md`를 본다 |
+| [`docs/reports/`](docs/reports/) | 날짜별 검토 결과 보고 |
 | [`docs/health-raw-v1.md`](docs/health-raw-v1.md) | 읽기 전용 health ABI v1 |
 | [`docs/parallel-prepare-v1.md`](docs/parallel-prepare-v1.md) | 병렬 prepare ABI v1 (영문) |
 | [`docs/prepare-board-gate-v1.md`](docs/prepare-board-gate-v1.md) | prepare 보드 게이트 G1~G4 실측 (전부 통과) |

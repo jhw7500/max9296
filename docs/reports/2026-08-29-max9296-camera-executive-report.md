@@ -57,6 +57,11 @@ vendor bootdata를 확보하는 것이다.
   사용하는 것을 소스와 공식 register reference에서 확인했다.
 - 안전 상한 30 FPS를 넘는 상태에서는 manual exposure write를 I2C 실행 전에
   `-EBUSY` 또는 `-EINVAL`로 거부한다.
+
+  > 정책 갱신: 위 거부는 보고 시점 동작이다. 이후 모드가 허용하는 FPS 범위의
+  > manual exposure는 거부하지 않고 `action=write` 경고를 남긴 뒤 쓰며,
+  > 모드 상한을 넘는 FPS만 `-EINVAL`로 거부한다. 안전 상한 30 FPS 자체와
+  > 아래 로그 항목, `0x510A` 미추가는 그대로다.
 - 거부 로그에 채널, 모드, FPS, 요청 노출값과 안전 상한을 남긴다.
 - 안전 범위의 AE, exposure, gain 및 기존 제어 동작은 유지한다.
 - SoC 정지 이력이 있는 manual WB register `0x510A` 쓰기는 추가하지 않았다.

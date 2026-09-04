@@ -357,7 +357,7 @@ gain_ch0 (int) : min=0 max=... step=1 default=256 value=256
 ### 4.2 공통(커스텀) 컨트롤 설정 예시
 
 ```bash
-# exp_time: 예) 20000 (30 FPS 이하에서만 레지스터 쓰기 허용)
+# exp_time: 예) 20000 (30 FPS 초과에서는 경고를 남기고 쓴다 - §3.3)
 sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=exp_time=20000
 
 # fixed12: contrast/saturation 1.0 (4096)
