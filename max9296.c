@@ -43,7 +43,7 @@
 
 #include "max9296_360p_policy.h"
 
-#define SW_VERSION "2.11"
+#define SW_VERSION "2.12"
 #define SERDES_3GBPS
 #define SERDES_STPx
 #define _FILE_                                                                 \
@@ -869,7 +869,7 @@ static const struct max9296_mode_info max9296_mode_init_data = {
     720,
     max9296_init_setting_1080p_crop_720p_2ch_30fps,
     ARRAY_SIZE(max9296_init_setting_1080p_crop_720p_2ch_30fps),
-    MAX9296_DEFAULT_MAX_FPS,
+    MAX9296_HD_MAX_FPS,
     MAX9296_EXPOSURE_SAFE_MAX_FPS,
 };
 
@@ -880,7 +880,7 @@ static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
         720,
         max9296_init_setting_1080p_crop_720p_2ch_30fps,
         ARRAY_SIZE(max9296_init_setting_1080p_crop_720p_2ch_30fps),
-        MAX9296_DEFAULT_MAX_FPS,
+        MAX9296_HD_MAX_FPS,
         MAX9296_EXPOSURE_SAFE_MAX_FPS,
     },
     {
@@ -889,7 +889,7 @@ static const struct max9296_mode_info max9296_mode_data[MAX9296_NUM_MODES] = {
         720,
         max9296_init_setting_720p_30fps_L,
         ARRAY_SIZE(max9296_init_setting_720p_30fps_L),
-        MAX9296_DEFAULT_MAX_FPS,
+        MAX9296_HD_MAX_FPS,
         MAX9296_EXPOSURE_SAFE_MAX_FPS,
     },
     {
@@ -935,7 +935,7 @@ static const struct max9296_mode_info max9296_mode_data_HD_R = {
     720,
     max9296_init_setting_720p_30fps_R,
     ARRAY_SIZE(max9296_init_setting_720p_30fps_R),
-    MAX9296_DEFAULT_MAX_FPS,
+    MAX9296_HD_MAX_FPS,
     MAX9296_EXPOSURE_SAFE_MAX_FPS,
 };
 
@@ -5694,6 +5694,15 @@ static int max9296_parse_prepare_command(
     goto invalid;
   }
 
+  /*
+   * This first pass always reads the left/default table, while the request may
+   * later resolve to a right-hand table (max9296_mode_data_*_R) depending on
+   * `enable`.  That is safe only because both tables share the same max_fps
+   * macro for a given resolution.  If a right-hand table ever takes a different
+   * ceiling, this check would admit or reject the wrong requests; the accurate
+   * gate is max9296_preflight_prepare_locked(), which validates against
+   * fingerprint->mode->max_fps.
+   */
   if (command->fps > max9296_mode_data[command->mode_id].max_fps)
     goto invalid;
 

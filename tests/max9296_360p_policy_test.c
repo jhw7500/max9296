@@ -6,6 +6,10 @@
 #define MAX9296_360P_EXPECTED_MAX_FPS 120U
 #endif
 
+#ifndef MAX9296_HD_EXPECTED_MAX_FPS
+#define MAX9296_HD_EXPECTED_MAX_FPS 60U
+#endif
+
 static unsigned int checks;
 static unsigned int failures;
 
@@ -36,8 +40,11 @@ static void test_high_fps_policy_uses_fixed8_values(void) {
 }
 
 static void test_only_360p_exposes_the_high_fps_policy(void) {
+  CHECK(MAX9296_HD_MAX_FPS == MAX9296_HD_EXPECTED_MAX_FPS);
   CHECK(max9296_mode_max_fps(1920U, 1080U) == 30U);
-  CHECK(max9296_mode_max_fps(1280U, 720U) == 30U);
+  CHECK(max9296_mode_max_fps(3840U, 1080U) == 30U);
+  CHECK(max9296_mode_max_fps(1280U, 720U) == MAX9296_HD_EXPECTED_MAX_FPS);
+  CHECK(max9296_mode_max_fps(2560U, 720U) == MAX9296_HD_EXPECTED_MAX_FPS);
   CHECK(max9296_mode_max_fps(640U, 360U) ==
         MAX9296_360P_EXPECTED_MAX_FPS);
   CHECK(max9296_mode_max_fps(1280U, 360U) ==
@@ -51,7 +58,11 @@ static void test_only_360p_exposes_the_high_fps_policy(void) {
   CHECK(max9296_preview_sensor_mode_override(640U, 360U) ==
         MAX9296_360P_SENSOR_MODE);
 
+  /* Raising the HD negotiation ceiling must not pull HD into the 640x360
+   * high-fps preview path: that path stays gated on the output size. */
   CHECK(max9296_preview_output_uses_high_fps(1280U, 720U, 31U) == 0U);
+  CHECK(max9296_preview_output_uses_high_fps(1280U, 720U, 60U) == 0U);
+  CHECK(max9296_preview_output_uses_high_fps(2560U, 720U, 60U) == 0U);
   CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 30U) == 0U);
   CHECK(max9296_preview_output_uses_high_fps(640U, 360U, 31U) ==
         (MAX9296_360P_EXPECTED_MAX_FPS >= 31U));

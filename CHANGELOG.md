@@ -5,6 +5,29 @@ All notable changes to the MAX9296 driver will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12] - 2026-09-04
+
+### Changed
+- 드라이버 버전을 2.11에서 2.12로 올렸다.
+- 1280x720과 2560x720의 일반 FPS 협상 상한을 30에서 60으로 올렸다
+  (`MAX9296_HD_MAX_FPS`, `max9296_360p_policy.h`). `docs/fps-limit-analysis.md`가
+  1280x720 @60 요청에서 54.0~55.5 FPS를 펌웨어·드라이버·DTS 변경 없이 실측했고,
+  AP1302 펌웨어의 720p 라인타임이 14.80 us(60 FPS급)이므로 기존 30은 하드웨어가
+  아니라 드라이버가 만든 상한이었다. init/single/dual/right-hand 네 개 720p 모드
+  테이블이 모두 이 상수를 공유한다.
+- 1920x1080과 3840x1080은 30을 유지한다. 1080p 모드의 라인타임 26.27 us로는 60 FPS
+  트리거 주기 안에 한 프레임을 못 읽어 AP1302가 정수 트리거 분주로 떨어지고, 요청을
+  올릴수록 오히려 나빠진다(40 -> 19.9, 60 -> 19.8 FPS). 이를 여는 것은 드라이버 상수의
+  문제가 아니다 — 센서 라인타임과 ISP 클럭 트리가 함께 정합된 벤더 펌웨어가 필요하다.
+  blob의 `HINF_MIPI_FREQ`만 올리면 동반 PLL·분주비가 맞지 않아 ISP 출력이 0이 된다
+  (`docs/fps-limit-analysis.md` §1, §4.3, §7).
+- `EXP_TIME(0x500c)` 쓰기 안전 상한은 모든 모드에서 30 FPS 그대로다. 따라서 1280x720의
+  31~60 FPS도 640x360의 31~120 FPS와 같이 경고 후 적용 구간이 된다.
+
+### Unchanged
+- 640x360 고속 preview 경로는 출력 해상도 640x360으로 계속 게이트된다. HD 상한을
+  올려도 이 경로로 들어가지 않으며, 테스트가 이를 어서션으로 고정한다.
+
 ## [2.11] - 2026-09-01
 
 ### Changed

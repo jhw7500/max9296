@@ -13,6 +13,25 @@
 #define MAX9296_360P_MAX_FPS 120U
 #endif
 
+/* The AP1302 firmware uses a different sensor line time per resolution mode:
+ * 720p runs a 60 fps-class 14.80 us line time while 1080p runs a 30 fps-class
+ * 26.27 us one.  Board measurement recorded 1280x720 delivering 54.0-55.5 fps
+ * at a 60 fps request with no firmware, driver or DTS change, so the previous
+ * 30 fps ceiling was a driver-side limit rather than a hardware one.  1080p is
+ * different and keeps 30: its 26.27 us line time cannot read a frame inside a
+ * 60 fps trigger period, so the AP1302 falls back to integer trigger division
+ * and gets worse (40 -> 19.9, 60 -> 19.8 fps).  Lifting that needs a vendor
+ * firmware whose sensor line time and ISP clock tree are coherent -- patching
+ * the blob's HINF_MIPI_FREQ field alone zeroes ISP output because the
+ * companion PLL/divider values do not match.  See docs/fps-limit-analysis.md.
+ *
+ * Raising this ceiling only widens FPS negotiation.  The 640x360 high-fps
+ * preview path stays gated on the 640x360 output size, so HD does not inherit
+ * it.  The exposure-write safety limit stays 30 fps for every mode. */
+#ifndef MAX9296_HD_MAX_FPS
+#define MAX9296_HD_MAX_FPS 60U
+#endif
+
 enum max9296_exposure_policy_result {
   MAX9296_EXPOSURE_POLICY_INVALID = 0,
   MAX9296_EXPOSURE_POLICY_ALLOW,
@@ -76,8 +95,10 @@ static inline unsigned int max9296_mode_max_fps(unsigned int width,
   if (height == 360U && (width == 640U || width == 1280U))
     return MAX9296_360P_MAX_FPS;
 
-  if ((height == 720U && (width == 1280U || width == 2560U)) ||
-      (height == 1080U && (width == 1920U || width == 3840U)))
+  if (height == 720U && (width == 1280U || width == 2560U))
+    return MAX9296_HD_MAX_FPS;
+
+  if (height == 1080U && (width == 1920U || width == 3840U))
     return 30U;
 
   return 0U;

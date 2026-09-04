@@ -29,7 +29,7 @@ V4L2 subdev 노드도 이 전역 채널과 정합되게 사용한다.
 | 카메라당 출력 | single V4L2 폭 | dual V4L2 폭 | production `max_fps` | 노출 쓰기 안전 상한 |
 |---:|---:|---:|---:|---:|
 | 1920x1080 | 1920x1080 | 3840x1080 | 30 | 30 |
-| 1280x720 | 1280x720 | 2560x720 | 30 | 30 |
+| 1280x720 | 1280x720 | 2560x720 | 60 | 30 |
 | 640x360 | 640x360 | 1280x360 | 120 | 30 |
 
 `cam_width`/`cam_height`는 AP1302/CSI의 출력 크기를 선택한다. `crop_enable`과
@@ -148,17 +148,32 @@ gstApp 재시작만으로는 하드웨어 epoch가 바뀌지 않는다.
 
 ### 3.3 노출 쓰기 안전 정책
 
-640x360의 일반 영상 요청 상한은 120 FPS이고 HD/FHD 상한은 30 FPS다.
-`EXP_TIME(0x500c)` 안전 상한은 모든 모드에서 별도로 30 FPS를 유지한다. 따라서
-640x360의 31~120 FPS에서 `exp_time`, `exp_time_chX` 또는 수동 AE 전환으로
-노출 쓰기가 필요하면 레지스터를 건드리기 전에 `-EBUSY`로 거부한다. 커널 로그에는
-채널, 모드, 현재 FPS, 요청 노출값, 안전 상한이 기록된다.
+일반 영상 요청 상한은 640x360이 120 FPS, 1280x720이 60 FPS, 1920x1080이 30 FPS다.
+`EXP_TIME(0x500c)` 안전 상한은 모든 모드에서 별도로 30 FPS를 유지한다.
 
-640x360에서 30 FPS를 넘겨도 AE auto이면 gstApp과 드라이버는 초기 `0x500c`
-exposure seed를 생략하고 AE/gain/AWB/flip 등 나머지 제어를 유지한다. manual AE나
-cache/replay된 수동 노출이 있으면 첫 mode-table I2C 쓰기 전에 실패한다. 30 FPS
-이하에서는 기존 노출·gain·AE 동작을 유지한다. SoC 정지 이력이 있는 수동 WB
-`0x510a` 쓰기는 이 구현에 추가하지 않았다.
+안전 상한을 넘는 모드-유효 FPS에서 `exp_time`, `exp_time_chX` 또는 수동 AE 전환으로
+노출 쓰기가 필요하면 **거부하지 않고 경고를 남긴 뒤 그대로 쓴다.** 커널 로그에는
+`exposure write outside qualified range` 와 함께 채널, 모드, 현재 FPS, 요청 노출값,
+frame period, `over_period` 여부, 안전 상한, `action=write` 가 기록된다. 이 구간은
+640x360의 31~120 FPS와 1280x720의 31~60 FPS다.
+
+1920x1080은 모드 상한도 30 FPS라 이 경고 구간이 없다. 30 FPS 이하는 경고 없이 쓰고
+31 FPS 이상은 아래 `-EINVAL` 경로로 간다.
+
+모드가 허용하지 않는 FPS, 0 FPS, 잘못된 검증 상한은 레지스터를 건드리기 전에
+`-EINVAL` 로 거부하며 `exposure write rejected` 로그를 남긴다.
+
+`exp_time` 값 자체에는 상한이 없다 (`0 ~ INT_MAX`, 기본 10000). frame period 초과를
+알리는 `over_period` 는 위 경고 안에서만 계산·기록되므로, 안전 상한 이하로 도는
+모드에서는 frame period를 크게 넘는 노출값을 넣어도 경고가 남지 않는다. 값의 타당성은
+호출자가 판단해야 한다. 참고로 nominal frame period는 120 FPS에서 약 8,333 us,
+60 FPS에서 약 16,667 us다.
+
+안전 상한을 넘겨도 AE auto이면 gstApp과 드라이버는 초기 `0x500c` exposure seed를
+생략하고 AE/gain/AWB/flip 등 나머지 제어를 유지한다. `ae_on=false`인 JSON 초기 수동
+노출과 런타임 `exp_time`/`exp_time_chX` 변경은 모두 적용된다. 30 FPS 이하에서는 기존
+노출·gain·AE 동작을 유지한다. SoC 정지 이력이 있는 수동 WB `0x510a` 쓰기는 이 구현에
+추가하지 않았다.
 
 ### 3.4 MCP4018 디지털 가변저항
 
@@ -342,7 +357,7 @@ gain_ch0 (int) : min=0 max=... step=1 default=256 value=256
 ### 4.2 공통(커스텀) 컨트롤 설정 예시
 
 ```bash
-# exp_time: 예) 20000 (30 FPS 이하에서만 레지스터 쓰기 허용)
+# exp_time: 예) 20000 (30 FPS 초과에서는 경고를 남기고 쓴다 - §3.3)
 sudo v4l2-ctl -d /dev/v4l-subdev2 --set-ctrl=exp_time=20000
 
 # fixed12: contrast/saturation 1.0 (4096)

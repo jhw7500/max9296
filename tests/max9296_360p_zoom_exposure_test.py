@@ -115,6 +115,21 @@ def main() -> int:
         failures.append("31fps must warn without rejecting a mode-valid exposure write")
     if exposure_policy(121, 120, 30) != "invalid":
         failures.append("mode-invalid exposure FPS must remain rejected")
+
+    # The warn bucket is "safe_max_fps < fps <= mode_max_fps", so it opens only
+    # where a mode allows more than the 30fps exposure-safety limit. 1280x720
+    # now does (60), 1920x1080 still does not (30). Pin both so the documented
+    # per-mode ranges cannot drift away from the policy.
+    if exposure_policy(30, 60, 30) != "allow":
+        failures.append("HD 30fps must stay inside the qualified exposure range")
+    if exposure_policy(31, 60, 30) != "warn":
+        failures.append("HD 31fps must warn instead of rejecting")
+    if exposure_policy(60, 60, 30) != "warn":
+        failures.append("HD 60fps is mode-valid and must warn instead of rejecting")
+    if exposure_policy(61, 60, 30) != "invalid":
+        failures.append("HD above the 60fps mode limit must remain rejected")
+    if exposure_policy(31, 30, 30) != "invalid":
+        failures.append("FHD has no warn bucket; 31fps must be rejected outright")
     for high_fps in (31, 60, 120):
         if exposure_replay_plan(True, high_fps, 30) != ("configured-auto",):
             failures.append(f"AE auto at {high_fps}fps must skip 0x500c seeding")
@@ -190,9 +205,17 @@ def main() -> int:
     if "invalid fps %u (valid: 1~%u)" not in source:
         failures.append("FPS rejection log still advertises a stale fixed limit")
     if "#define MAX9296_DEFAULT_MAX_FPS 30" not in source:
-        failures.append("HD/FHD ordinary max_fps policy is missing")
-    if source.count("MAX9296_DEFAULT_MAX_FPS,") < 7:
-        failures.append("one or more HD/FHD mode tables still advertise over 30fps")
+        failures.append("FHD ordinary max_fps policy is missing")
+    if source.count("MAX9296_DEFAULT_MAX_FPS,") < 3:
+        failures.append("one or more FHD mode tables no longer cap at 30fps")
+    if "#define MAX9296_HD_MAX_FPS 60U" not in policy:
+        failures.append("default HD request limit is not the measured 60fps")
+    if "#ifndef MAX9296_HD_MAX_FPS" not in policy:
+        failures.append("special builds cannot override the default HD FPS limit")
+    if "#define MAX9296_HD_MAX_FPS" in source:
+        failures.append("driver source shadows the tested HD FPS policy")
+    if source.count("MAX9296_HD_MAX_FPS,") < 4:
+        failures.append("init, single, dual, and right-hand HD modes do not share the policy limit")
 
     enum_interval = function(source, "max9296_enum_frame_interval")
     if "max9296_find_mode(sensor, fie->width, fie->height, false)" not in enum_interval:
