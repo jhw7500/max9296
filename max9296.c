@@ -2944,8 +2944,23 @@ static int max9296_apply_channel_controls(struct max9296_dev *sensor,
     msleep(100);
 
     /* Seed exposure time while in manual mode. Some FW revisions need a
-     * non-zero seed before switching to AE auto. */
-    ret = max9296_write_exposure(sensor, i2c_addr, ch_name, exp_seed);
+     * non-zero seed before switching to AE auto.
+     *
+     * The seed goes to the broadcast address 0x3c on dual-wide.  A dual pair
+     * shares one CSI link behind the GMSL serdes, so both AP1302 must run the
+     * same exposure: under the exposure-centred trigger (R0x1186 SYNC_MODE=2)
+     * a mismatch shifts frame phase and the combined wide frame never forms --
+     * both ISPs keep producing ~119 fps while CSI2 drops to 8..14% and ISI to
+     * zero (max9296 #64).  Writing per channel here is what lets that mismatch
+     * appear: skip_exposure_seed is evaluated per channel (see above), so an
+     * asymmetric ae_on seeds only one side and leaves the other on whatever the
+     * firmware defaults to.  0x3c reaches both AP1302 in dual -- verified on
+     * hardware 2026-09-08 by writing 0x500c once via 0x3c and reading it back
+     * from 0x11 and 0x12.  AE mode (0x5002) stays per channel: it is allowed to
+     * differ, and STEP 1/STEP 2 above and below keep using i2c_addr for it. */
+    ret = max9296_write_exposure(
+        sensor, max9296_hw_is_dual(sensor) ? AP1302_I2C_ADDR : i2c_addr,
+        ch_name, exp_seed);
     if (ret && !first_err)
       first_err = ret;
     msleep(100);

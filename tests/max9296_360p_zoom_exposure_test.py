@@ -340,17 +340,19 @@ def main() -> int:
         )
 
     apply_channel_controls = function(source, "max9296_apply_channel_controls")
-    if "max9296_write_exposure(sensor, i2c_addr" not in apply_channel_controls:
-        failures.append("cached dual exposure restore does not use its channel address")
+    # The seed must broadcast on dual and stay per channel on single.  An older
+    # revision of this check pinned the literal `sensor, i2c_addr` here, which
+    # only recorded what the code did at the time; measurement later showed the
+    # per-channel form is what breaks dual-wide (see the seed contract below).
     if not re.search(
         r"static\s+int\s+max9296_apply_channel_controls\s*\(", source
     ):
         failures.append("channel control replay does not return I2C failures")
-    seed_write = apply_channel_controls.find(
-        "max9296_write_exposure(sensor, i2c_addr"
-    )
+    seed_write = apply_channel_controls.find("ch_name, exp_seed")
     high_auto_gate = apply_channel_controls.find("skip_exposure_seed")
-    if high_auto_gate < 0 or seed_write < high_auto_gate:
+    if seed_write < 0:
+        failures.append("exposure seed write not found in channel control replay")
+    elif high_auto_gate < 0 or seed_write < high_auto_gate:
         failures.append("high-FPS AE auto does not gate manual exposure seeding")
     if "return first_err;" in apply_channel_controls or not re.search(
         r"return\s+0;\s*\}$", apply_channel_controls
@@ -649,6 +651,41 @@ def main() -> int:
 
     if re.search(r"0x510a", source, re.I):
         failures.append("unsafe AP1302 0x510A manual-WB register was introduced")
+
+    # A dual pair shares one CSI link behind the GMSL serdes, so both AP1302
+    # must run the same exposure.  skip_exposure_seed is evaluated per channel,
+    # so seeding through the per-channel address lets an asymmetric ae_on seed
+    # only one side -- the pair's exposure diverges and the combined wide frame
+    # never forms (max9296 #64, measured 2026-09-08).  The seed must therefore
+    # go to the broadcast address on dual.  AE mode (0x5002) stays per channel.
+    seed_call = re.search(
+        r"max9296_write_exposure\(\s*sensor,\s*([^,]+),\s*ch_name,\s*exp_seed\s*\)",
+        apply_channel_controls,
+    )
+    if seed_call is None:
+        failures.append(
+            "exposure seed call not found in max9296_apply_channel_controls"
+        )
+    else:
+        addr_expr = " ".join(seed_call.group(1).split())
+        if "max9296_hw_is_dual(sensor) ? AP1302_I2C_ADDR" not in addr_expr:
+            failures.append(
+                "exposure seed does not broadcast on dual: expected "
+                "`max9296_hw_is_dual(sensor) ? AP1302_I2C_ADDR : i2c_addr`, "
+                f"got `{addr_expr}` (max9296 #64)"
+            )
+
+    # The same function must keep AE mode per channel -- ae_on is allowed to
+    # differ between the two channels of a pair, unlike exposure.
+    for ae_write in re.finditer(
+        r"maxim_ops_i2c_write\(\s*sensor,\s*([^,]+),\s*AP1302_REG_AE_CTRL",
+        apply_channel_controls,
+    ):
+        target = " ".join(ae_write.group(1).split())
+        if target != "i2c_addr":
+            failures.append(
+                f"AE mode write must stay per channel, got `{target}`"
+            )
 
     if failures:
         for failure in failures:
