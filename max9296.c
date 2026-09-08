@@ -42,6 +42,7 @@
 #include <media/v4l2-subdev.h>
 
 #include "max9296_360p_policy.h"
+#include "max9296_exposure_policy.h"
 
 #define SW_VERSION "2.12"
 #define SERDES_3GBPS
@@ -391,6 +392,7 @@ struct max9296_ctrls {
   struct v4l2_ctrl *gain_ch1;
   struct v4l2_ctrl *exposure_ch0;
   struct v4l2_ctrl *exposure_ch1;
+  struct v4l2_ctrl *exposure_cluster[3];
   struct v4l2_ctrl *hflip_ch0;
   struct v4l2_ctrl *hflip_ch1;
   struct v4l2_ctrl *vflip_ch0;
@@ -451,6 +453,10 @@ struct max9296_ctrl_cache {
 
   /* Shared setting value, applied to both channels when set */
   int exposure; /* V4L2_CID_EXP_TIME - exp_time (u32) */
+  u8 exposure_override_mask;
+  bool exposure_reinit_required;
+  u64 exposure_session_generation;
+  bool exposure_session_resetting;
   int dz;
   int dz_x;
   int dz_y;
@@ -2471,11 +2477,52 @@ static int max9296_preflight_exposure(struct max9296_dev *sensor,
 static u32 max9296_cached_exposure_value(
     const struct max9296_dev *sensor,
     const struct max9296_channel_ctrl *channel) {
-  if (channel->exposure)
+  unsigned int override = channel == &sensor->ctrl_cache.ch1
+                              ? MAX9296_EXPOSURE_OVERRIDE_CH1
+                              : MAX9296_EXPOSURE_OVERRIDE_CH0;
+
+  if (sensor->ctrl_cache.exposure_override_mask & override)
     return channel->exposure;
-  if (sensor->ctrl_cache.exposure)
-    return sensor->ctrl_cache.exposure;
-  return 10000;
+  return sensor->ctrl_cache.exposure;
+}
+
+static void
+max9296_require_exposure_reinit_locked(struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+
+  sensor->ctrl_cache.exposure_reinit_required = true;
+  max9296_mark_prepare_stale_locked(sensor);
+}
+
+static void
+max9296_revoke_exposure_stream_locked(struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+
+  max9296_require_exposure_reinit_locked(sensor);
+  sensor->ctrl_cache.firmware_ready = false;
+
+  /* Preserve initialized_fingerprint/epoch until the next topology guard. Only
+   * stream authority is unsafe immediately after an indeterminate I2C result. */
+  mutex_lock(&max9296_power_lock);
+  WRITE_ONCE(sensor->stream_commit_epoch, 0);
+  mutex_unlock(&max9296_power_lock);
+}
+
+static void
+max9296_invalidate_exposure_hardware_locked(struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+
+  max9296_require_exposure_reinit_locked(sensor);
+  sensor->ctrl_cache.firmware_ready = false;
+
+  /* FSYNC and output authorization read these fields under the board lock.
+   * Invalidate under the same final-authority lock so no pulse or output write
+   * can race past a partially applied exposure transaction. */
+  mutex_lock(&max9296_power_lock);
+  WRITE_ONCE(sensor->hardware_valid, false);
+  WRITE_ONCE(sensor->initialized_epoch, 0);
+  WRITE_ONCE(sensor->stream_commit_epoch, 0);
+  mutex_unlock(&max9296_power_lock);
 }
 
 static int max9296_write_exposure_per_channel(struct max9296_dev *sensor,
@@ -2745,12 +2792,6 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
                                struct v4l2_ctrl *ctrl) {
   switch (ctrl->id) {
   /* Shared controls */
-  case V4L2_CID_EXP_TIME:
-    /* Shared exposure time: keep both channels in sync by default */
-    sensor->ctrl_cache.exposure = ctrl->val;
-    sensor->ctrl_cache.ch0.exposure = ctrl->val;
-    sensor->ctrl_cache.ch1.exposure = ctrl->val;
-    break;
   case V4L2_CID_DZ:
     sensor->ctrl_cache.dz = ctrl->val;
     break;
@@ -2777,9 +2818,6 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
     break;
   case V4L2_CID_GAIN_CH0:
     sensor->ctrl_cache.ch0.gain = ctrl->val;
-    break;
-  case V4L2_CID_EXPOSURE_CH0:
-    sensor->ctrl_cache.ch0.exposure = ctrl->val;
     break;
   case V4L2_CID_HFLIP_CH0:
     sensor->ctrl_cache.ch0.hflip = ctrl->val;
@@ -2821,9 +2859,6 @@ static void max9296_cache_ctrl(struct max9296_dev *sensor,
     break;
   case V4L2_CID_GAIN_CH1:
     sensor->ctrl_cache.ch1.gain = ctrl->val;
-    break;
-  case V4L2_CID_EXPOSURE_CH1:
-    sensor->ctrl_cache.ch1.exposure = ctrl->val;
     break;
   case V4L2_CID_HFLIP_CH1:
     sensor->ctrl_cache.ch1.hflip = ctrl->val;
@@ -2906,35 +2941,37 @@ static int max9296_apply_channel_controls(struct max9296_dev *sensor,
   u16  gain_seed   = ch_ctrl->gain ? ch_ctrl->gain : 256;
   u16  rot         = (ch_ctrl->hflip ? 0x01 : 0x00) |
                      (ch_ctrl->vflip ? 0x02 : 0x00);
-  /* A dual-wide pair shares one CSI link behind the GMSL serdes, so both
-   * AP1302 must run the same exposure (max9296 #64).  Everything about the
-   * seed is therefore decided per PAIR, not per channel: which value is used,
-   * and whether it is written at all.  AE mode (0x5002) is exempt -- it may
-   * differ between the two channels, so ae_val above still reads ch_ctrl. */
   bool dual = max9296_hw_is_dual(sensor);
-  u32  exp_seed    = max9296_cached_exposure_value(
-      sensor, dual ? &sensor->ctrl_cache.ch0 : ch_ctrl);
+  unsigned int local_channel = ch_ctrl == &sensor->ctrl_cache.ch1 ? 1U : 0U;
   u32 fps = READ_ONCE(sensor->fps);
   u32 safe_max_fps = sensor->current_mode
                          ? sensor->current_mode->exposure_safe_max_fps
                          : 0;
-  /* Pair-level gate.  Deciding this per channel is what breaks dual-wide: an
-   * asymmetric ae_on then seeds one side and leaves the other on whatever the
-   * firmware defaults to, the pair's exposure diverges, and under the
-   * exposure-centred trigger (R0x1186 SYNC_MODE=2) the combined wide frame
-   * never forms -- both ISPs keep producing ~119 fps while CSI2 drops to
-   * 8..14% and ISI to zero.  Requiring BOTH channels to be AE auto before
-   * skipping also keeps the gate honest: no channel can receive a 0x500c
-   * write that its own gate refused and its own preflight never checked. */
   bool pair_ae_on = dual ? (sensor->ctrl_cache.ch0.ae_on &&
                             sensor->ctrl_cache.ch1.ae_on)
                          : ch_ctrl->ae_on;
-  bool skip_exposure_seed = pair_ae_on && fps > safe_max_fps;
+  struct max9296_exposure_replay_decision exposure_decision =
+      max9296_exposure_replay_decision(
+          dual, local_channel, sensor->ctrl_cache.exposure_override_mask,
+          pair_ae_on, fps, safe_max_fps, sensor->ctrl_cache.exposure,
+          max9296_cached_exposure_value(sensor, &sensor->ctrl_cache.ch0),
+          max9296_cached_exposure_value(sensor, &sensor->ctrl_cache.ch1));
+  u32 exp_seed = exposure_decision.value;
+  bool skip_exposure_seed =
+      exposure_decision.route == MAX9296_EXPOSURE_SEED_SKIP;
+  bool pair_exposure_seed =
+      exposure_decision.route == MAX9296_EXPOSURE_SEED_PAIR;
+  bool exposure_must_succeed =
+      exposure_decision.has_runtime_override ||
+      sensor->ctrl_cache.exposure_reinit_required;
+  u32 exposure_addr = pair_exposure_seed ? AP1302_I2C_ADDR : i2c_addr;
+  const char *exposure_name = pair_exposure_seed ? "dual-pair" : ch_name;
   int ret;
   int first_err = 0;
+  int exposure_err = 0;
 
   if (!skip_exposure_seed) {
-    ret = max9296_preflight_exposure(sensor, ch_name, exp_seed);
+    ret = max9296_preflight_exposure(sensor, exposure_name, exp_seed);
     if (ret)
       return ret;
   }
@@ -2957,35 +2994,17 @@ static int max9296_apply_channel_controls(struct max9296_dev *sensor,
       first_err = ret;
     msleep(100);
 
-    /* Seed exposure time while in manual mode. Some FW revisions need a
-     * non-zero seed before switching to AE auto.
-     *
-     * On dual the seed goes to the broadcast address 0x3c, which reaches both
-     * AP1302 -- verified on hardware 2026-09-08 by writing 0x500c once via
-     * 0x3c and reading it back from 0x11 and 0x12.  Because exp_seed is the
-     * pair value (see above), the replay's second pass writes the same value
-     * again rather than racing the first; the pair therefore ends on one
-     * exposure no matter which channel is replayed first.
-     *
-     * The peer receives this write outside its own STEP 1 manual window.  That
-     * is intended and measured: the seed does not require the target channel
-     * to be in manual for the pair to converge (640x360 dual-wide 120 fps,
-     * asymmetric ae_on, 114.3 fps over two runs).  What must not happen is the
-     * pair holding two different exposures, which is what per-channel seeding
-     * produced.
-     *
-     * Scope: this establishes the invariant for the cached-control replay
-     * only.  V4L2_CID_EXPOSURE_CH0/_CH1 and the manual arm of
-     * V4L2_CID_EXPOSURE_AUTO_CH0/_CH1 still write 0x500c per channel by
-     * operator decision, so userspace can re-diverge the pair after prepare.
-     * The single arm of the ternary below is unreachable from the current
-     * callers -- max9296_apply_cached_controls already passes AP1302_I2C_ADDR
-     * in single -- and is kept so the expression states the rule rather than
-     * relying on that coincidence. */
-    ret = max9296_write_exposure(sensor, dual ? AP1302_I2C_ADDR : i2c_addr,
-                                 dual ? "dual-pair" : ch_name, exp_seed);
+    /* With no runtime override, dual replay keeps the #64 pair invariant by
+     * broadcasting the shared baseline. An explicit EXPOSURE_CHx write owns
+     * the current prepare generation instead: both cached channel values are
+     * restored through 0x11/0x12, and any resulting dual-wide corruption is
+     * the configuring engineer's responsibility (max9296 #67). */
+    ret = max9296_write_exposure(sensor, exposure_addr, exposure_name,
+                                 exp_seed);
     if (ret && !first_err)
       first_err = ret;
+    if (ret && exposure_must_succeed)
+      exposure_err = ret;
     msleep(100);
   }
 
@@ -3063,10 +3082,13 @@ static int max9296_apply_channel_controls(struct max9296_dev *sensor,
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            ch_name, mode_name);
 
-  /* Exposure-policy failures return above, before the first I2C write. Keep
-   * the established best-effort behavior for admissible AE/gain/tuning/LED
-   * replay: report operational I2C errors, but do not invalidate prepare. */
-  return 0;
+  /* Keep the established best-effort behavior for AE/gain/tuning/LED. An
+   * explicit override or sticky reconciliation replay is different: if its
+   * I2C result is unknown, cache/G_CTRL cannot truthfully claim replay success
+   * and warm reuse must be blocked until a fresh firmware initialization. */
+  if (exposure_err)
+    max9296_require_exposure_reinit_locked(sensor);
+  return exposure_err;
 }
 
 static int max9296_apply_cached_controls(struct max9296_dev *sensor) {
@@ -3140,6 +3162,122 @@ static int max9296_apply_cached_controls(struct max9296_dev *sensor) {
   return first_err;
 }
 
+static int max9296_set_exposure_cluster(struct max9296_dev *sensor) {
+  struct max9296_ctrls *ctrls = &sensor->ctrls;
+  bool shared_new = ctrls->exp_time->is_new;
+  bool ch0_new = ctrls->exposure_ch0->is_new;
+  bool ch1_new = ctrls->exposure_ch1->is_new;
+  int requested_shared = ctrls->exp_time->val;
+  int requested_ch0 = ctrls->exposure_ch0->val;
+  int requested_ch1 = ctrls->exposure_ch1->val;
+  unsigned int update_mask =
+      (shared_new ? MAX9296_EXPOSURE_UPDATE_SHARED : 0U) |
+      (ch0_new ? MAX9296_EXPOSURE_UPDATE_CH0 : 0U) |
+      (ch1_new ? MAX9296_EXPOSURE_UPDATE_CH1 : 0U);
+  struct max9296_exposure_control_state previous = {
+      .shared = sensor->ctrl_cache.exposure,
+      .ch0 = sensor->ctrl_cache.ch0.exposure,
+      .ch1 = sensor->ctrl_cache.ch1.exposure,
+      .override_mask = sensor->ctrl_cache.exposure_override_mask,
+  };
+  struct max9296_exposure_control_state desired =
+      max9296_exposure_control_update(previous, update_mask, requested_shared,
+                                      requested_ch0, requested_ch1);
+  bool write_ch0 =
+      ch0_new && (!shared_new || requested_ch0 != desired.shared);
+  bool write_ch1 =
+      ch1_new && (!shared_new || requested_ch1 != desired.shared);
+  bool apply_hardware;
+  bool dual = max9296_hw_is_dual(sensor);
+  unsigned int active_local_channel =
+      sensor->initialized_fingerprint.enable == 0x02 ? 1U : 0U;
+  bool write_ch0_hardware =
+      write_ch0 && max9296_exposure_channel_is_active(
+                       dual, active_local_channel, 0U);
+  bool write_ch1_hardware =
+      write_ch1 && max9296_exposure_channel_is_active(
+                       dual, active_local_channel, 1U);
+  bool override_cleared = max9296_exposure_override_was_cleared(
+      previous.override_mask, desired.override_mask);
+  u32 ch0_addr = dual ? AP1302_CH0_I2C_ADDR : AP1302_I2C_ADDR;
+  u32 ch1_addr = dual ? AP1302_CH1_I2C_ADDR : AP1302_I2C_ADDR;
+  char ch0_name[8], ch1_name[8];
+  int ret;
+
+  max9296_fmt_ch(ch0_name, sizeof(ch0_name), sensor, ch0_addr);
+  max9296_fmt_ch(ch1_name, sizeof(ch1_name), sensor, ch1_addr);
+
+  if (shared_new) {
+    ret = max9296_preflight_exposure(sensor, "shared", desired.shared);
+    if (ret)
+      return ret;
+  }
+  if (write_ch0) {
+    ret = max9296_preflight_exposure(sensor, ch0_name, desired.ch0);
+    if (ret)
+      return ret;
+  }
+  if (write_ch1) {
+    ret = max9296_preflight_exposure(sensor, ch1_name, desired.ch1);
+    if (ret)
+      return ret;
+  }
+
+  apply_hardware = max9296_exposure_hardware_can_apply(
+      sensor->ctrl_cache.exposure_session_resetting,
+      sensor->pending_mode_change, sensor->pending_fmt_change,
+      sensor->enable == sensor->initialized_fingerprint.enable,
+      sensor->power_count != 0, sensor->ctrl_cache.firmware_ready,
+      READ_ONCE(sensor->hardware_valid), READ_ONCE(sensor->initialized_epoch),
+      READ_ONCE(max9296_hw_epoch));
+  if (apply_hardware && shared_new) {
+    ret = max9296_write_exposure(sensor, AP1302_I2C_ADDR, "shared",
+                                 desired.shared);
+    if (ret)
+      goto exposure_hardware_failed;
+  }
+  if (apply_hardware && write_ch0_hardware) {
+    ret = max9296_write_exposure(sensor, ch0_addr, ch0_name, desired.ch0);
+    if (ret)
+      goto exposure_hardware_failed;
+  }
+  if (apply_hardware && write_ch1_hardware) {
+    ret = max9296_write_exposure(sensor, ch1_addr, ch1_name, desired.ch1);
+    if (ret)
+      goto exposure_hardware_failed;
+  }
+
+  /* s_ctrl may adjust every new value in a cluster. On success the V4L2 core
+   * copies these values into cur, keeping G_CTRL aligned with our cache and
+   * with the writes above. */
+  ctrls->exp_time->val = desired.shared;
+  ctrls->exposure_ch0->val = desired.ch0;
+  ctrls->exposure_ch1->val = desired.ch1;
+  sensor->ctrl_cache.exposure = desired.shared;
+  sensor->ctrl_cache.ch0.exposure = desired.ch0;
+  sensor->ctrl_cache.ch1.exposure = desired.ch1;
+  sensor->ctrl_cache.exposure_override_mask = desired.override_mask;
+  if (apply_hardware && shared_new)
+    sensor->ctrl_cache.exposure_reinit_required = false;
+  if (override_cleared && !apply_hardware)
+    max9296_require_exposure_reinit_locked(sensor);
+  /* Same-process STREAMOFF/ON accepts STALE when the hardware tuple still
+   * matches. A later gstApp process cannot warm-reuse CONSUMED, so it sends a
+   * fresh generation that clears these session-local overrides. */
+  if (desired.override_mask)
+    max9296_mark_prepare_stale_locked(sensor);
+
+  return 0;
+
+exposure_hardware_failed:
+  /* An I2C error does not prove whether the target accepted the write. This is
+   * especially important for a multi-control batch, where an earlier channel
+   * may already have changed. Refuse all warm reuse until firmware init has
+   * established a known pair again. */
+  max9296_revoke_exposure_stream_locked(sensor);
+  return ret;
+}
+
 static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   struct v4l2_subdev *sd = ctrl_to_sd(ctrl);
   struct max9296_dev *sensor = to_max9296_dev(sd);
@@ -3161,6 +3299,10 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
         sensor->power_count);
   /* v4l2_ctrl_lock() locks our own mutex */
 
+  /* v4l2_ctrl_cluster() delivers every exposure member through exp_time. */
+  if (ctrl == sensor->ctrls.exp_time)
+    return max9296_set_exposure_cluster(sensor);
+
   if (ctrl->id == V4L2_CID_CROP_ENABLE) {
     bool requested = !!ctrl->val;
 
@@ -3181,15 +3323,6 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
    * cacheable and the same policy is enforced when firmware restoration
    * reaches HW. */
   switch (ctrl->id) {
-  case V4L2_CID_EXP_TIME:
-    ret = max9296_preflight_exposure(sensor, "shared", ctrl->val);
-    break;
-  case V4L2_CID_EXPOSURE_CH0:
-    ret = max9296_preflight_exposure(sensor, ch0_name, ctrl->val);
-    break;
-  case V4L2_CID_EXPOSURE_CH1:
-    ret = max9296_preflight_exposure(sensor, ch1_name, ctrl->val);
-    break;
   case V4L2_CID_EXPOSURE_AUTO_CH0:
     if (!ctrl->val) {
       u32 exposure = max9296_cached_exposure_value(
@@ -3257,16 +3390,6 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
 
   /* Firmware ready: apply immediately to hardware */
   switch (ctrl->id) {
-  case V4L2_CID_EXP_TIME:
-    /* Shared exposure time: always write to global 0x3c (applies to both channels) */
-    printk(KERN_NOTICE "[%s:%d][%s:%d] %s EXP_TIME ctrl->val:%d cache.exp:%d "
-                       "ch0.exp:%d ch1.exp:%d",
-           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
-           __FUNCTION__, ctrl->val, sensor->ctrl_cache.exposure,
-           sensor->ctrl_cache.ch0.exposure, sensor->ctrl_cache.ch1.exposure);
-    ret = max9296_write_exposure(sensor, AP1302_I2C_ADDR, "shared",
-                                 ctrl->val);
-    break;
   case V4L2_CID_DZ:
   case V4L2_CID_DZ_X:
   case V4L2_CID_DZ_Y:
@@ -3291,12 +3414,9 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     ret =
         maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2);
     if (!ret && !ctrl->val) {
-      u32 exp_val =
-          sensor->ctrl_cache.ch0.exposure
-              ? sensor->ctrl_cache.ch0.exposure
-              : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure
-                                             : 10000);
-    ret = max9296_write_exposure(sensor, ch0_addr, ch0_name, exp_val);
+      u32 exp_val = max9296_cached_exposure_value(
+          sensor, &sensor->ctrl_cache.ch0);
+      ret = max9296_write_exposure(sensor, ch0_addr, ch0_name, exp_val);
     }
     break;
   }
@@ -3317,9 +3437,6 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   case V4L2_CID_LSC_CH0:
     ret = maxim_ops_i2c_write(sensor, ch0_addr, AP1302_REG_LSC_CTRL, ctrl->val,
                               2, 2);
-    break;
-  case V4L2_CID_EXPOSURE_CH0:
-    ret = max9296_write_exposure(sensor, ch0_addr, ch0_name, ctrl->val);
     break;
   case V4L2_CID_DZ_X_CH0:
   case V4L2_CID_DZ_Y_CH0:
@@ -3354,12 +3471,9 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
     ret =
         maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_AE_CTRL, ae_val, 2, 2);
     if (!ret && !ctrl->val) {
-      u32 exp_val =
-          sensor->ctrl_cache.ch1.exposure
-              ? sensor->ctrl_cache.ch1.exposure
-              : (sensor->ctrl_cache.exposure ? sensor->ctrl_cache.exposure
-                                             : 10000);
-    ret = max9296_write_exposure(sensor, ch1_addr, ch1_name, exp_val);
+      u32 exp_val = max9296_cached_exposure_value(
+          sensor, &sensor->ctrl_cache.ch1);
+      ret = max9296_write_exposure(sensor, ch1_addr, ch1_name, exp_val);
     }
     break;
   }
@@ -3380,9 +3494,6 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   case V4L2_CID_LSC_CH1:
     ret = maxim_ops_i2c_write(sensor, ch1_addr, AP1302_REG_LSC_CTRL, ctrl->val,
                               2, 2);
-    break;
-  case V4L2_CID_EXPOSURE_CH1:
-    ret = max9296_write_exposure(sensor, ch1_addr, ch1_name, ctrl->val);
     break;
   case V4L2_CID_DZ_X_CH1:
   case V4L2_CID_DZ_Y_CH1:
@@ -3585,6 +3696,7 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
         .max = INT_MAX,
         .def = 10000,
         .step = 1,
+        .flags = V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
     };
     ctrls->exp_time = v4l2_ctrl_new_custom(hdl, &cfg_exp_time, NULL);
   }
@@ -3678,6 +3790,19 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
         return -ENOMEM;
       *p1 = v4l2_ctrl_new_custom(hdl, &cfg, NULL);
     }
+  }
+
+  ctrls->exposure_cluster[0] = ctrls->exp_time;
+  ctrls->exposure_cluster[1] = ctrls->exposure_ch0;
+  ctrls->exposure_cluster[2] = ctrls->exposure_ch1;
+  if (ctrls->exposure_cluster[0] && ctrls->exposure_cluster[1] &&
+      ctrls->exposure_cluster[2]) {
+    /* This BSP computes has_changed before s_ctrl(). Mark every member so
+     * values reconciled by the callback are copied to cur and G_CTRL. */
+    ctrls->exposure_ch0->flags |= V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+    ctrls->exposure_ch1->flags |= V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+    v4l2_ctrl_cluster(ARRAY_SIZE(ctrls->exposure_cluster),
+                      ctrls->exposure_cluster);
   }
 
   ctrls->crop_cluster[0] = ctrls->dz;
@@ -4289,10 +4414,11 @@ static bool max9296_fingerprint_equal(
          left->crop_enable == right->crop_enable;
 }
 
-/* Runtime negotiation is allowed after prepare, but it must not silently keep
- * READY/CONSUMED attached to a different hardware tuple.  Hardware validity is
- * intentionally retained so STREAMON reports -ESTALE instead of attempting an
- * unsafe same-power-lifetime dual/single table switch. */
+/* Runtime negotiation is allowed after prepare, but READY/CONSUMED must not be
+ * warm-reused by a later process when either the hardware tuple changed or the
+ * cache now contains session-local state. Hardware validity is retained: the
+ * current process may replay controls on an equal tuple, while an unsafe
+ * same-power-lifetime dual/single switch still fails with -ESTALE. */
 static void max9296_mark_prepare_stale_locked(struct max9296_dev *sensor) {
   lockdep_assert_held(&sensor->lock);
 
@@ -4402,6 +4528,7 @@ static int max9296_preflight_prepare_locked(
   unsigned int local_channel;
   unsigned int first_channel;
   unsigned int channel_count;
+  bool has_runtime_override;
   bool right_mode;
   int ret;
 
@@ -4446,7 +4573,13 @@ static int max9296_preflight_prepare_locked(
        local_channel < first_channel + channel_count; local_channel++) {
     channel = local_channel ? &sensor->ctrl_cache.ch1
                             : &sensor->ctrl_cache.ch0;
-    if (channel->ae_on)
+    has_runtime_override = max9296_mode_is_dual(mode)
+                               ? sensor->ctrl_cache.exposure_override_mask != 0
+                               : sensor->ctrl_cache.exposure_override_mask &
+                                     (local_channel
+                                          ? MAX9296_EXPOSURE_OVERRIDE_CH1
+                                          : MAX9296_EXPOSURE_OVERRIDE_CH0);
+    if (channel->ae_on && !has_runtime_override)
       continue;
 
     snprintf(channel_name, sizeof(channel_name), "ch%u",
@@ -4567,6 +4700,7 @@ static int max9296_prepare_hardware_locked(
   if (ret)
     goto failed;
 
+  sensor->ctrl_cache.exposure_reinit_required = false;
   sensor->initialized_fingerprint = *fingerprint;
   sensor->initialized_epoch = READ_ONCE(max9296_hw_epoch);
   sensor->hardware_valid = true;
@@ -4782,6 +4916,7 @@ static int max9296_prepare_request(
     struct max9296_dev *sensor,
     const struct max9296_hw_fingerprint *fingerprint, u64 generation) {
   u64 epoch;
+  bool new_session_reinit;
   bool hardware_current;
   int arm_ret;
   int ret;
@@ -4834,6 +4969,37 @@ static int max9296_prepare_request(
      * unsafe because serializer address routing may already have changed. */
     ret = -ESTALE;
     goto preserve_lease;
+  }
+
+  new_session_reinit =
+      max9296_exposure_session_requires_reinit(
+          sensor->ctrl_cache.exposure_session_generation, generation,
+          sensor->ctrl_cache.exposure_override_mask);
+
+  /* A new userspace generation is a new configuration session. Reapply the
+   * shared EXP_TIME value through the V4L2 cluster so both channel controls,
+   * their caches, and G_CTRL agree, but leave the hardware write to the normal
+   * prepare/STREAMON replay. This preserves the high-FPS AE-auto seed gate. */
+  if (max9296_exposure_session_should_reset(
+          sensor->ctrl_cache.exposure_session_generation, generation)) {
+    sensor->ctrl_cache.exposure_session_resetting = true;
+    ret = __v4l2_ctrl_s_ctrl(sensor->ctrls.exp_time,
+                             sensor->ctrl_cache.exposure);
+    sensor->ctrl_cache.exposure_session_resetting = false;
+    if (ret)
+      goto preserve_lease;
+    if (new_session_reinit)
+      max9296_require_exposure_reinit_locked(sensor);
+    sensor->ctrl_cache.exposure_session_generation = generation;
+  }
+
+  if (sensor->ctrl_cache.exposure_reinit_required) {
+    /* A high-FPS AE-auto replay intentionally skips EXP_TIME. Once the exact
+     * topology guard above has passed, firmware reload is the only safe way to
+     * prevent an earlier process's channel values from surviving behind the
+     * reconciled cache/G_CTRL. */
+    max9296_invalidate_exposure_hardware_locked(sensor);
+    hardware_current = false;
   }
 
   if (sensor->prepare_lease_held) {
@@ -5120,7 +5286,10 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
         ret = -ESTALE;
         goto out;
       }
-    } else {
+    }
+    if (sensor->ctrl_cache.exposure_reinit_required)
+      max9296_invalidate_exposure_hardware_locked(sensor);
+    if (!sensor->hardware_valid || sensor->initialized_epoch != epoch) {
       ret = max9296_prepare_hardware_locked(sensor, &fingerprint);
       if (ret) {
         max9296_drop_fsync_contract_locked(sensor);
@@ -5141,8 +5310,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     }
     ret = max9296_apply_cached_controls(sensor);
     if (ret) {
-      sensor->hardware_valid = false;
-      sensor->initialized_epoch = 0;
+      max9296_invalidate_exposure_hardware_locked(sensor);
       max9296_drop_fsync_contract_locked(sensor);
       goto out;
     }

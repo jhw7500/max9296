@@ -151,6 +151,29 @@ gstApp 재시작만으로는 하드웨어 epoch가 바뀌지 않는다.
 일반 영상 요청 상한은 640x360이 120 FPS, 1280x720이 60 FPS, 1920x1080이 30 FPS다.
 `EXP_TIME(0x500c)` 안전 상한은 모든 모드에서 별도로 30 FPS를 유지한다.
 
+운영 기준 노출은 gstApp JSON의 값을 사용하며 한 I2C 라인의 두 채널에 같은 값으로
+적용한다. `v4l2-ctl`의 `exp_time_chX`는 이 공통값을 바꾸는 설정이 아니라 현재 gstApp
+세션에만 유효한 채널별 runtime override다. override는 같은 프로세스의 cached-control
+replay와 STREAMOFF/STREAMON을 지나도 유지되지만, 다음 gstApp 프로세스의 새 prepare
+generation 또는 드라이버 모듈 reload에서 폐기된다. 이후 replay는 공유 `exp_time`
+baseline과 AE-auto 고FPS seed-skip 정책을 따른다. 같은 값이더라도 공유 `exp_time`을
+단독으로 쓰면 두 채널을 그 값으로 맞추고 모든 채널별 override를 즉시 해제한다. 하나의
+`S_EXT_CTRLS` 요청에 공유값과 채널값을 함께 명시하면 공유 baseline을 먼저 적용한 뒤 명시된
+`exp_time_chX`를 해당 세션의 override로 적용한다.
+
+보드 전원이 유지되는 warm restart에서도 이전 세션에 채널별 override가 있었다면, 드라이버는
+기존 dual/left/right topology가 같은지 먼저 검사한 뒤 AP1302 firmware를 다시 초기화한다.
+따라서 고FPS AE-auto의 seed-skip이 이전 프로세스의 서로 다른 `0x500c` 값을 보존하지 않는다.
+하드웨어가 준비되지 않은 동안 override를 해제했거나 노출 I2C 결과가 불확실한 경우도 다음
+prepare/STREAMON에서 같은 복구를 거친다.
+
+싱글 모드에서는 현재 `enable`로 선택된 local 채널의 `exp_time_chX`만 global `0x3c`에 즉시
+쓴다. 비활성 채널의 값은 cache에만 남으며, 물리 reset 뒤 그 채널이 활성화된 구성에서 replay된다.
+
+듀얼 모드에서도 채널별 override 자체를 거부하지 않는다. 서로 다른 노출로 인해 합성
+출력이 깨지는 경우는 이 컨트롤을 사용한 엔지니어가 판단하고 복구해야 하며, 복구는
+공유 `exp_time`을 다시 쓰거나 gstApp/모듈을 재시작해 수행한다.
+
 안전 상한을 넘는 모드-유효 FPS에서 `exp_time`, `exp_time_chX` 또는 수동 AE 전환으로
 노출 쓰기가 필요하면 **거부하지 않고 경고를 남긴 뒤 그대로 쓴다.** 커널 로그에는
 `exposure write outside qualified range` 와 함께 채널, 모드, 현재 FPS, 요청 노출값,
