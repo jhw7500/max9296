@@ -2906,16 +2906,30 @@ static int max9296_apply_channel_controls(struct max9296_dev *sensor,
   u16  gain_seed   = ch_ctrl->gain ? ch_ctrl->gain : 256;
   u16  rot         = (ch_ctrl->hflip ? 0x01 : 0x00) |
                      (ch_ctrl->vflip ? 0x02 : 0x00);
-  u32  exp_seed    = ch_ctrl->exposure
-                         ? ch_ctrl->exposure
-                         : (sensor->ctrl_cache.exposure
-                                ? sensor->ctrl_cache.exposure
-                                : 10000);
+  /* A dual-wide pair shares one CSI link behind the GMSL serdes, so both
+   * AP1302 must run the same exposure (max9296 #64).  Everything about the
+   * seed is therefore decided per PAIR, not per channel: which value is used,
+   * and whether it is written at all.  AE mode (0x5002) is exempt -- it may
+   * differ between the two channels, so ae_val above still reads ch_ctrl. */
+  bool dual = max9296_hw_is_dual(sensor);
+  u32  exp_seed    = max9296_cached_exposure_value(
+      sensor, dual ? &sensor->ctrl_cache.ch0 : ch_ctrl);
   u32 fps = READ_ONCE(sensor->fps);
   u32 safe_max_fps = sensor->current_mode
                          ? sensor->current_mode->exposure_safe_max_fps
                          : 0;
-  bool skip_exposure_seed = ch_ctrl->ae_on && fps > safe_max_fps;
+  /* Pair-level gate.  Deciding this per channel is what breaks dual-wide: an
+   * asymmetric ae_on then seeds one side and leaves the other on whatever the
+   * firmware defaults to, the pair's exposure diverges, and under the
+   * exposure-centred trigger (R0x1186 SYNC_MODE=2) the combined wide frame
+   * never forms -- both ISPs keep producing ~119 fps while CSI2 drops to
+   * 8..14% and ISI to zero.  Requiring BOTH channels to be AE auto before
+   * skipping also keeps the gate honest: no channel can receive a 0x500c
+   * write that its own gate refused and its own preflight never checked. */
+  bool pair_ae_on = dual ? (sensor->ctrl_cache.ch0.ae_on &&
+                            sensor->ctrl_cache.ch1.ae_on)
+                         : ch_ctrl->ae_on;
+  bool skip_exposure_seed = pair_ae_on && fps > safe_max_fps;
   int ret;
   int first_err = 0;
 
@@ -2944,8 +2958,32 @@ static int max9296_apply_channel_controls(struct max9296_dev *sensor,
     msleep(100);
 
     /* Seed exposure time while in manual mode. Some FW revisions need a
-     * non-zero seed before switching to AE auto. */
-    ret = max9296_write_exposure(sensor, i2c_addr, ch_name, exp_seed);
+     * non-zero seed before switching to AE auto.
+     *
+     * On dual the seed goes to the broadcast address 0x3c, which reaches both
+     * AP1302 -- verified on hardware 2026-09-08 by writing 0x500c once via
+     * 0x3c and reading it back from 0x11 and 0x12.  Because exp_seed is the
+     * pair value (see above), the replay's second pass writes the same value
+     * again rather than racing the first; the pair therefore ends on one
+     * exposure no matter which channel is replayed first.
+     *
+     * The peer receives this write outside its own STEP 1 manual window.  That
+     * is intended and measured: the seed does not require the target channel
+     * to be in manual for the pair to converge (640x360 dual-wide 120 fps,
+     * asymmetric ae_on, 114.3 fps over two runs).  What must not happen is the
+     * pair holding two different exposures, which is what per-channel seeding
+     * produced.
+     *
+     * Scope: this establishes the invariant for the cached-control replay
+     * only.  V4L2_CID_EXPOSURE_CH0/_CH1 and the manual arm of
+     * V4L2_CID_EXPOSURE_AUTO_CH0/_CH1 still write 0x500c per channel by
+     * operator decision, so userspace can re-diverge the pair after prepare.
+     * The single arm of the ternary below is unreachable from the current
+     * callers -- max9296_apply_cached_controls already passes AP1302_I2C_ADDR
+     * in single -- and is kept so the expression states the rule rather than
+     * relying on that coincidence. */
+    ret = max9296_write_exposure(sensor, dual ? AP1302_I2C_ADDR : i2c_addr,
+                                 dual ? "dual-pair" : ch_name, exp_seed);
     if (ret && !first_err)
       first_err = ret;
     msleep(100);
