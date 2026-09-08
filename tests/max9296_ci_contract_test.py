@@ -46,6 +46,7 @@ def main() -> int:
     representative_changes = (
         "max9296.c",
         "max9296_exposure_policy.h",
+        "Makefile",
         "tests/max9296_exposure_replay_binding_test.py",
     )
     for event in ("push", "pull_request"):
