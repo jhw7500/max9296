@@ -50,18 +50,73 @@ def exposure_policy(fps: int, mode_max_fps: int, safe_max_fps: int) -> str:
     return "warn" if fps > safe_max_fps else "allow"
 
 
-def exposure_replay_plan(ae_auto: bool, fps: int, safe_max_fps: int) -> tuple[str, ...]:
+def gated_block(body: str, header: str) -> tuple[int, int] | None:
+    """Span of the `{...}` opened by `header`, matched by brace depth.
+
+    Comparing raw offsets cannot tell "inside the gate" from "after the gate
+    declaration", so the seed-placement check needs the real block extent.
+    """
+    start = body.find(header)
+    if start < 0:
+        return None
+    open_i = body.find("{", start)
+    if open_i < 0:
+        return None
+    depth = 0
+    for i in range(open_i, len(body)):
+        if body[i] == "{":
+            depth += 1
+        elif body[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return (open_i, i)
+    return None
+
+
+def exposure_replay_plan(
+    ae_auto: bool,
+    fps: int,
+    safe_max_fps: int,
+    peer_ae_auto: bool | None = None,
+) -> tuple[str, ...]:
+    """Replay plan for one channel.
+
+    `peer_ae_auto` is None for single.  On dual it carries the other channel of
+    the pair, because the seed gate is pair-level: the pair shares one CSI link
+    and must hold one exposure, so a channel only skips seeding when BOTH sides
+    are AE auto.  An asymmetric pair therefore seeds at high fps, where a
+    per-channel gate would have seeded only the manual side (max9296 #64).
+    """
     if fps < 1 or fps > 120:
         raise ValueError("invalid fps")
+    pair_ae_on = ae_auto if peer_ae_auto is None else (ae_auto and peer_ae_auto)
     if fps > safe_max_fps:
-        if ae_auto:
+        if pair_ae_on:
             return ("configured-auto",)
-        return ("warn", "manual", "seed-0x500c", "manual")
+        return (
+            "warn",
+            "manual",
+            "seed-0x500c",
+            "configured-auto" if ae_auto else "manual",
+        )
     return ("manual", "seed-0x500c", "configured-auto" if ae_auto else "manual")
 
 
-def exposure_restore_addresses(dual: bool) -> tuple[int, ...]:
-    return (0x11, 0x12) if dual else (0x3C,)
+def exposure_replay_seed_address(dual: bool) -> int:
+    """Address the cached-control replay seeds the PAIR through.
+
+    Broadcast on dual so both AP1302 receive it; single already passes 0x3c.
+    """
+    return 0x3C
+
+
+def exposure_runtime_channel_addresses(dual: bool) -> tuple[int, ...]:
+    """Addresses V4L2_CID_EXPOSURE_CH0/_CH1 write to.
+
+    These stay per channel by operator decision: the pair-level invariant is
+    established at replay, not by rejecting the runtime controls.
+    """
+    return (0x11, 0x12) if dual else (0x3C, 0x3C)
 
 
 def zoom_restore_slots(dual: bool, enable: int) -> tuple[str, ...]:
@@ -149,8 +204,31 @@ def main() -> int:
     ):
         failures.append("safe AE replay must retain manual, seed, configured order")
 
-    if exposure_restore_addresses(True) != (0x11, 0x12):
-        failures.append("dual cached exposure must restore through channel addresses")
+    if exposure_replay_seed_address(True) != 0x3C:
+        failures.append("dual replay must seed the pair through broadcast 0x3c")
+    if exposure_runtime_channel_addresses(True) != (0x11, 0x12):
+        failures.append(
+            "runtime V4L2_CID_EXPOSURE_CH0/_CH1 keep their channel addresses"
+        )
+    # Pair-level gate: an asymmetric pair seeds at high fps; a symmetric AE-auto
+    # pair still skips.  A per-channel gate would have produced the first row's
+    # ("configured-auto",) for the AE-auto side and diverged the pair.
+    for high_fps in (31, 60, 120):
+        if exposure_replay_plan(True, high_fps, 30, peer_ae_auto=False) != (
+            "warn",
+            "manual",
+            "seed-0x500c",
+            "configured-auto",
+        ):
+            failures.append(
+                f"asymmetric dual pair at {high_fps}fps must still seed 0x500c"
+            )
+        if exposure_replay_plan(True, high_fps, 30, peer_ae_auto=True) != (
+            "configured-auto",
+        ):
+            failures.append(
+                f"symmetric AE-auto dual pair at {high_fps}fps must skip seeding"
+            )
     if zoom_restore_slots(False, 2) != ("ch1",):
         failures.append("single-right zoom must restore the active ch1 cache")
     if control_write_target(False, True) != "cache-only":
@@ -340,20 +418,10 @@ def main() -> int:
         )
 
     apply_channel_controls = function(source, "max9296_apply_channel_controls")
-    # The seed must broadcast on dual and stay per channel on single.  An older
-    # revision of this check pinned the literal `sensor, i2c_addr` here, which
-    # only recorded what the code did at the time; measurement later showed the
-    # per-channel form is what breaks dual-wide (see the seed contract below).
     if not re.search(
         r"static\s+int\s+max9296_apply_channel_controls\s*\(", source
     ):
         failures.append("channel control replay does not return I2C failures")
-    seed_write = apply_channel_controls.find("ch_name, exp_seed")
-    high_auto_gate = apply_channel_controls.find("skip_exposure_seed")
-    if seed_write < 0:
-        failures.append("exposure seed write not found in channel control replay")
-    elif high_auto_gate < 0 or seed_write < high_auto_gate:
-        failures.append("high-FPS AE auto does not gate manual exposure seeding")
     if "return first_err;" in apply_channel_controls or not re.search(
         r"return\s+0;\s*\}$", apply_channel_controls
     ):
@@ -652,14 +720,21 @@ def main() -> int:
     if re.search(r"0x510a", source, re.I):
         failures.append("unsafe AP1302 0x510A manual-WB register was introduced")
 
-    # A dual pair shares one CSI link behind the GMSL serdes, so both AP1302
-    # must run the same exposure.  skip_exposure_seed is evaluated per channel,
-    # so seeding through the per-channel address lets an asymmetric ae_on seed
-    # only one side -- the pair's exposure diverges and the combined wide frame
-    # never forms (max9296 #64, measured 2026-09-08).  The seed must therefore
-    # go to the broadcast address on dual.  AE mode (0x5002) stays per channel.
+    # Seed contract for max9296_apply_channel_controls (max9296 #64).  A dual
+    # pair shares one CSI link behind the GMSL serdes and must hold ONE
+    # exposure, so the seed is decided per pair: its value, its gate, and its
+    # address.  AE mode (0x5002) is exempt and stays per channel.
+    #
+    # What this enforces, and why each part is here rather than a looser check:
+    #   value   the pair value, so the replay's two passes cannot race
+    #   gate    pair_ae_on, so no channel is written behind its own gate
+    #   place   the seed sits INSIDE if (!skip_exposure_seed), by brace match
+    #   address broadcast on dual, channel address on single -- compared whole,
+    #           because pinning only the dual arm let a mutated single arm pass
+    #   AE      per channel AND present: a bare "no offending match" loop passes
+    #           when every AE write is deleted or moved into a helper
     seed_call = re.search(
-        r"max9296_write_exposure\(\s*sensor,\s*([^,]+),\s*ch_name,\s*exp_seed\s*\)",
+        r"max9296_write_exposure\(\s*sensor,\s*([^,]+),\s*[^,]+(?:\?[^,]+:[^,]+)?,\s*exp_seed\s*\)",
         apply_channel_controls,
     )
     if seed_call is None:
@@ -668,23 +743,85 @@ def main() -> int:
         )
     else:
         addr_expr = " ".join(seed_call.group(1).split())
-        if "max9296_hw_is_dual(sensor) ? AP1302_I2C_ADDR" not in addr_expr:
+        if addr_expr != "dual ? AP1302_I2C_ADDR : i2c_addr":
             failures.append(
-                "exposure seed does not broadcast on dual: expected "
-                "`max9296_hw_is_dual(sensor) ? AP1302_I2C_ADDR : i2c_addr`, "
+                "exposure seed address must be exactly "
+                "`dual ? AP1302_I2C_ADDR : i2c_addr`, "
                 f"got `{addr_expr}` (max9296 #64)"
             )
+        gate = gated_block(apply_channel_controls, "if (!skip_exposure_seed)")
+        if gate is None:
+            failures.append("seed is not wrapped in if (!skip_exposure_seed)")
+        else:
+            # The first such block is the preflight; the seed lives in a later
+            # one, so scan every gate block rather than only the first.
+            spans, cursor = [], 0
+            while True:
+                blk = gated_block(
+                    apply_channel_controls[cursor:], "if (!skip_exposure_seed)"
+                )
+                if blk is None:
+                    break
+                spans.append((cursor + blk[0], cursor + blk[1]))
+                cursor += blk[1] + 1
+            if not any(lo < seed_call.start() < hi for lo, hi in spans):
+                failures.append(
+                    "exposure seed is not inside an if (!skip_exposure_seed) "
+                    "block -- the high-fps gate no longer guards it"
+                )
 
-    # The same function must keep AE mode per channel -- ae_on is allowed to
-    # differ between the two channels of a pair, unlike exposure.
-    for ae_write in re.finditer(
-        r"maxim_ops_i2c_write\(\s*sensor,\s*([^,]+),\s*AP1302_REG_AE_CTRL",
-        apply_channel_controls,
+    # The gate itself must be pair-level on dual, otherwise an asymmetric ae_on
+    # seeds only one side again.
+    if not re.search(
+        r"pair_ae_on\s*=\s*dual\s*\?\s*\(?\s*sensor->ctrl_cache\.ch0\.ae_on\s*&&"
+        r"\s*sensor->ctrl_cache\.ch1\.ae_on",
+        " ".join(apply_channel_controls.split()).replace("( ", "(").replace(" )", ")"),
     ):
+        failures.append(
+            "seed gate is not pair-level: expected pair_ae_on to require both "
+            "ctrl_cache.ch0.ae_on and ctrl_cache.ch1.ae_on on dual"
+        )
+    if not re.search(r"bool\s+skip_exposure_seed\s*=\s*pair_ae_on\s*&&",
+                     apply_channel_controls):
+        failures.append("skip_exposure_seed does not derive from pair_ae_on")
+
+    # The seed VALUE must be the pair value on dual, so the two replay passes
+    # write the same thing instead of the second clobbering the first.
+    if not re.search(
+        r"max9296_cached_exposure_value\(\s*sensor,\s*dual\s*\?"
+        r"\s*&sensor->ctrl_cache\.ch0\s*:\s*ch_ctrl\s*\)",
+        " ".join(apply_channel_controls.split()),
+    ):
+        failures.append(
+            "exp_seed is not the pair value on dual: expected "
+            "max9296_cached_exposure_value(sensor, dual ? &ctrl_cache.ch0 : ch_ctrl)"
+        )
+
+    # AE mode stays per channel -- and must still exist.  Both STEP 1 (manual)
+    # and STEP 2 (configured) write it, so require at least two.
+    ae_writes = list(
+        re.finditer(
+            r"maxim_ops_i2c_write\(\s*sensor,\s*([^,]+),\s*AP1302_REG_AE_CTRL",
+            apply_channel_controls,
+        )
+    )
+    if len(ae_writes) < 2:
+        failures.append(
+            "channel replay must keep both AE_CTRL writes (STEP 1 manual and "
+            f"STEP 2 configured); found {len(ae_writes)}"
+        )
+    for ae_write in ae_writes:
         target = " ".join(ae_write.group(1).split())
         if target != "i2c_addr":
             failures.append(
                 f"AE mode write must stay per channel, got `{target}`"
+            )
+    # Catch an AE write smuggled in through any other helper.
+    for other in re.finditer(r"(\w+)\([^;]*AP1302_REG_AE_CTRL", apply_channel_controls):
+        if other.group(1) != "maxim_ops_i2c_write":
+            failures.append(
+                "AE mode must be written through maxim_ops_i2c_write with the "
+                f"channel address, not `{other.group(1)}(...)`"
             )
 
     if failures:
