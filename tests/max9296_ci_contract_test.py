@@ -48,6 +48,7 @@ def main() -> int:
         "max9296_exposure_policy.h",
         "Makefile",
         "tests/max9296_exposure_replay_binding_test.py",
+        "tools/max9296_health_export.py",
     )
     for event in ("push", "pull_request"):
         patterns = event_paths(workflow, event)

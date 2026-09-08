@@ -15,21 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def extract_function(source: str, name: str) -> str:
     """Extract one complete static C function with lexical brace matching."""
-    name_match = re.search(rf"\b{re.escape(name)}\s*\(", source)
-    if not name_match:
-        raise ValueError(f"production function {name} is missing")
+    definition = re.search(
+        rf"^static\b[^;{{}}]*\b{re.escape(name)}\s*\([^;{{}}]*\)\s*\{{",
+        source,
+        re.MULTILINE,
+    )
+    if not definition:
+        raise ValueError(f"static function definition for {name} is missing")
 
-    static_start = source.rfind("\nstatic ", 0, name_match.start())
-    if static_start < 0:
-        if not source.startswith("static "):
-            raise ValueError(f"static declaration for {name} is missing")
-        static_start = 0
-    else:
-        static_start += 1
-
-    opening = source.find("{", name_match.end())
-    if opening < 0:
-        raise ValueError(f"function body for {name} is missing")
+    static_start = definition.start()
+    opening = definition.end() - 1
 
     depth = 0
     state = "code"
@@ -74,6 +69,18 @@ def extract_function(source: str, name: str) -> str:
         index += 1
 
     raise ValueError(f"unterminated function body for {name}")
+
+
+def verify_extractor() -> None:
+    """Reject prototypes and unrelated bodies before the requested definition."""
+    fixture = """static int target(int value);
+static int unrelated(void) { return 0; }
+static int
+target(int value) { return value + 1; }
+"""
+    extracted = extract_function(fixture, "target")
+    if "unrelated" in extracted or "return value + 1;" not in extracted:
+        raise ValueError("function extractor did not select the target definition")
 
 
 def build_harness(source: str) -> str:
@@ -511,6 +518,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        verify_extractor()
         harness = build_harness(args.source.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         print(f"FAIL: {error}")
