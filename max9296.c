@@ -43,6 +43,7 @@
 
 #include "max9296_360p_policy.h"
 #include "max9296_exposure_policy.h"
+#include "max9296_pair_health.h"
 
 #define SW_VERSION "2.12"
 #define SERDES_3GBPS
@@ -518,6 +519,29 @@ struct max9296_dev {
     u64 sequence;
     u8 hinf_count[2];
     bool hinf_valid[2];
+    /* Last reported pair verdict, so the log fires on transitions only. */
+    enum max9296_pair_health pair_state;
+    /* The pair keeps its own counter baseline and timestamp, separate from
+     * hinf_count[] above.  hinf_count[] is deliberately not refreshed while a
+     * channel reads stalled, so it can be older than the last sample; judging a
+     * verdict on it while timing the gap from the last sample compares two
+     * different intervals.  A host transcription of both blocks showed exactly
+     * 256 frames passing between two reads 8,533 ms apart with both channels
+     * healthy - the counter wrapped onto its own value and the pair logged
+     * BOTH_STALLED.  These three fields move together or not at all. */
+    u8 pair_hinf[2];
+    bool pair_hinf_valid[2];
+    s64 pair_sample_ms;
+    /* Verdict log gate: when the last line went out, and how many transitions
+     * were dropped since.  Per device on purpose - see max9296_pair_verdict_locked(). */
+    s64 pair_log_ms;
+    unsigned int pair_log_suppressed;
+    /* The suppressed verdict already counted, so a run of samples carrying the
+     * same held verdict counts once. */
+    enum max9296_pair_health pair_held;
+    /* The frame rate the baseline was taken at.  A rate change mid-interval
+     * makes the gap unjudgeable, and nothing else clears this baseline. */
+    unsigned int pair_fps;
   } health;
 
   /* lock to protect all members below */
@@ -1953,6 +1977,30 @@ static int max9296_reset(struct max9296_dev *sensor) {
   return 0;
 }
 
+/* Clear the pair verdict alongside the per-channel HINF baselines.
+ *
+ * health.pair_state gates the verdict log on transitions only, so a stale value
+ * carried across a power cycle or a stream restart makes the first recurrence of
+ * the same fault log nothing at all.  That is precisely the sequence the
+ * userspace watchdog produces: it kills the consumer on a stall and the stream
+ * comes back, so the recurrence is the event worth recording.
+ *
+ * health.pair_sample_ms goes with it - a timestamp from before the gap is not a
+ * gap - and so does the log gate (pair_log_ms, pair_log_suppressed), which means
+ * a held count read after that restart covers only the transitions dropped since
+ * it, not the ones the gate dropped before. */
+static void max9296_health_forget_pair(struct max9296_dev *sensor) {
+  memset(sensor->health.hinf_valid, 0, sizeof(sensor->health.hinf_valid));
+  memset(sensor->health.pair_hinf_valid, 0,
+         sizeof(sensor->health.pair_hinf_valid));
+  sensor->health.pair_state = MAX9296_PAIR_NOT_APPLICABLE;
+  sensor->health.pair_sample_ms = 0;
+  sensor->health.pair_log_ms = 0;
+  sensor->health.pair_log_suppressed = 0;
+  sensor->health.pair_held = MAX9296_PAIR_NOT_APPLICABLE;
+  sensor->health.pair_fps = 0;
+}
+
 static int max9296_set_power_on(struct max9296_dev *sensor) {
   int ret;
 
@@ -1983,7 +2031,7 @@ static int max9296_set_power_off(struct max9296_dev *sensor) {
   }
 
   max9296_power(sensor, false);
-  memset(sensor->health.hinf_valid, 0, sizeof(sensor->health.hinf_valid));
+  max9296_health_forget_pair(sensor);
   sensor->streaming = false;
   if (debug)
     printk(KERN_NOTICE "[%s:%d][%s:%d] %s end", "RST",
@@ -5343,8 +5391,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
       goto out;
     }
     if (!sensor->streaming)
-      memset(sensor->health.hinf_valid, 0,
-             sizeof(sensor->health.hinf_valid));
+      max9296_health_forget_pair(sensor);
     max9296_stream_commit_locked(sensor);
     sensor->streaming = true;
     mutex_unlock(&max9296_power_lock);
@@ -5353,8 +5400,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * board lock makes this transition atomic with a pulse in progress. */
     mutex_lock(&max9296_power_lock);
     if (sensor->streaming)
-      memset(sensor->health.hinf_valid, 0,
-             sizeof(sensor->health.hinf_valid));
+      max9296_health_forget_pair(sensor);
     sensor->streaming = false;
     sensor->stream_on = 0;
     sensor->stream_commit_epoch = 0;
@@ -6201,6 +6247,20 @@ struct max9296_health_sample {
   bool rx3_valid;
   bool link_a_up;
   bool link_b_up;
+  /* Domain-level pair verdict for this sample, and the gap it was judged over.
+   * Exported so a consumer sees the same conclusion the kernel log carries;
+   * sample_gap_ms lets it tell "healthy" from "not judged this sample". */
+  enum max9296_pair_health pair;
+  unsigned int pair_gap_ms;
+  /* A verdict transition staged for max9296_health_report_pair() to log once
+   * the caller has dropped sensor->lock.  pair_baseline[] is the counter pair
+   * the verdict actually compared against, captured before the baseline
+   * advances below, so the logged evidence and the verdict cannot disagree. */
+  bool pair_changed;
+  enum max9296_pair_health pair_previous;
+  u8 pair_baseline[2];
+  bool pair_baseline_valid[2];
+  unsigned int pair_suppressed;
   struct max9296_health_channel_sample channel[2];
 };
 
@@ -6223,6 +6283,126 @@ static void max9296_health_set_unavailable(
  * AR0234 DMA is excluded here because it can take hundreds of milliseconds;
  * sensor static presence will be a separate explicitly rate-limited deep ABI.
  */
+/* Shortest interval between routine verdict lines from one device.  The first
+ * transition into a fault bypasses this budget so a watchdog STREAMOFF cannot
+ * erase the only durable record; recovery and later fault-state changes remain
+ * bounded, and the held count rides out on the next line. */
+#define MAX9296_PAIR_LOG_MIN_MS 1000
+
+/* Decide the dual-wide pair verdict for one sample and stage the log line the
+ * caller emits once it has dropped sensor->lock.
+ *
+ * Both counters come from this one sample, so they are from the same instant -
+ * a userspace comparison of two separate sysfs reads could not guarantee that,
+ * and the gap between them is exactly where a false verdict would come from.
+ * Report only: max9296_pair_health.h says why, and this function must contain no
+ * recovery call and no logging at all, which tests/max9296_pair_health_source_test.py
+ * pins. */
+static void max9296_pair_verdict_locked(struct max9296_dev *sensor,
+                                        struct max9296_health_sample *sample) {
+  /* Taken here, not at the top of the sample: the counters this compares are
+   * read after the deserializer and per-channel probes, so a timestamp from
+   * before those I2C transactions bounds a wider interval than the one the
+   * comparison spans.  At 120 fps the whole lower bound is two 8.3 ms frames. */
+  s64 now_ms = ktime_to_ms(ktime_get_boottime());
+  s64 previous_ms = sensor->health.pair_sample_ms;
+  bool seeding = !previous_ms;
+  s64 delta_ms = seeding ? 0 : now_ms - previous_ms;
+  enum max9296_hinf_state state[2] = {MAX9296_HINF_UNKNOWN,
+                                      MAX9296_HINF_UNKNOWN};
+  enum max9296_pair_health pair = MAX9296_PAIR_NOT_APPLICABLE;
+  enum max9296_pair_log_action log_action;
+  enum max9296_hinf_gap gap;
+  unsigned int fps = READ_ONCE(sensor->fps);
+  unsigned int i;
+
+  sample->pair_gap_ms = max9296_pair_gap_export_ms(delta_ms);
+  /* A seeding sample needs no special case: delta_ms is 0 above and the
+   * classifier refuses a non-positive interval. */
+  gap = max9296_hinf_gap_classify(delta_ms, fps);
+  /* The classifier converts one interval with one rate, but
+   * max9296_s_frame_interval() can change the rate mid-interval and does not
+   * clear this baseline.  Judging a 30 -> 120 fps switch with the new rate turns
+   * a 17 ms gap into "two frames" when barely half a frame elapsed, so unchanged
+   * counters read as a stall.  Refuse and re-seed instead - TOO_LONG is the
+   * outcome that does both. */
+  if (!seeding && fps != sensor->health.pair_fps)
+    gap = MAX9296_HINF_GAP_TOO_LONG;
+
+  if (gap == MAX9296_HINF_GAP_DECIDABLE) {
+    for (i = 0; i < ARRAY_SIZE(sample->channel); i++) {
+      if (!sample->channel[i].hinf_valid || !sensor->health.pair_hinf_valid[i])
+        continue;
+      state[i] = sensor->health.pair_hinf[i] != sample->channel[i].hinf_count
+                     ? MAX9296_HINF_PROGRESSING
+                     : MAX9296_HINF_STALLED;
+    }
+    pair = max9296_pair_health_decision(sample->dual, sample->streaming,
+                                        state[0], state[1]);
+
+    /* Change-only bounds repeats, not rate, and the sampling cadence belongs to
+     * whoever reads health_raw; docs/health-raw-v1.md states the resulting
+     * transition rate and what a held line costs.  Two properties live here
+     * rather than there because only the code can hold them: a held transition
+     * must not advance pair_state (the change-only gate would then treat it as
+     * reported and it would never be logged again), and the gate state is per
+     * device.  The shared kernel ratelimit helper is unsuitable on both counts -
+     * it keeps one state per call site, so on this two-deserializer board a
+     * reader of one would spend the other's budget (the cross-instance coupling
+     * max9296_fsync_thread() refuses for the same reason), and it prints its own
+     * unattributed suppression line from inside this locked region.
+     *
+     * A recovery that reverses inside the window is dropped for good: the next
+     * decidable sample recomputes the earlier verdict and stages nothing.  A
+     * first transition from non-fault to fault is different: holding it lets a
+     * watchdog STREAMOFF clear the gate before journald gets any evidence, so
+     * max9296_pair_log_decide() emits that transition immediately. */
+    log_action = max9296_pair_log_decide(
+        pair, sensor->health.pair_state, now_ms,
+        sensor->health.pair_log_ms, MAX9296_PAIR_LOG_MIN_MS);
+    if (log_action == MAX9296_PAIR_LOG_UNCHANGED) {
+      /* The pending verdict resolved itself; a later recurrence counts again. */
+      sensor->health.pair_held = pair;
+    } else if (log_action == MAX9296_PAIR_LOG_HOLD) {
+      /* Count the transition, not the sample.  pair_state deliberately stays put
+       * while a line is held, so every decidable sample re-enters this branch -
+       * at 120 fps one held transition would otherwise report held=59 and
+       * describe polling as flapping.  pair_held is what was already counted. */
+      if (pair != sensor->health.pair_held) {
+        sensor->health.pair_log_suppressed++;
+        sensor->health.pair_held = pair;
+      }
+    } else {
+      sample->pair_previous = sensor->health.pair_state;
+      for (i = 0; i < ARRAY_SIZE(sample->channel); i++) {
+        sample->pair_baseline[i] = sensor->health.pair_hinf[i];
+        sample->pair_baseline_valid[i] = sensor->health.pair_hinf_valid[i];
+      }
+      sample->pair_suppressed = sensor->health.pair_log_suppressed;
+      sample->pair_changed = true;
+      sensor->health.pair_state = pair;
+      sensor->health.pair_held = pair;
+      sensor->health.pair_log_ms = now_ms;
+      sensor->health.pair_log_suppressed = 0;
+    }
+  }
+
+  /* Advance the baseline when the comparison consumed it, and when the gap ran
+   * past the wrap window - there nothing can be judged, and keeping the old
+   * baseline would leave every later sample past the window too.  A too-short
+   * gap pins it instead; docs/health-raw-v1.md states what that costs a slow
+   * reader. */
+  if (seeding || gap != MAX9296_HINF_GAP_TOO_SHORT) {
+    for (i = 0; i < ARRAY_SIZE(sample->channel); i++) {
+      sensor->health.pair_hinf[i] = sample->channel[i].hinf_count;
+      sensor->health.pair_hinf_valid[i] = sample->channel[i].hinf_valid;
+    }
+    sensor->health.pair_sample_ms = now_ms;
+    sensor->health.pair_fps = fps;
+  }
+  sample->pair = pair;
+}
+
 static void max9296_collect_health_locked(struct max9296_dev *sensor,
                                           struct max9296_health_sample *sample) {
   unsigned int des_id = 0, ctrl3 = 0, rx3 = 0;
@@ -6397,6 +6577,70 @@ static void max9296_collect_health_locked(struct max9296_dev *sensor,
       channel->sensor_status = "BLOCKED";
     }
   }
+
+  max9296_pair_verdict_locked(sensor, sample);
+}
+
+
+/* Render one channel's counter pair for the verdict line.  An unread counter is
+ * "?", never 0 - zero is a value an AP1302 really reports after a restart, and
+ * the JSON beside this already prints null for the same case. */
+static void max9296_pair_render_hinf(char *buf, size_t len,
+                                     const struct max9296_health_sample *s,
+                                     unsigned int i) {
+  char was[8] = "?", now[8] = "?";
+
+  if (s->pair_baseline_valid[i])
+    scnprintf(was, sizeof(was), "%u", s->pair_baseline[i]);
+  if (s->channel[i].hinf_valid)
+    scnprintf(now, sizeof(now), "%u", s->channel[i].hinf_count);
+  scnprintf(buf, len, "%s->%s", was, now);
+}
+
+/* The verdict line max9296_pair_verdict_locked() staged, emitted once the caller
+ * has dropped sensor->lock.  One format, two severities.
+ *
+ * The counters are the pair's own baseline and the reading it was compared
+ * against, not channel[].hinf_progress - the two span different intervals, for
+ * the reason recorded beside health.pair_hinf[].
+ *
+ * seq orders the record.  Two concurrent readers each stage a transition under
+ * the lock and print outside it, so emission order is not transition order and
+ * the printk timestamp cannot recover it.  held is how many transitions the log
+ * gate dropped before this one; docs/health-raw-v1.md says what that can cost.
+ *
+ * The format ends in \n, unlike most printk in this file.  A printk without one
+ * waits in the continuation buffer until another kernel message flushes it; the
+ * surrounding driver paths log constantly so they never notice, but a health_raw
+ * read is otherwise silent.  Measured on pim-camera-v016: such a line sat
+ * pending 205 s until an unrelated /dev/kmsg write released it, and a stall
+ * record that late cannot be the evidence the watchdog kill races. */
+#define MAX9296_PAIR_LINE_FMT                                                  \
+  "[%s:%d][%s:%d] %s pair %s (was %s) seq=%llu held=%u "                       \
+  "ch%u(hinf %s) ch%u(hinf %s)\n"
+
+static void max9296_health_report_pair(struct max9296_dev *sensor,
+                                       const struct max9296_health_sample *s) {
+  char hinf0[16], hinf1[16];
+
+  if (!s->pair_changed)
+    return;
+
+  max9296_pair_render_hinf(hinf0, sizeof(hinf0), s, 0);
+  max9296_pair_render_hinf(hinf1, sizeof(hinf1), s, 1);
+
+  /* The level lives inside the format literal either way; printk parses it out
+   * of the rendered text, so choosing the literal at runtime is equivalent to
+   * two calls and keeps the argument list written once. */
+  printk((s->pair == MAX9296_PAIR_DIVERGENT ||
+          s->pair == MAX9296_PAIR_BOTH_STALLED)
+             ? KERN_WARNING MAX9296_PAIR_LINE_FMT
+             : KERN_NOTICE MAX9296_PAIR_LINE_FMT,
+         KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+         __FUNCTION__, max9296_pair_health_name(s->pair),
+         max9296_pair_health_name(s->pair_previous),
+         (unsigned long long)s->sequence, s->pair_suppressed,
+         s->channel[0].channel, hinf0, s->channel[1].channel, hinf1);
 }
 
 static ssize_t sysfs_health_raw_show(struct device *dev,
@@ -6423,6 +6667,8 @@ static ssize_t sysfs_health_raw_show(struct device *dev,
   max9296_collect_health_locked(sensor, &sample);
   mutex_unlock(&sensor->lock);
 
+  max9296_health_report_pair(sensor, &sample);
+
   if (sample.deserializer_id_valid)
     scnprintf(deserializer_id, sizeof(deserializer_id), "%u",
               sample.deserializer_id);
@@ -6446,7 +6692,9 @@ static ssize_t sysfs_health_raw_show(struct device *dev,
       "\"deserializer\":{\"status\":\"%s\",\"errno\":%d,"
       "\"device_id\":%s,\"ctrl3_errno\":%d,\"ctrl3\":%s,"
       "\"rx3_errno\":%d,\"rx3\":%s,\"link_a_up\":%s,"
-      "\"link_b_up\":%s},\"channels\":[",
+      "\"link_b_up\":%s},"
+      "\"pair\":{\"status\":\"%s\",\"sample_gap_ms\":%u},"
+      "\"channels\":[",
       sensor->i2c_client->adapter->nr,
       (unsigned long long)sample.sequence, (long long)sample.observed_ms,
       sample.dual ? "dual-wide" : "single",
@@ -6455,7 +6703,8 @@ static ssize_t sysfs_health_raw_show(struct device *dev,
       sample.deserializer_errno ? "FAIL" : "OK", sample.deserializer_errno,
       deserializer_id, sample.ctrl3_errno, ctrl3, sample.rx3_errno, rx3,
       sample.link_a_up ? "true" : "false",
-      sample.link_b_up ? "true" : "false");
+      sample.link_b_up ? "true" : "false",
+      max9296_pair_health_name(sample.pair), sample.pair_gap_ms);
 
   for (i = 0; i < ARRAY_SIZE(sample.channel); i++) {
     const struct max9296_health_channel_sample *channel = &sample.channel[i];
@@ -7008,6 +7257,10 @@ static int max9296_remove(struct i2c_client *client) {
       peer->stream_on = 0;
       peer->stream_commit_epoch = 0;
       peer->state.fsync = MAX9296_STATE_IDLE;
+      /* This is a stream stop like any other, so the pair baseline goes with it -
+       * otherwise a later health_raw read compares this stream's counters against
+       * the previous one's and can log a transition nobody caused. */
+      max9296_health_forget_pair(peer);
       if (was_streaming)
         max9296_disable_stream_mipi(peer);
       mutex_unlock(&max9296_power_lock);
