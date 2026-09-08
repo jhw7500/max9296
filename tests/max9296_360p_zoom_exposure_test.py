@@ -418,16 +418,265 @@ def main() -> int:
         )
 
     apply_channel_controls = function(source, "max9296_apply_channel_controls")
+
+    # Exposure lifetime contract (max9296 #67). The pure policy is compiled by
+    # max9296_exposure_policy_test.c; these checks only bind that tested policy
+    # to the driver's cache, V4L2 cluster, replay, and prepare-generation path.
+    if '#include "max9296_exposure_policy.h"' not in source:
+        failures.append("driver does not consume the tested exposure replay policy")
+    if "struct v4l2_ctrl *exposure_cluster[3];" not in source:
+        failures.append("shared and per-channel exposure controls are not clustered")
+    if "v4l2_ctrl_cluster(ARRAY_SIZE(ctrls->exposure_cluster)," not in source:
+        failures.append("exposure control cluster is not registered")
+    for member in ("exposure_ch0", "exposure_ch1"):
+        if (
+            f"ctrls->{member}->flags |= V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;"
+            not in source
+        ):
+            failures.append(
+                f"cluster member {member} cannot publish callback-adjusted G_CTRL values"
+            )
+    init_controls = function(source, "max9296_init_controls")
+    exp_cfg_start = init_controls.find("cfg_exp_time")
+    exp_cfg_end = init_controls.find("ctrls->exp_time =", exp_cfg_start)
+    exp_cfg = init_controls[exp_cfg_start:exp_cfg_end]
+    if exp_cfg_start < 0 or exp_cfg_end < 0 or (
+        "V4L2_CTRL_FLAG_EXECUTE_ON_WRITE" not in exp_cfg
+    ):
+        failures.append("same-value shared exposure cannot reset runtime overrides")
+    if "exposure_override_mask" not in source:
+        failures.append("driver does not track explicit per-channel exposure overrides")
+    if "bool exposure_reinit_required;" not in source:
+        failures.append("driver does not persist unresolved exposure hardware state")
+    if "max9296_exposure_replay_decision(" not in apply_channel_controls:
+        failures.append("cached replay does not consume the tested exposure policy")
+    if not re.search(
+        r"pair_ae_on\s*=\s*dual\s*\?\s*\(?\s*"
+        r"sensor->ctrl_cache\.ch0\.ae_on\s*&&\s*"
+        r"sensor->ctrl_cache\.ch1\.ae_on\s*\)?\s*:\s*ch_ctrl->ae_on",
+        apply_channel_controls,
+        re.S,
+    ):
+        failures.append("dual replay does not derive its seed gate from both AE modes")
+    if not re.search(
+        r"max9296_exposure_replay_decision\(\s*"
+        r"dual,\s*local_channel,\s*sensor->ctrl_cache\.exposure_override_mask,\s*"
+        r"pair_ae_on,\s*fps,\s*safe_max_fps,\s*sensor->ctrl_cache\.exposure,\s*"
+        r"max9296_cached_exposure_value\(sensor,\s*&sensor->ctrl_cache\.ch0\),\s*"
+        r"max9296_cached_exposure_value\(sensor,\s*&sensor->ctrl_cache\.ch1\)\s*\)",
+        apply_channel_controls,
+        re.S,
+    ):
+        failures.append("driver replay inputs can diverge from the tested exposure policy")
+    exposure_cluster_set = function(source, "max9296_set_exposure_cluster")
+    if "max9296_exposure_control_update(" not in exposure_cluster_set:
+        failures.append("V4L2 exposure cluster does not consume the tested state policy")
+    for token in (
+        "max9296_exposure_channel_is_active(",
+        "max9296_exposure_override_was_cleared(",
+        "max9296_require_exposure_reinit_locked(sensor);",
+    ):
+        if token not in exposure_cluster_set:
+            failures.append(f"live exposure cluster misses session policy: {token}")
+    if not re.search(
+        r"write_ch0_hardware\s*=\s*write_ch0\s*&&\s*"
+        r"max9296_exposure_channel_is_active\([^;]+0U\)",
+        exposure_cluster_set,
+        re.S,
+    ) or not re.search(
+        r"write_ch1_hardware\s*=\s*write_ch1\s*&&\s*"
+        r"max9296_exposure_channel_is_active\([^;]+1U\)",
+        exposure_cluster_set,
+        re.S,
+    ):
+        failures.append("inactive single-channel exposure can still hit global 0x3c")
+    if not re.search(
+        r"active_local_channel\s*=\s*"
+        r"sensor->initialized_fingerprint\.enable\s*==\s*0x02\s*\?\s*1U\s*:\s*0U",
+        exposure_cluster_set,
+        re.S,
+    ):
+        failures.append("single exposure uses requested enable instead of live topology")
+    apply_hardware_pos = exposure_cluster_set.find("apply_hardware =")
+    apply_hardware_end = exposure_cluster_set.find(";", apply_hardware_pos)
+    apply_hardware_expr = exposure_cluster_set[
+        apply_hardware_pos:apply_hardware_end
+    ]
+    if (
+        apply_hardware_pos < 0
+        or apply_hardware_end < 0
+        or "max9296_exposure_hardware_can_apply(" not in apply_hardware_expr
+    ):
+        failures.append("live exposure I2C does not use the tested hardware-state gate")
+    for token in (
+        "sensor->enable == sensor->initialized_fingerprint.enable",
+        "READ_ONCE(sensor->hardware_valid)",
+        "READ_ONCE(sensor->initialized_epoch)",
+        "READ_ONCE(max9296_hw_epoch)",
+    ):
+        if token not in apply_hardware_expr:
+            failures.append(f"live exposure hardware-state gate is incomplete: {token}")
+    if (
+        "exposure_hardware_failed:" not in exposure_cluster_set
+        or "max9296_revoke_exposure_stream_locked(sensor);"
+        not in exposure_cluster_set
+    ):
+        failures.append(
+            "partial live exposure writes can leave cached and hardware state divergent"
+        )
+    revoke_exposure = function(source, "max9296_revoke_exposure_stream_locked")
+    revoke_lock = revoke_exposure.find("mutex_lock(&max9296_power_lock);")
+    revoke_stream = revoke_exposure.find(
+        "WRITE_ONCE(sensor->stream_commit_epoch, 0);"
+    )
+    revoke_unlock = revoke_exposure.find("mutex_unlock(&max9296_power_lock);")
+    if not (0 <= revoke_lock < revoke_stream < revoke_unlock):
+        failures.append("failed live exposure write does not revoke FSYNC atomically")
+    for forbidden in (
+        "WRITE_ONCE(sensor->hardware_valid, false);",
+        "WRITE_ONCE(sensor->initialized_epoch, 0);",
+    ):
+        if forbidden in revoke_exposure:
+            failures.append(
+                "runtime exposure failure erases topology identity before its guard"
+            )
+    invalidate_exposure = function(
+        source, "max9296_invalidate_exposure_hardware_locked"
+    )
+    for token in (
+        "max9296_require_exposure_reinit_locked(sensor);",
+        "sensor->ctrl_cache.firmware_ready = false;",
+    ):
+        if token not in invalidate_exposure:
+            failures.append(
+                f"failed exposure transaction does not invalidate hardware: {token}"
+            )
+    power_lock = invalidate_exposure.find("mutex_lock(&max9296_power_lock);")
+    hardware_clear = invalidate_exposure.find(
+        "WRITE_ONCE(sensor->hardware_valid, false);"
+    )
+    epoch_clear = invalidate_exposure.find(
+        "WRITE_ONCE(sensor->initialized_epoch, 0);"
+    )
+    stream_clear = invalidate_exposure.find(
+        "WRITE_ONCE(sensor->stream_commit_epoch, 0);"
+    )
+    power_unlock = invalidate_exposure.find("mutex_unlock(&max9296_power_lock);")
+    if not (
+        0 <= power_lock < hardware_clear < epoch_clear < stream_clear < power_unlock
+    ):
+        failures.append("exposure invalidation bypasses the final power/FSYNC authority lock")
+    require_reinit = function(source, "max9296_require_exposure_reinit_locked")
+    for token in (
+        "sensor->ctrl_cache.exposure_reinit_required = true;",
+        "max9296_mark_prepare_stale_locked(sensor);",
+    ):
+        if token not in require_reinit:
+            failures.append(f"exposure reinit state is not durable: {token}")
+    override_commit = exposure_cluster_set.find(
+        "sensor->ctrl_cache.exposure_override_mask = desired.override_mask;"
+    )
+    stale_runtime_session = exposure_cluster_set.find(
+        "max9296_mark_prepare_stale_locked(sensor);"
+    )
+    if (
+        override_commit < 0
+        or stale_runtime_session < override_commit
+        or "if (desired.override_mask)"
+        not in exposure_cluster_set[override_commit:stale_runtime_session]
+    ):
+        failures.append(
+            "runtime exposure override does not block cross-process warm reuse"
+        )
+    if re.search(
+        r"ctrl_cache\.exposure\s*\?\s*sensor->ctrl_cache\.exposure\s*:\s*10000",
+        apply_channel_controls,
+    ):
+        failures.append("explicit shared exposure zero is replaced during replay")
+    cached_exposure = function(source, "max9296_cached_exposure_value")
+    if "return sensor->ctrl_cache.exposure;" not in cached_exposure or (
+        "return 10000;" in cached_exposure
+    ):
+        failures.append("non-overridden channels do not replay the exact shared baseline")
+
+    set_ctrl = function(source, "max9296_s_ctrl")
+    for channel in ("ch0", "ch1"):
+        cached_value_calls = re.findall(
+            rf"max9296_cached_exposure_value\(\s*sensor,\s*"
+            rf"&sensor->ctrl_cache\.{channel}\s*\)",
+            set_ctrl,
+        )
+        if len(cached_value_calls) < 2:
+            failures.append(
+                f"manual AE transition loses an explicit zero override on {channel}"
+            )
+
+    exposure_cases = (
+        "V4L2_CID_EXP_TIME",
+        "V4L2_CID_EXPOSURE_CH0",
+        "V4L2_CID_EXPOSURE_CH1",
+    )
+    cluster_return = set_ctrl.find("return max9296_set_exposure_cluster(sensor);")
+    for cid in exposure_cases:
+        if re.search(rf"case\s+{cid}\s*:", set_ctrl[cluster_return:]):
+            failures.append(f"{cid} still has a split path outside its V4L2 cluster")
+    cache_ctrl = function(source, "max9296_cache_ctrl")
+    for cid in exposure_cases:
+        if re.search(rf"case\s+{cid}\s*:", cache_ctrl):
+            failures.append(f"dead cache path can bypass clustered state for {cid}")
+
+    prepare_request = function(source, "max9296_prepare_request")
+    for token in (
+        "max9296_exposure_session_should_reset",
+        "max9296_exposure_session_requires_reinit",
+        "__v4l2_ctrl_s_ctrl(sensor->ctrls.exp_time",
+    ):
+        if token not in prepare_request:
+            failures.append(f"prepare generation does not reset exposure session: {token}")
+    fingerprint_guard = prepare_request.find(
+        "!max9296_prepare_matches_locked(sensor, fingerprint)"
+    )
+    session_reinit = prepare_request.find("max9296_exposure_session_requires_reinit(")
+    session_reset = prepare_request.find("max9296_exposure_session_should_reset(")
+    dirty_gate = prepare_request.find(
+        "if (sensor->ctrl_cache.exposure_reinit_required)", session_reset
+    )
+    invalidate_hardware = prepare_request.find(
+        "max9296_invalidate_exposure_hardware_locked(sensor);", dirty_gate
+    )
+    clear_hardware_current = prepare_request.find(
+        "hardware_current = false;", dirty_gate
+    )
+    if not (
+        0
+        <= fingerprint_guard
+        < session_reinit
+        < session_reset
+        < dirty_gate
+        < invalidate_hardware
+        < clear_hardware_current
+    ):
+        failures.append(
+            "new generation can retain overridden hardware behind the high-FPS seed skip"
+        )
     if not re.search(
         r"static\s+int\s+max9296_apply_channel_controls\s*\(", source
     ):
         failures.append("channel control replay does not return I2C failures")
     if "return first_err;" in apply_channel_controls or not re.search(
-        r"return\s+0;\s*\}$", apply_channel_controls
+        r"return\s+exposure_err;\s*\}$", apply_channel_controls
     ):
         failures.append(
-            "safe cached-control replay must preserve legacy best-effort I2C behavior"
+            "cached replay does not fail when an explicit exposure override is unknown"
         )
+    if not re.search(
+        r"exposure_must_succeed\s*=\s*"
+        r"exposure_decision\.has_runtime_override\s*\|\|\s*"
+        r"sensor->ctrl_cache\.exposure_reinit_required",
+        apply_channel_controls,
+        re.S,
+    ) or "if (ret && exposure_must_succeed)" not in apply_channel_controls:
+        failures.append("reconciliation can clear sticky state after a failed exposure write")
     if apply_channel_controls.count("ret = max9295_mfp4_set") < 2:
         failures.append("cached MCP4018 gate failures are not observed for diagnostics")
     if "if (ret && !first_err)" not in apply_channel_controls:
@@ -457,6 +706,13 @@ def main() -> int:
             failures.append(f"complete prepare preflight is missing: {token}")
 
     prepare_hardware = function(source, "max9296_prepare_hardware_locked")
+    replay_success = prepare_hardware.find("max9296_apply_cached_controls(sensor)")
+    clear_dirty = prepare_hardware.find(
+        "sensor->ctrl_cache.exposure_reinit_required = false;", replay_success
+    )
+    publish_hardware = prepare_hardware.find("sensor->hardware_valid = true;")
+    if not (0 <= replay_success < clear_dirty < publish_hardware):
+        failures.append("firmware init publishes hardware before clearing exposure recovery")
     prepare_order = (
         "max9296_preflight_prepare_locked",
         "max9296_set_mode",
@@ -470,6 +726,28 @@ def main() -> int:
     positions = [prepare_hardware.find(token) for token in prepare_order]
     if any(position < 0 for position in positions) or positions != sorted(positions):
         failures.append("prepare does not publish hardware in truthful replay order")
+
+    stream_on = function(source, "max9296_s_stream")
+    stream_fingerprint_guard = stream_on.find(
+        "!max9296_prepare_matches_locked(sensor, &fingerprint)"
+    )
+    stream_dirty_gate = stream_on.find(
+        "sensor->ctrl_cache.exposure_reinit_required", stream_fingerprint_guard
+    )
+    stream_invalidate = stream_on.find(
+        "max9296_invalidate_exposure_hardware_locked(sensor);", stream_dirty_gate
+    )
+    stream_reinit = stream_on.find(
+        "max9296_prepare_hardware_locked(sensor, &fingerprint)", stream_invalidate
+    )
+    if not (
+        0
+        <= stream_fingerprint_guard
+        < stream_dirty_gate
+        < stream_invalidate
+        < stream_reinit
+    ):
+        failures.append("legacy STREAMON can warm-reuse unresolved exposure hardware")
 
     # Bench-verified AP1302 register meanings. 0x1012 is only the immediate
     # transition selector; 0x1014 is optical zoom and must not be an X/Y target.
@@ -720,82 +998,34 @@ def main() -> int:
     if re.search(r"0x510a", source, re.I):
         failures.append("unsafe AP1302 0x510A manual-WB register was introduced")
 
-    # Seed contract for max9296_apply_channel_controls (max9296 #64).  A dual
-    # pair shares one CSI link behind the GMSL serdes and must hold ONE
-    # exposure, so the seed is decided per pair: its value, its gate, and its
-    # address.  AE mode (0x5002) is exempt and stays per channel.
-    #
-    # What this enforces, and why each part is here rather than a looser check:
-    #   value   the pair value, so the replay's two passes cannot race
-    #   gate    pair_ae_on, so no channel is written behind its own gate
-    #   place   the seed sits INSIDE if (!skip_exposure_seed), by brace match
-    #   address broadcast on dual, channel address on single -- compared whole,
-    #           because pinning only the dual arm let a mutated single arm pass
-    #   AE      per channel AND present: a bare "no offending match" loop passes
-    #           when every AE write is deleted or moved into a helper
-    seed_call = re.search(
-        r"max9296_write_exposure\(\s*sensor,\s*([^,]+),\s*[^,]+(?:\?[^,]+:[^,]+)?,\s*exp_seed\s*\)",
-        apply_channel_controls,
+    # The compiled policy owns route/value semantics. Keep only the production
+    # binding here: its result must drive the skip decision and actual address.
+    for token in (
+        "exposure_decision.route == MAX9296_EXPOSURE_SEED_SKIP",
+        "exposure_decision.route == MAX9296_EXPOSURE_SEED_PAIR",
+        "pair_exposure_seed ? AP1302_I2C_ADDR : i2c_addr",
+        "max9296_write_exposure(sensor, exposure_addr, exposure_name",
+    ):
+        if token not in apply_channel_controls:
+            failures.append(f"exposure replay policy is not wired to hardware: {token}")
+    seed_call = apply_channel_controls.find(
+        "max9296_write_exposure(sensor, exposure_addr, exposure_name"
     )
-    if seed_call is None:
-        failures.append(
-            "exposure seed call not found in max9296_apply_channel_controls"
+    seed_is_gated = False
+    cursor = 0
+    while seed_call >= 0:
+        block = gated_block(
+            apply_channel_controls[cursor:], "if (!skip_exposure_seed)"
         )
-    else:
-        addr_expr = " ".join(seed_call.group(1).split())
-        if addr_expr != "dual ? AP1302_I2C_ADDR : i2c_addr":
-            failures.append(
-                "exposure seed address must be exactly "
-                "`dual ? AP1302_I2C_ADDR : i2c_addr`, "
-                f"got `{addr_expr}` (max9296 #64)"
-            )
-        gate = gated_block(apply_channel_controls, "if (!skip_exposure_seed)")
-        if gate is None:
-            failures.append("seed is not wrapped in if (!skip_exposure_seed)")
-        else:
-            # The first such block is the preflight; the seed lives in a later
-            # one, so scan every gate block rather than only the first.
-            spans, cursor = [], 0
-            while True:
-                blk = gated_block(
-                    apply_channel_controls[cursor:], "if (!skip_exposure_seed)"
-                )
-                if blk is None:
-                    break
-                spans.append((cursor + blk[0], cursor + blk[1]))
-                cursor += blk[1] + 1
-            if not any(lo < seed_call.start() < hi for lo, hi in spans):
-                failures.append(
-                    "exposure seed is not inside an if (!skip_exposure_seed) "
-                    "block -- the high-fps gate no longer guards it"
-                )
-
-    # The gate itself must be pair-level on dual, otherwise an asymmetric ae_on
-    # seeds only one side again.
-    if not re.search(
-        r"pair_ae_on\s*=\s*dual\s*\?\s*\(?\s*sensor->ctrl_cache\.ch0\.ae_on\s*&&"
-        r"\s*sensor->ctrl_cache\.ch1\.ae_on",
-        " ".join(apply_channel_controls.split()).replace("( ", "(").replace(" )", ")"),
-    ):
-        failures.append(
-            "seed gate is not pair-level: expected pair_ae_on to require both "
-            "ctrl_cache.ch0.ae_on and ctrl_cache.ch1.ae_on on dual"
-        )
-    if not re.search(r"bool\s+skip_exposure_seed\s*=\s*pair_ae_on\s*&&",
-                     apply_channel_controls):
-        failures.append("skip_exposure_seed does not derive from pair_ae_on")
-
-    # The seed VALUE must be the pair value on dual, so the two replay passes
-    # write the same thing instead of the second clobbering the first.
-    if not re.search(
-        r"max9296_cached_exposure_value\(\s*sensor,\s*dual\s*\?"
-        r"\s*&sensor->ctrl_cache\.ch0\s*:\s*ch_ctrl\s*\)",
-        " ".join(apply_channel_controls.split()),
-    ):
-        failures.append(
-            "exp_seed is not the pair value on dual: expected "
-            "max9296_cached_exposure_value(sensor, dual ? &ctrl_cache.ch0 : ch_ctrl)"
-        )
+        if block is None:
+            break
+        low, high = cursor + block[0], cursor + block[1]
+        if low < seed_call < high:
+            seed_is_gated = True
+            break
+        cursor = high + 1
+    if seed_call < 0 or not seed_is_gated:
+        failures.append("high-FPS seed skip no longer guards the replay exposure write")
 
     # AE mode stays per channel -- and must still exist.  Both STEP 1 (manual)
     # and STEP 2 (configured) write it, so require at least two.
