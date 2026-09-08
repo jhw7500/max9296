@@ -6283,10 +6283,10 @@ static void max9296_health_set_unavailable(
  * AR0234 DMA is excluded here because it can take hundreds of milliseconds;
  * sensor static presence will be a separate explicitly rate-limited deep ABI.
  */
-/* Shortest interval between two verdict lines from one device.  The first
- * transition after a quiet period is never delayed; only a verdict that keeps
- * flipping inside one second is held, and the held count rides out on the next
- * line. */
+/* Shortest interval between routine verdict lines from one device.  The first
+ * transition into a fault bypasses this budget so a watchdog STREAMOFF cannot
+ * erase the only durable record; recovery and later fault-state changes remain
+ * bounded, and the held count rides out on the next line. */
 #define MAX9296_PAIR_LOG_MIN_MS 1000
 
 /* Decide the dual-wide pair verdict for one sample and stage the log line the
@@ -6311,6 +6311,7 @@ static void max9296_pair_verdict_locked(struct max9296_dev *sensor,
   enum max9296_hinf_state state[2] = {MAX9296_HINF_UNKNOWN,
                                       MAX9296_HINF_UNKNOWN};
   enum max9296_pair_health pair = MAX9296_PAIR_NOT_APPLICABLE;
+  enum max9296_pair_log_action log_action;
   enum max9296_hinf_gap gap;
   unsigned int fps = READ_ONCE(sensor->fps);
   unsigned int i;
@@ -6351,14 +6352,18 @@ static void max9296_pair_verdict_locked(struct max9296_dev *sensor,
      * max9296_fsync_thread() refuses for the same reason), and it prints its own
      * unattributed suppression line from inside this locked region.
      *
-     * A transition that reverses inside the window is dropped for good: the next
-     * decidable sample recomputes the earlier verdict and stages nothing.  That
-     * is the price of the gate, recorded in docs/health-raw-v1.md. */
-    if (pair == sensor->health.pair_state) {
+     * A recovery that reverses inside the window is dropped for good: the next
+     * decidable sample recomputes the earlier verdict and stages nothing.  A
+     * first transition from non-fault to fault is different: holding it lets a
+     * watchdog STREAMOFF clear the gate before journald gets any evidence, so
+     * max9296_pair_log_decide() emits that transition immediately. */
+    log_action = max9296_pair_log_decide(
+        pair, sensor->health.pair_state, now_ms,
+        sensor->health.pair_log_ms, MAX9296_PAIR_LOG_MIN_MS);
+    if (log_action == MAX9296_PAIR_LOG_UNCHANGED) {
       /* The pending verdict resolved itself; a later recurrence counts again. */
       sensor->health.pair_held = pair;
-    } else if (sensor->health.pair_log_ms &&
-               now_ms - sensor->health.pair_log_ms < MAX9296_PAIR_LOG_MIN_MS) {
+    } else if (log_action == MAX9296_PAIR_LOG_HOLD) {
       /* Count the transition, not the sample.  pair_state deliberately stays put
        * while a line is held, so every decidable sample re-enters this branch -
        * at 120 fps one held transition would otherwise report held=59 and

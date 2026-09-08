@@ -92,7 +92,7 @@ bash tests/run_health_tests.sh
 | 테스트 | 방식 | 검증 대상 |
 |---|---|---|
 | `run_360p_policy_test.sh` | C 단위 테스트 | `max9296_360p_policy.h` 41 checks — 모드별 FPS 상한(360p 120 / HD 60 / FHD 30), 고속 수동 노출이 거부 없이 경고하는지, HD 상한 상향이 360p 고속 preview 경로로 새지 않는지, full-FOV ROI 정규화. 제한 빌드(`-DMAX9296_360P_MAX_FPS=30U -DMAX9296_HD_MAX_FPS=30U`)로 2차 컴파일까지 돈다 |
-| `run_pair_health_test.sh` | C 단위 테스트 | `max9296_pair_health.h`의 순수 판정 — 듀얼 쌍 HINF 대조와 판정 가능 구간. 무엇을 왜 고정하는지는 그 파일의 주석이 정본이고, 구간의 ABI 정의는 [`docs/health-raw-v1.md`](docs/health-raw-v1.md)에 있다 |
+| `run_pair_health_test.sh` | C 단위 테스트 | `max9296_pair_health.h`의 순수 판정 — 듀얼 쌍 HINF 대조, 판정 가능 구간, fault-first 로그 정책. 무엇을 왜 고정하는지는 그 파일의 주석이 정본이고, 구간과 로그의 ABI 정의는 [`docs/health-raw-v1.md`](docs/health-raw-v1.md)에 있다 |
 | `max9296_pair_health_source_test.py` | **정적 소스 검사** | 호스트 테스트가 닿지 않는 `max9296_pair_verdict_locked()`와 그 호출부의 합성 계약을 소스 구조로 고정한다. 각 검사가 무엇을 지키는지는 그 파일의 주석이 정본이며, 어긴 변경은 여기 적어두지 않아도 빨개진다 |
 | `max9296_prepare_test.py` | **정적 소스 검사** | prepare 생명주기·전원 소유권 계약이 소스에 있는지. 하드웨어 동시성은 실기 테스트가 권위임을 자체 docstring이 명시한다 |
 | `max9296_probe_cleanup_test.py` | **정적 소스 검사** | probe 게시의 원자성, V4L2 등록이 마지막인지 (소스 오프셋 비교) |

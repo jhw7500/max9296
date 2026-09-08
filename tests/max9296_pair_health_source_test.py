@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Static source checks for the dual-pair HINF verdict in max9296.c.
 
-The pure decisions in max9296_pair_health.h are covered by a host C test.  The
-composition in max9296_pair_verdict_locked() and its caller is not, and cannot
-be: no host test instantiates a struct max9296_dev.  That gap is where the defects this file
+The pure verdict, interval and log-gate decisions in max9296_pair_health.h are
+covered by a host C test.  The composition in max9296_pair_verdict_locked() and
+its caller is not, and cannot be: no host test instantiates a struct
+max9296_dev.  That gap is where the defects this file
 guards actually lived - the header refused a two-hour interval correctly all
 along while the driver narrowed the caller's delta before handing it over, and
 the verdict was later found timing one interval while comparing another.  So the
@@ -210,10 +211,10 @@ def main() -> int:
         0 <= staged < advanced,
         "the baseline snapshot is staged from health, before health advances",
     )
-    # pair_changed is only ever set true, on the emit path.  Everything that makes
-    # the other paths safe is the sampler's opening memset plus the fact that the
-    # one early return never reaches the report: without both, a stack-garbage
-    # byte would print a line built from uninitialised fields.
+    # pair_changed defaults false.  Everything that makes the non-emit paths safe
+    # starts with the sampler's opening memset plus the fact that the one early
+    # return never reaches the report: without both, a stack-garbage byte would
+    # print a line built from uninitialised fields.
     check(
         re.match(
             r"\s*(?:[^\n;{}]*;\s*)*\s*memset\(sample, 0, sizeof\(\*sample\)\);",
@@ -235,37 +236,40 @@ def main() -> int:
         "the caller reports the verdict only after dropping the lock",
     )
 
-    # Change-only and rate-bounded must be one decision.  A held line that
-    # advanced the state anyway would be lost for good, because the change-only
-    # gate then treats that transition as already reported.
-    # The gate is a three-way on the verdict: unchanged, held, emitted.  A held
-    # transition must not advance pair_state - the change-only gate would then
-    # treat it as reported - and must be counted once, not once per sample.
-    resolved = re.search(
-        r"if\s*\(\s*pair\s*==\s*sensor->health\.pair_state\s*\)", decidable)
-    check(resolved is not None, "the gate branches on the verdict being unchanged")
-    # Pin the comparison, not the token: a held branch guarded by "0 &&" still
-    # mentions MAX9296_PAIR_LOG_MIN_MS while gating nothing, and every transition
-    # would then emit immediately.
-    held_cond = re.search(
-        r"\}\s*else\s+if\s*\((?P<cond>[^{]*)\)\s*\{", decidable, re.S)
-    at_held = decidable.find("MAX9296_PAIR_LOG_MIN_MS")
+    # The host C test owns the gate behaviour, including the lifecycle race: a
+    # first fault bypasses a recent normal line, while recovery and fault-to-fault
+    # changes remain bounded.  This source check binds that tested policy to the
+    # real per-device fields and then checks the side effects of each result.
     check(
-        held_cond is not None
-        and re.search(
-            r"sensor->health\.pair_log_ms\s*&&\s*now_ms\s*-\s*"
-            r"sensor->health\.pair_log_ms\s*<\s*MAX9296_PAIR_LOG_MIN_MS",
-            held_cond.group("cond"),
+        re.search(
+            r"log_action\s*=\s*max9296_pair_log_decide\(\s*pair\s*,\s*"
+            r"sensor->health\.pair_state\s*,\s*now_ms\s*,\s*"
+            r"sensor->health\.pair_log_ms\s*,\s*MAX9296_PAIR_LOG_MIN_MS\s*\)",
+            decidable,
+            re.S,
         )
         is not None,
-        "a minimum interval separates two verdict lines",
+        "the driver passes the per-device gate state to the tested policy",
+    )
+    unchanged_at = decidable.find(
+        "if (log_action == MAX9296_PAIR_LOG_UNCHANGED)")
+    held_at = decidable.find(
+        "else if (log_action == MAX9296_PAIR_LOG_HOLD)")
+    emit_at = decidable.find("else {", held_at)
+    check(
+        0 <= unchanged_at < held_at < emit_at,
+        "the driver handles unchanged, held and emitted policy results",
     )
     held_body = emit_body = ""
-    if at_held >= 0:
-        opening = decidable.index("{", at_held)
-        held_body = _close(decidable, opening, "held branch")
-        rest = decidable[decidable.index("}", opening + len(held_body)) :]
-        emit_body = _close(rest, rest.index("{", rest.index("else")), "emit branch")
+    if held_at >= 0:
+        held_body = _close(decidable, decidable.index("{", held_at), "held branch")
+    if emit_at >= 0:
+        emit_body = _close(decidable, decidable.index("{", emit_at), "emit branch")
+    check(
+        verdict.count("sample->pair_changed = true;") == 1
+        and "sample->pair_changed = true;" in emit_body,
+        "only an emitted policy result stages a durable verdict line",
+    )
     check(
         "sensor->health.pair_state = pair;" not in held_body
         and "sensor->health.pair_state = pair;" in emit_body,

@@ -18,6 +18,10 @@ static unsigned int failures;
 #define DECIDE(_dual, _streaming, _ch0, _ch1) \
   max9296_pair_health_decision((_dual), (_streaming), (_ch0), (_ch1))
 
+#define LOG_ACTION(_pair, _reported, _now_ms, _last_ms, _minimum_ms)       \
+  max9296_pair_log_decide((_pair), (_reported), (_now_ms), (_last_ms),     \
+                          (_minimum_ms))
+
 /* The #65 signature: one channel's HINF counter pinned while the other keeps
  * advancing.  This is the case the whole check exists for, and it must fire in
  * both channel orders - the captured board case had B stalled, but nothing
@@ -86,6 +90,30 @@ static void test_names_are_the_documented_abi(void) {
   CHECK(!strcmp(max9296_pair_health_name(MAX9296_PAIR_ALIGNED), "ALIGNED"));
   CHECK(!strcmp(max9296_pair_health_name(MAX9296_PAIR_NOT_APPLICABLE),
                 "NOT_APPLICABLE"));
+}
+
+/* A normal verdict must not spend the warning budget for the first fault that
+ * follows it.  Otherwise this exact sequence loses #65's only durable evidence:
+ * ALIGNED is logged, DIVERGENT is held inside the one-second gate, then the
+ * watchdog causes STREAMOFF and lifecycle reset discards the held transition.
+ * Recovery and changes between already-faulting states remain rate-limited so a
+ * noisy reader cannot turn ordinary oscillation into an unbounded printk loop. */
+static void test_fault_entry_precedes_lifecycle_reset(void) {
+  CHECK(LOG_ACTION(MAX9296_PAIR_ALIGNED, MAX9296_PAIR_NOT_APPLICABLE,
+                   1000LL, 0LL, 1000LL) == MAX9296_PAIR_LOG_EMIT);
+  CHECK(LOG_ACTION(MAX9296_PAIR_DIVERGENT, MAX9296_PAIR_ALIGNED,
+                   1500LL, 1000LL, 1000LL) == MAX9296_PAIR_LOG_EMIT);
+  CHECK(LOG_ACTION(MAX9296_PAIR_BOTH_STALLED, MAX9296_PAIR_ALIGNED,
+                   1500LL, 1000LL, 1000LL) == MAX9296_PAIR_LOG_EMIT);
+
+  CHECK(LOG_ACTION(MAX9296_PAIR_ALIGNED, MAX9296_PAIR_DIVERGENT,
+                   1500LL, 1000LL, 1000LL) == MAX9296_PAIR_LOG_HOLD);
+  CHECK(LOG_ACTION(MAX9296_PAIR_BOTH_STALLED, MAX9296_PAIR_DIVERGENT,
+                   1500LL, 1000LL, 1000LL) == MAX9296_PAIR_LOG_HOLD);
+  CHECK(LOG_ACTION(MAX9296_PAIR_ALIGNED, MAX9296_PAIR_DIVERGENT,
+                   2000LL, 1000LL, 1000LL) == MAX9296_PAIR_LOG_EMIT);
+  CHECK(LOG_ACTION(MAX9296_PAIR_DIVERGENT, MAX9296_PAIR_DIVERGENT,
+                   1500LL, 1000LL, 1000LL) == MAX9296_PAIR_LOG_UNCHANGED);
 }
 
 /* Sampling-gap classification.  Why the two rejections must stay distinct is
@@ -186,6 +214,7 @@ int main(void) {
   test_single_and_idle_never_warn();
   test_zero_values_and_distinct_rejections();
   test_names_are_the_documented_abi();
+  test_fault_entry_precedes_lifecycle_reset();
   test_gap_too_short_is_refused();
   test_gap_too_long_is_refused();
   test_gap_judges_the_real_interval();

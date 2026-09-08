@@ -76,6 +76,38 @@ max9296_pair_health_name(enum max9296_pair_health state) {
   }
 }
 
+/* What the per-device verdict log gate does with one decided transition. */
+enum max9296_pair_log_action {
+  MAX9296_PAIR_LOG_UNCHANGED = 0,
+  MAX9296_PAIR_LOG_HOLD,
+  MAX9296_PAIR_LOG_EMIT,
+};
+
+/* Fault entry is durable evidence, not routine status output.  It must be
+ * staged immediately even when a recent ALIGNED/NOT_APPLICABLE line spent the
+ * ordinary log budget: a watchdog-triggered STREAMOFF clears the gate state,
+ * so holding the first fault until later can erase it without any kernel log.
+ * Recovery and transitions between already-faulting states remain bounded. */
+static inline enum max9296_pair_log_action
+max9296_pair_log_decide(enum max9296_pair_health pair,
+                        enum max9296_pair_health reported,
+                        long long now_ms, long long last_ms,
+                        long long minimum_ms) {
+  if (pair == reported)
+    return MAX9296_PAIR_LOG_UNCHANGED;
+
+  if ((pair == MAX9296_PAIR_DIVERGENT ||
+       pair == MAX9296_PAIR_BOTH_STALLED) &&
+      (reported == MAX9296_PAIR_NOT_APPLICABLE ||
+       reported == MAX9296_PAIR_ALIGNED))
+    return MAX9296_PAIR_LOG_EMIT;
+
+  if (last_ms && now_ms - last_ms < minimum_ms)
+    return MAX9296_PAIR_LOG_HOLD;
+
+  return MAX9296_PAIR_LOG_EMIT;
+}
+
 /* Frames the HINF counter can advance before "unchanged" stops meaning
  * "stalled".  The counter is 8 bits (R0x0002[15:8]) and the verdict is an
  * equality test, so a gap of exactly 256 frames wraps back to the same value
