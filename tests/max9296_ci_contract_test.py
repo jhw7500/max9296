@@ -12,18 +12,25 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "contract-test.yml"
 
 
-def event_paths(workflow: str, event: str) -> tuple[str, ...]:
+def event_body(workflow: str, event: str) -> str | None:
     event_match = re.search(
         rf"^  {re.escape(event)}:\s*$\n(?P<body>(?:^    .*\n|^\s*$)*)",
         workflow,
         re.MULTILINE,
     )
     if not event_match:
+        return None
+    return event_match.group("body")
+
+
+def event_paths(workflow: str, event: str) -> tuple[str, ...]:
+    body = event_body(workflow, event)
+    if body is None:
         return ()
 
     paths_match = re.search(
         r"^    paths:\s*$\n(?P<paths>(?:^      - .*\n)+)",
-        event_match.group("body"),
+        body,
         re.MULTILINE,
     )
     if not paths_match:
@@ -60,6 +67,12 @@ def main() -> int:
                 fnmatch.fnmatchcase(changed_path, pattern) for pattern in patterns
             ):
                 failures.append(f"{event} ignores {changed_path}")
+
+    pull_request_body = event_body(workflow, "pull_request")
+    if pull_request_body and re.search(
+        r"^    branches:\s*", pull_request_body, re.MULTILINE
+    ):
+        failures.append("pull_request excludes supported integration bases")
 
     if "bash tests/run_health_tests.sh" not in workflow:
         failures.append("contract job does not execute the health suite")
