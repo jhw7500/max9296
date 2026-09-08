@@ -78,6 +78,8 @@ def main() -> int:
         failures.append("contract job does not execute the health suite")
     if "actions/checkout@" not in workflow:
         failures.append("contract job does not check out production sources")
+    if "sudo apt-get install --no-install-recommends --yes ripgrep" not in workflow:
+        failures.append("contract job does not install ripgrep")
     if "check-workflow-enabled" in workflow or "needs.check-enabled" in workflow:
         failures.append("contract job can be silently disabled by workflow-config")
 
