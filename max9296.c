@@ -1060,7 +1060,16 @@ static int max9296_slave_to_global_ch(struct max9296_dev *sensor,
 static void max9296_fmt_ch(char *buf, size_t len,
                            struct max9296_dev *sensor,
                            unsigned int slave_addr) {
-  int gch = max9296_slave_to_global_ch(sensor, slave_addr);
+  int gch;
+
+  /* The global AP1302 address is a broadcast in dual mode. Attributing its
+   * success or failure to local ch0 hides the pair-wide operation. */
+  if (slave_addr == AP1302_I2C_ADDR && max9296_hw_is_dual(sensor)) {
+    scnprintf(buf, len, "pair");
+    return;
+  }
+
+  gch = max9296_slave_to_global_ch(sensor, slave_addr);
   if (gch >= 0)
     scnprintf(buf, len, "ch%d", gch);
   else
@@ -2486,6 +2495,28 @@ static u32 max9296_cached_exposure_value(
   return sensor->ctrl_cache.exposure;
 }
 
+static struct max9296_exposure_replay_decision
+max9296_cached_exposure_replay_decision(
+    const struct max9296_dev *sensor,
+    const struct max9296_channel_ctrl *channel) {
+  bool dual = max9296_hw_is_dual(sensor);
+  unsigned int local_channel =
+      channel == &sensor->ctrl_cache.ch1 ? 1U : 0U;
+  u32 fps = READ_ONCE(sensor->fps);
+  u32 safe_max_fps = sensor->current_mode
+                         ? sensor->current_mode->exposure_safe_max_fps
+                         : 0;
+  bool pair_ae_on = dual ? (sensor->ctrl_cache.ch0.ae_on &&
+                            sensor->ctrl_cache.ch1.ae_on)
+                         : channel->ae_on;
+
+  return max9296_exposure_replay_decision(
+      dual, local_channel, sensor->ctrl_cache.exposure_override_mask,
+      pair_ae_on, fps, safe_max_fps, sensor->ctrl_cache.exposure,
+      max9296_cached_exposure_value(sensor, &sensor->ctrl_cache.ch0),
+      max9296_cached_exposure_value(sensor, &sensor->ctrl_cache.ch1));
+}
+
 static void
 max9296_require_exposure_reinit_locked(struct max9296_dev *sensor) {
   lockdep_assert_held(&sensor->lock);
@@ -2941,21 +2972,8 @@ static int max9296_apply_channel_controls(struct max9296_dev *sensor,
   u16  gain_seed   = ch_ctrl->gain ? ch_ctrl->gain : 256;
   u16  rot         = (ch_ctrl->hflip ? 0x01 : 0x00) |
                      (ch_ctrl->vflip ? 0x02 : 0x00);
-  bool dual = max9296_hw_is_dual(sensor);
-  unsigned int local_channel = ch_ctrl == &sensor->ctrl_cache.ch1 ? 1U : 0U;
-  u32 fps = READ_ONCE(sensor->fps);
-  u32 safe_max_fps = sensor->current_mode
-                         ? sensor->current_mode->exposure_safe_max_fps
-                         : 0;
-  bool pair_ae_on = dual ? (sensor->ctrl_cache.ch0.ae_on &&
-                            sensor->ctrl_cache.ch1.ae_on)
-                         : ch_ctrl->ae_on;
   struct max9296_exposure_replay_decision exposure_decision =
-      max9296_exposure_replay_decision(
-          dual, local_channel, sensor->ctrl_cache.exposure_override_mask,
-          pair_ae_on, fps, safe_max_fps, sensor->ctrl_cache.exposure,
-          max9296_cached_exposure_value(sensor, &sensor->ctrl_cache.ch0),
-          max9296_cached_exposure_value(sensor, &sensor->ctrl_cache.ch1));
+      max9296_cached_exposure_replay_decision(sensor, ch_ctrl);
   u32 exp_seed = exposure_decision.value;
   bool skip_exposure_seed =
       exposure_decision.route == MAX9296_EXPOSURE_SEED_SKIP;

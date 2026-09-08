@@ -1,0 +1,42 @@
+name: Contract Tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - '**.c'
+      - '**.h'
+      - 'Makefile'
+      - 'tests/**'
+      - 'tools/**'
+      - '.github/workflows/contract-test.yml'
+  pull_request:
+    paths:
+      - '**.c'
+      - '**.h'
+      - 'Makefile'
+      - 'tests/**'
+      - 'tools/**'
+      - '.github/workflows/contract-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Repository Health Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ripgrep
+
+      - name: Run health contracts
+        run: bash tests/run_health_tests.sh

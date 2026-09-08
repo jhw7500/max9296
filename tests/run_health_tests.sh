@@ -4,6 +4,8 @@ set -eu
 cd "$(dirname "$0")/.."
 bash tests/run_360p_policy_test.sh
 bash tests/run_exposure_policy_test.sh
+python3 tests/max9296_exposure_replay_binding_test.py
+python3 tests/max9296_ci_contract_test.py
 bash tests/build_360p_candidates_test.sh
 bash tests/run_360p_readout_compare_test.sh
 python3 tests/max9296_health_export_test.py
