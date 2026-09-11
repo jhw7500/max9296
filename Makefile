@@ -1,6 +1,7 @@
 # 호스트별 경로는 저장소에 넣지 않는다. 저장소 루트의 `.env`(gitignore 대상)에서
 # 읽는다 — `cp .env.example .env` 로 시작한다. `make KERNEL_SRC=...` 로 넘기면
-# 명령줄이 이긴다.
+# 명령줄이 이긴다. 래퍼를 거치면 환경변수가 .env 를 이기지만, make 를 직접 부르면
+# make 가 .env 를 makefile 소스로 읽어 .env 가 환경변수를 이긴다.
 #   KERNEL_SRC    : 커널 소스 트리 (arch/<arch>/configs 가 있는 쪽)
 #   KBUILD_OUTPUT : 소스와 빌드가 나뉜 트리의 빌드 디렉터리 (.config 와
 #                   include/config/auto.conf 가 있는 쪽). 결합형 트리
