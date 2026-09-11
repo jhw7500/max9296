@@ -43,3 +43,6 @@ HANDOFF.*.md
 # clangd (호스트 종속 — 각자 빌드 시 생성)
 compile_commands.json
 .cache/
+
+# 호스트별 빌드 경로 (.env.example 을 복사해 만든다)
+.env

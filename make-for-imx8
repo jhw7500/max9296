@@ -1,8 +1,32 @@
 #!/bin/bash
 # source 로 부르면 exit 가 호출한 셸을 죽인다. 실행이면 exit, source 면 return 한다.
 if [ "${BASH_SOURCE[0]}" != "${0}" ]; then _mfi_end='return'; else _mfi_end='exit'; fi
-[ "$SDK_LOC" ] || SDK_LOC=/shared/fsl-imx-xwayland/5.10-hardknott
-[ "$SDK_NAME" ] || SDK_NAME=cortexa53-crypto-poky-linux
+_mfi_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 호스트별 경로는 저장소 루트의 `.env`(gitignore 대상)에서 읽는다. 이미 환경에 있는
+# 값이 우선이고, 없는 것만 파일에서 채운다. `cp .env.example .env` 로 시작한다.
+if [ -f "${_mfi_dir}/.env" ]; then
+    while IFS= read -r _mfi_line || [ -n "$_mfi_line" ]; do
+        case "$_mfi_line" in ''|'#'*) continue ;; esac
+        _mfi_k=${_mfi_line%%=*}
+        _mfi_v=${_mfi_line#*=}
+        # 파일이 임의 변수를 설정하지 못하도록 아는 키만 받는다.
+        case "$_mfi_k" in
+            SDK_LOC|SDK_NAME|KERNEL_SRC|KBUILD_OUTPUT) ;;
+            *) continue ;;
+        esac
+        # 값이 비었더라도 '설정됨'이면 존중한다 — `KBUILD_OUTPUT= ` 로 일부러
+        # 비우는 것이 결합형 트리 전환 방법이라, :- 로 보면 .env 값이 되살아난다.
+        [ -n "${!_mfi_k+set}" ] || printf -v "$_mfi_k" '%s' "$_mfi_v"
+    done < "${_mfi_dir}/.env"
+fi
+
+# KBUILD_OUTPUT 은 결합형 트리에서 비어 있는 게 정상이라 필수 목록에 없다.
+for _mfi_req in SDK_LOC SDK_NAME KERNEL_SRC; do
+    [ -n "${!_mfi_req:-}" ] && continue
+    echo "${_mfi_req} 가 비었다 — ${_mfi_dir}/.env 를 만들어 채운다 (cp .env.example .env)" >&2
+    "$_mfi_end" 1
+done
 
 [ ! -e "${SDK_LOC}/environment-setup-${SDK_NAME}" ] && {
     echo "Sorry, please verify: ${SDK_LOC}/environment-setup-${SDK_NAME}"
@@ -12,12 +36,13 @@ if [ "${BASH_SOURCE[0]}" != "${0}" ]; then _mfi_end='return'; else _mfi_end='exi
 # shellcheck disable=SC1090 # SDK setup path is selected at runtime.
 . "${SDK_LOC}/environment-setup-${SDK_NAME}"
 
-KERNEL_SRC=/opt/desktop/build-desktop/tmp/work/imx8mpevk-fsl-linux/linux-imx/5.10.35+git999-r0/linux-imx-5.10.35+git999
-
 # unset LDFLAGS to avoid userspace flags leaking into kernel build
 unset LDFLAGS
 
-make ARCH=arm64 CROSS_COMPILE=aarch64-poky-linux- KERNEL_SRC="${KERNEL_SRC}" "$@"
+# 해결한 경로를 make 명령줄로 넘긴다 — 명령줄 변수가 Makefile 의 `-include .env` 보다
+# 우선하므로, 여기서 정한 값(환경변수 > .env)이 그대로 적용된다.
+make ARCH=arm64 CROSS_COMPILE=aarch64-poky-linux- \
+     KERNEL_SRC="${KERNEL_SRC}" KBUILD_OUTPUT="${KBUILD_OUTPUT:-}" "$@"
 
 # --- clangd: compile_commands.json 자동 갱신 ---------------------------------
 # 빌드가 남긴 .cmd 파일만 파싱한다 (컴파일 없음, ~0.05초).
@@ -25,7 +50,7 @@ make ARCH=arm64 CROSS_COMPILE=aarch64-poky-linux- KERNEL_SRC="${KERNEL_SRC}" "$@
 # clangd 가 GCC 전용 플래그를 읽으려면 저장소의 .clangd 파일도 함께 필요하다.
 _cc_rc=$?
 _cc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_cc_kdir="$KERNEL_SRC"
+_cc_kdir="${KBUILD_OUTPUT:-$KERNEL_SRC}"
 
 # clean 류가 인자에 하나라도 섞이면 건너뛴다 ("clean all" 처럼 혼합돼도 안전하게).
 _cc_skip=0
@@ -38,7 +63,8 @@ done
 _cc_gen="${CC_GEN:-}"
 if [ -z "$_cc_gen" ]; then
     for _cc_c in "$_cc_kdir/source/scripts/clang-tools/gen_compile_commands.py" \
-                 "$_cc_kdir/scripts/clang-tools/gen_compile_commands.py"; do
+                 "$_cc_kdir/scripts/clang-tools/gen_compile_commands.py" \
+                 "$KERNEL_SRC/scripts/clang-tools/gen_compile_commands.py"; do
         if [ -f "$_cc_c" ]; then _cc_gen="$_cc_c"; break; fi
     done
 fi
