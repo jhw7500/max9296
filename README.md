@@ -33,26 +33,60 @@ AR0234 Sensor -> AP1302 ISP -> MAX9295 Serializer
 
 ## 빌드
 
+호스트별 경로는 저장소에 없다. 처음 한 번만 `.env`를 만든다.
+
 ```bash
+cp .env.example .env       # 편집기로 열어 경로를 채운다
 ./make-for-imx8            # 빌드
 ./make-for-imx8 clean      # 정리
 ```
 
-Yocto SDK 환경을 source한 뒤 `ARCH=arm64 CROSS_COMPILE=aarch64-poky-linux-`로
-모듈을 빌드한다. 경로 전제는 셋인데 **override 방법이 서로 다르다.**
+`.env`는 `.gitignore` 대상이라 호스트마다 값이 달라도 커밋이 충돌하지 않는다. 채워야
+할 항목의 정본은 `.env.example`이다.
 
-| 변수 | 기본값 | 바꾸는 법 |
+| 변수 | 무엇인가 | 비울 수 있나 |
 |---|---|---|
-| `SDK_LOC` | `/shared/fsl-imx-xwayland/5.10-hardknott` | 환경변수 (`make-for-imx8:4`) |
-| `SDK_NAME` | `cortexa53-crypto-poky-linux` | 환경변수 (`make-for-imx8:5`) |
-| `KERNEL_SRC` | `/opt/desktop/build-desktop/.../linux-imx-5.10.35+git999` | **환경변수 안 먹는다** — 아래 참조 |
+| `SDK_LOC` | Yocto SDK 설치 위치 | 아니오 |
+| `SDK_NAME` | SDK 타깃 이름 (`cortexa53-crypto-poky-linux`) | 아니오 |
+| `KERNEL_SRC` | 커널 **소스 트리** | 아니오 |
+| `KBUILD_OUTPUT` | 커널 **빌드 디렉터리** | 예 — 결합형 트리면 비운다 |
 
-`make-for-imx8:15`는 `KERNEL_SRC`를 조건 없이 대입한 뒤 `:20`에서 `make`에 명시로
-넘긴다. 따라서 래퍼를 쓰는 한 환경변수는 무시된다. 다른 커널 트리를 쓰려면 그 줄을
-직접 고치거나, 래퍼를 건너뛰고 `Makefile`의 `?=`(`Makefile:1`)를 쓴다.
+`.env`가 없거나 위 셋 중 하나가 비면 빌드 전에 멈추고 무엇을 채워야 하는지 알려준다.
+
+래퍼(`./make-for-imx8`)를 거치면 우선순위는 **환경변수 > `.env`**다. 일회성으로 다른
+트리에 빌드하려면 `.env`를 고치지 말고 앞에 붙인다.
 
 ```bash
-KERNEL_SRC=/다른/커널/트리 make ARCH=arm64 CROSS_COMPILE=aarch64-poky-linux-
+KERNEL_SRC=/다른/커널/소스 KBUILD_OUTPUT=/다른/커널/빌드 ./make-for-imx8
+```
+
+래퍼 없이 `make`를 직접 부르면 `.env`를 그대로 읽고, 명령줄 변수가 그보다 우선한다
+(CI가 이 경로를 쓴다).
+
+```bash
+make KERNEL_SRC=/usr/src/linux-headers-5.10.0-generic
+```
+
+### 소스 트리와 빌드 디렉터리
+
+커널 외부 모듈에는 둘 다 필요하다 (`make -C $KERNEL_SRC O=$KBUILD_OUTPUT M=$PWD`).
+Yocto처럼 **나뉜** 트리면 둘을 각각 주고, 배포판 `linux-headers`나
+`/lib/modules/$(uname -r)/build`처럼 **결합형**이면 `KERNEL_SRC`만 주고 `KBUILD_OUTPUT`은
+비운다 — 비면 `O=`가 붙지 않는다. 형제 저장소 `sc16is7xx`와 같은 방식이고, 기본 소스
+트리도 같다.
+
+| | 소스 트리 | 빌드 디렉터리 |
+|---|---|---|
+| 최상위 `Makefile` | `VERSION = 5` | `scripts/mkmakefile`이 만든 2줄 stub |
+| `arch/arm64/configs/` | 있음 | **없음** |
+| `.config`, `include/config/auto.conf` | **없음** | 있음 |
+
+나뉜 트리인데 소스만 주면 커널이 이렇게 거절한다. 저장소 문제가 아니라 경로 문제다 —
+빌드 디렉터리는 `find <yocto루트> -path '*include/config/auto.conf'`로 찾는다.
+
+```
+ERROR: Kernel configuration is invalid.
+       include/generated/autoconf.h or include/config/auto.conf are missing.
 ```
 
 SDK 환경설정 파일(`${SDK_LOC}/environment-setup-${SDK_NAME}`)이 없으면 즉시
