@@ -587,6 +587,9 @@ struct max9296_dev {
   bool hardware_valid;
   u64 initialized_epoch;
   u64 stream_commit_epoch;
+  /* A failed initialization may already have remapped a serializer. Keep this
+   * attempt epoch even when hardware readiness is invalidated. */
+  u64 cold_init_epoch;
 
   unsigned int fps;
   unsigned int rotate;
@@ -4705,11 +4708,25 @@ failed:
 static int max9296_prepare_hardware_locked(
     struct max9296_dev *sensor,
     const struct max9296_hw_fingerprint *fingerprint) {
+  u64 epoch = READ_ONCE(max9296_hw_epoch);
   int ret;
 
   ret = max9296_preflight_prepare_locked(sensor, fingerprint);
   if (ret)
     goto failed;
+
+  /* The mode table assumes power-on serializer addresses; the firmware loader
+   * also has no AP1302 reset sequence. Clearing hardware_valid does not restore
+   * either precondition. Require a real board power transition before another
+   * cold attempt, including after a partially completed initialization. The
+   * caller owns power throughout this transaction, so the epoch cannot move. */
+  if (sensor->cold_init_epoch == epoch) {
+    dev_err(&sensor->i2c_client->dev,
+            "cold initialization already attempted in this power epoch; "
+            "camera hard reset required\n");
+    ret = -ESTALE;
+    goto failed;
+  }
 
   sensor->hardware_valid = false;
   sensor->initialized_epoch = 0;
@@ -4718,6 +4735,7 @@ static int max9296_prepare_hardware_locked(
   sensor->state.firmware = MAX9296_STATE_IDLE;
   sensor->state.enable = MAX9296_STATE_IDLE;
 
+  sensor->cold_init_epoch = epoch;
   ret = max9296_set_mode(sensor, fingerprint);
   if (ret)
     goto failed;
@@ -5037,9 +5055,10 @@ static int max9296_prepare_request(
 
   if (sensor->ctrl_cache.exposure_reinit_required) {
     /* A high-FPS AE-auto replay intentionally skips EXP_TIME. Once the exact
-     * topology guard above has passed, firmware reload is the only safe way to
-     * prevent an earlier process's channel values from surviving behind the
-     * reconciled cache/G_CTRL. */
+     * topology guard above has passed, require fresh hardware initialization
+     * so an earlier process's channel values cannot survive behind the new
+     * cache/G_CTRL. The cold-init epoch guard returns ESTALE while power is
+     * retained; userspace must perform its camera hard-reset lifecycle. */
     max9296_invalidate_exposure_hardware_locked(sensor);
     hardware_current = false;
   }

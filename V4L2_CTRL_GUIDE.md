@@ -162,10 +162,19 @@ baseline과 AE-auto 고FPS seed-skip 정책을 따른다. 같은 값이더라도
 `exp_time_chX`를 해당 세션의 override로 적용한다.
 
 보드 전원이 유지되는 warm restart에서도 이전 세션에 채널별 override가 있었다면, 드라이버는
-기존 dual/left/right topology가 같은지 먼저 검사한 뒤 AP1302 firmware를 다시 초기화한다.
-따라서 고FPS AE-auto의 seed-skip이 이전 프로세스의 서로 다른 `0x500c` 값을 보존하지 않는다.
-하드웨어가 준비되지 않은 동안 override를 해제한 경우도 다음 prepare/STREAMON에서
-같은 초기화를 거친다.
+기존 dual/left/right topology가 같은지 먼저 검사한 뒤 override를 폐기하고 하드웨어 준비
+상태를 무효화한다. 같은 전원 주기에 이미 콜드 초기화를 시도했다면 prepare/STREAMON은
+`-ESTALE`과 `camera hard reset required` 로그를 반환한다. serializer 주소 변경 표와
+AP1302 펌웨어 로더는 전원 리셋 이후의 상태를 전제로 하므로 warm 상태에서 다시 실행하지
+않는다. `cam_hard_reset.sh -s -S` 또는 `init_cam.sh`로 실제 전원 리셋을 거친 뒤 JSON
+설정을 다시 적용해야 한다. 이 절차는 고FPS AE-auto의 seed-skip이 이전 프로세스의 서로
+다른 `0x500c` 값을 보존하는 것을 방지한다.
+
+하드웨어가 준비되지 않은 동안 override를 해제한 경우도 동일하다. 콜드 초기화 도중
+레지스터·펌웨어·설정 적용이 실패한 경우 역시 같은 전원 주기에서 재시도하지 않는다.
+읽기 전용 사전 검증만 실패한 경우에는 전원 리셋 없이 요청을 수정해 재시도할 수 있다.
+폐기할 override가 없고 하드웨어 구성이 일치하는 일반 warm restart는 계속 재사용한다.
+드라이버는 다른 카메라가 공유하는 보드 전원을 이 오류 경로에서 강제로 리셋하지 않는다.
 
 런타임 노출 I2C 쓰기가 실패하면 오류를 반환하고 실패한 요청을 캐시에 반영하지 않는다.
 쓰기 실패만으로 스트림 권한을 취소하거나 펌웨어 재초기화를 요구하지 않는다. 여러 쓰기 중
@@ -178,7 +187,7 @@ STREAMON은 기존 하드웨어 설정에서 캐시 재적용을 다시 시도�
 
 듀얼 모드에서도 채널별 override 자체를 거부하지 않는다. 서로 다른 노출로 인해 합성
 출력이 깨지는 경우는 이 컨트롤을 사용한 엔지니어가 판단하고 복구해야 하며, 복구는
-공유 `exp_time`을 다시 쓰거나 gstApp/모듈을 재시작해 수행한다.
+공유 `exp_time`을 다시 쓰거나 카메라 hard reset 후 gstApp을 재시작해 수행한다.
 
 안전 상한을 넘는 모드-유효 FPS에서 `exp_time`, `exp_time_chX` 또는 수동 AE 전환으로
 노출 쓰기가 필요하면 **거부하지 않고 경고를 남긴 뒤 그대로 쓴다.** 커널 로그에는
