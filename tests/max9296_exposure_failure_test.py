@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise production exposure writes and STREAMON with injected I/O errors."""
+"""Exercise production exposure writes, crop replay and STREAMON I/O errors."""
 
 import argparse
 import subprocess
@@ -16,6 +16,7 @@ def build_harness(source: str) -> str:
     names = [
         "max9296_require_exposure_reinit_locked",
         "max9296_invalidate_exposure_hardware_locked",
+        "max9296_apply_cached_crop",
         "max9296_set_exposure_cluster",
         "max9296_stream_commit_locked",
         "max9296_s_stream",
@@ -37,12 +38,13 @@ struct v4l2_ctrl { int val; bool is_new; };
 struct v4l2_subdev { int unused; };
 struct max9296_ctrls { struct v4l2_ctrl *exp_time, *exposure_ch0, *exposure_ch1; };
 struct max9296_hw_fingerprint { unsigned int enable, fps; };
-struct max9296_channel_ctrl { int exposure; };
+struct max9296_channel_ctrl { int exposure, dz_x, dz_y; };
 struct max9296_ctrl_cache {
-  int exposure;
+  int exposure, dz;
   struct max9296_channel_ctrl ch0, ch1;
   unsigned int exposure_override_mask;
   bool exposure_reinit_required, exposure_session_resetting, firmware_ready;
+  bool crop_enable;
 };
 struct test_adapter { int nr; };
 struct test_client { struct test_adapter *adapter; };
@@ -78,6 +80,8 @@ static int max9296_power_lock, debug;
 static u64 max9296_hw_epoch = 7;
 static struct max9296_dev *active_sensor;
 static unsigned int write_count, fail_at, init_count, hw_ch0, hw_ch1;
+static unsigned int crop_write_count, crop_fail_at;
+static int crop_hw_x[2], crop_hw_y[2], crop_hw_zoom[2];
 static int replay_error;
 
 static struct max9296_dev *to_max9296_dev(struct v4l2_subdev *sd) {
@@ -132,8 +136,18 @@ static int max9296_prepare_hardware_locked(
 static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
   (void)sensor;
 }
-static int max9296_apply_cached_crop(struct max9296_dev *sensor) {
-  (void)sensor; return 0;
+static int max9296_write_zoom_channel(
+    struct max9296_dev *sensor, unsigned int addr, const char *channel,
+    const struct max9296_channel_ctrl *ctrl, int zoom) {
+  (void)channel;
+  if (++crop_write_count == crop_fail_at)
+    return -EIO;
+  unsigned int index = addr == AP1302_CH1_I2C_ADDR ||
+      (addr == AP1302_I2C_ADDR && sensor->enable == 2U);
+  crop_hw_x[index] = ctrl->dz_x;
+  crop_hw_y[index] = ctrl->dz_y;
+  crop_hw_zoom[index] = zoom;
+  return 0;
 }
 static int max9296_apply_cached_controls(struct max9296_dev *sensor) {
   sensor->ctrl_cache.firmware_ready = replay_error == 0;
@@ -157,7 +171,8 @@ static struct max9296_dev fixture(struct v4l2_ctrl *ctrls) {
   static struct test_client client = {.adapter = &adapter};
   struct max9296_dev sensor = {
     .ctrls = {&ctrls[0], &ctrls[1], &ctrls[2]},
-    .ctrl_cache = {.exposure = 7000, .ch0 = {7000}, .ch1 = {7000},
+    .ctrl_cache = {.exposure = 7000, .ch0 = {.exposure = 7000},
+                   .ch1 = {.exposure = 7000},
                    .firmware_ready = true},
     .initialized_fingerprint = {.enable = 3, .fps = 30},
     .i2c_client = &client, .power_count = 1, .enable = 3,
@@ -168,6 +183,9 @@ static struct max9296_dev fixture(struct v4l2_ctrl *ctrls) {
   ctrls[1] = (struct v4l2_ctrl){.val = 7000};
   ctrls[2] = (struct v4l2_ctrl){.val = 7000};
   write_count = fail_at = init_count = 0;
+  crop_write_count = crop_fail_at = 0;
+  for (unsigned int ch = 0; ch < 2; ch++)
+    crop_hw_x[ch] = crop_hw_y[ch] = crop_hw_zoom[ch] = 0;
   replay_error = 0;
   hw_ch0 = hw_ch1 = 7000;
   return sensor;
@@ -219,6 +237,53 @@ int main(void) {
   CHECK(max9296_s_stream(&sd, 1) == 0);
   CHECK(sensor.streaming && sensor.stream_commit_epoch == 7);
   CHECK(init_count == 0);
+
+  /* A post-initialization crop failure must not force another cold attempt.
+   * Exercise prepared and stopped streams, including a partial dual write. */
+  for (unsigned int mode = 1; mode <= 3; mode++) {
+    for (unsigned int fps = 30; fps <= 120; fps += 90) {
+      for (unsigned int ready = 0; ready <= 1; ready++) {
+        unsigned int channel_count = mode == 3 ? 2 : 1;
+        for (unsigned int failure = 1; failure <= channel_count; failure++) {
+          sensor = fixture(ctrls);
+          active_sensor = &sensor;
+          sensor.enable = sensor.initialized_fingerprint.enable = mode;
+          sensor.initialized_fingerprint.fps = fps;
+          sensor.streaming = false;
+          sensor.stream_commit_epoch = 0;
+          sensor.ctrl_cache.firmware_ready = ready;
+          sensor.ctrl_cache.crop_enable = true;
+          sensor.ctrl_cache.dz = 0x0180;
+          sensor.ctrl_cache.ch0.dz_x = 100;
+          sensor.ctrl_cache.ch0.dz_y = 200;
+          sensor.ctrl_cache.ch1.dz_x = 300;
+          sensor.ctrl_cache.ch1.dz_y = 400;
+          crop_fail_at = failure;
+
+          CHECK(max9296_s_stream(&sd, 1) == -EIO);
+          CHECK(!sensor.streaming && sensor.stream_commit_epoch == 0);
+          CHECK(sensor.hardware_valid && sensor.initialized_epoch == 7);
+          CHECK(sensor.ctrl_cache.firmware_ready == (bool)ready);
+          CHECK(!sensor.ctrl_cache.exposure_reinit_required);
+          CHECK(crop_write_count == failure && init_count == 0);
+          CHECK(crop_hw_x[0] == (failure == 2 ? 100 : 0));
+          CHECK(crop_hw_x[1] == 0);
+
+          crop_fail_at = 0;
+          CHECK(max9296_s_stream(&sd, 1) == 0);
+          CHECK(sensor.streaming && sensor.stream_commit_epoch == 7);
+          CHECK(init_count == 0);
+          CHECK(crop_write_count == failure + channel_count);
+          CHECK(crop_hw_x[0] == ((mode & 1) ? 100 : 0));
+          CHECK(crop_hw_y[0] == ((mode & 1) ? 200 : 0));
+          CHECK(crop_hw_x[1] == ((mode & 2) ? 300 : 0));
+          CHECK(crop_hw_y[1] == ((mode & 2) ? 400 : 0));
+          CHECK(crop_hw_zoom[0] == ((mode & 1) ? 0x0180 : 0));
+          CHECK(crop_hw_zoom[1] == ((mode & 2) ? 0x0180 : 0));
+        }
+      }
+    }
+  }
 
   /* A successful explicit retry commits the requested exposure normally. */
   sensor = fixture(ctrls);

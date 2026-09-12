@@ -5364,8 +5364,8 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * worker repeats this under the same mutex to close post-STREAMON updates. */
     ret = max9296_apply_cached_crop(sensor);
     if (ret) {
-      sensor->hardware_valid = false;
-      sensor->initialized_epoch = 0;
+      /* Keep the completed initialization so a later STREAMON can retry the
+       * crop cache, including a partially applied dual-channel update. */
       max9296_drop_fsync_contract_locked(sensor);
       goto out;
     }
