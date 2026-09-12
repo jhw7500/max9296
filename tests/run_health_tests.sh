@@ -5,6 +5,8 @@ cd "$(dirname "$0")/.."
 bash tests/run_360p_policy_test.sh
 bash tests/run_exposure_policy_test.sh
 python3 tests/max9296_exposure_replay_binding_test.py
+python3 tests/max9296_exposure_failure_test.py
+python3 tests/max9296_cold_init_epoch_test.py
 python3 tests/max9296_ci_contract_test.py
 bash tests/run_pair_health_test.sh
 python3 tests/max9296_pair_health_source_test.py

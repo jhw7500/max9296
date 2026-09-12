@@ -151,6 +151,17 @@ seconds. If another camera instance keeps the board powered, a later identical
 prepare may reacquire a lease and reuse the still-current hardware; otherwise a
 real power transition invalidates it and initialization runs again.
 
+Cold initialization is attempted at most once per instance in a board-power
+epoch. The attempt is remembered even if a table write, firmware transfer, or
+subsequent configuration step fails: serializer addresses may already have
+changed. A later prepare/STREAMON that needs cold initialization in that same
+epoch returns `ESTALE` with `camera hard reset required`, before any table or
+firmware replay. A new process discarding channel exposure overrides can also
+require this reset; see `V4L2_CTRL_GUIDE.md`. Use `cam_hard_reset.sh -s -S` or
+`init_cam.sh` to perform the physical reset and reapply the JSON configuration.
+The driver does not forcibly cycle the peer's shared power in this error path.
+An unchanged, valid configuration remains reusable without cold initialization.
+
 Cancel an unused lease with:
 
 ```sh
