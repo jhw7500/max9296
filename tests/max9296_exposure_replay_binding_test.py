@@ -195,6 +195,7 @@ static bool max9296_hw_is_dual(const struct max9296_dev *sensor) {{
 static unsigned int exposure_write_count;
 static unsigned int exposure_write_addr;
 static unsigned int exposure_write_value;
+static int exposure_write_error;
 static char exposure_write_name[16];
 static unsigned int exposure_preflight_count;
 static unsigned int ae_write_count;
@@ -237,7 +238,7 @@ static int max9296_write_exposure(
   snprintf(exposure_write_name, sizeof(exposure_write_name), "%s", channel);
   event_log[event_count++] = 'E';
   event_log[event_count] = '\\0';
-  return 0;
+  return exposure_write_error;
 }}
 
 static int maxim_ops_i2c_write(
@@ -289,10 +290,8 @@ static int mcp4018_write_wiper(
   return 0;
 }}
 
-static void max9296_require_exposure_reinit_locked(
-    struct max9296_dev *sensor) {{
-  (void)sensor;
-}}
+#define max9296_require_exposure_reinit_locked(sensor) \\
+  ((sensor)->ctrl_cache.exposure_reinit_required = true)
 
 {apply_channel_controls}
 
@@ -502,6 +501,27 @@ int main(void) {{
     fprintf(stderr, "FAIL coverage=%u dual=%u want=432/216\\n",
             configurations, dual_configurations);
     failures++;
+  }}
+
+  /* An override replay error is returned without requesting initialization.
+   * An independently pending session reset must remain pending on failure. */
+  for (unsigned int pending_reset = 0U; pending_reset <= 1U; pending_reset++) {{
+    sensor.test_dual = 1U;
+    sensor.fps = 30U;
+    sensor.ctrl_cache.ch1.exposure = 5000U;
+    sensor.ctrl_cache.exposure_override_mask = MAX9296_EXPOSURE_OVERRIDE_CH1;
+    sensor.ctrl_cache.exposure_reinit_required = pending_reset;
+    exposure_write_error = -5;
+    event_count = ae_write_count = 0U;
+    if (max9296_apply_channel_controls(
+            &sensor, 0x12U, &sensor.ctrl_cache.ch1, 0x60U, 0x2fU, 0U,
+            "ch1", "dual") != -5 ||
+        sensor.ctrl_cache.exposure_reinit_required != pending_reset ||
+        sensor.ctrl_cache.ch1.exposure != 5000U) {{
+      fprintf(stderr, "FAIL exposure replay error changed reset/cache state "
+                      "pending_reset=%u\\n", pending_reset);
+      failures++;
+    }}
   }}
 
   printf("max9296 exposure replay binding: %u configurations (%u dual), "

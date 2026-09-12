@@ -164,8 +164,14 @@ baseline과 AE-auto 고FPS seed-skip 정책을 따른다. 같은 값이더라도
 보드 전원이 유지되는 warm restart에서도 이전 세션에 채널별 override가 있었다면, 드라이버는
 기존 dual/left/right topology가 같은지 먼저 검사한 뒤 AP1302 firmware를 다시 초기화한다.
 따라서 고FPS AE-auto의 seed-skip이 이전 프로세스의 서로 다른 `0x500c` 값을 보존하지 않는다.
-하드웨어가 준비되지 않은 동안 override를 해제했거나 노출 I2C 결과가 불확실한 경우도 다음
-prepare/STREAMON에서 같은 복구를 거친다.
+하드웨어가 준비되지 않은 동안 override를 해제한 경우도 다음 prepare/STREAMON에서
+같은 초기화를 거친다.
+
+런타임 노출 I2C 쓰기가 실패하면 오류를 반환하고 실패한 요청을 캐시에 반영하지 않는다.
+쓰기 실패만으로 스트림 권한을 취소하거나 펌웨어 재초기화를 요구하지 않는다. 여러 쓰기 중
+일부가 이미 적용됐을 수 있으므로 실제 영상·링크 이상은 기존 카메라 복구 흐름에서 처리한다.
+명시적인 노출 override의 STREAMON 재적용이 실패하면 시작을 실패로 반환하며, 이후
+STREAMON은 기존 하드웨어 설정에서 캐시 재적용을 다시 시도한다.
 
 싱글 모드에서는 현재 `enable`로 선택된 local 채널의 `exp_time_chX`만 global `0x3c`에 즉시
 쓴다. 비활성 채널의 값은 cache에만 남으며, 물리 reset 뒤 그 채널이 활성화된 구성에서 replay된다.

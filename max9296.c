@@ -2574,29 +2574,14 @@ max9296_require_exposure_reinit_locked(struct max9296_dev *sensor) {
 }
 
 static void
-max9296_revoke_exposure_stream_locked(struct max9296_dev *sensor) {
-  lockdep_assert_held(&sensor->lock);
-
-  max9296_require_exposure_reinit_locked(sensor);
-  sensor->ctrl_cache.firmware_ready = false;
-
-  /* Preserve initialized_fingerprint/epoch until the next topology guard. Only
-   * stream authority is unsafe immediately after an indeterminate I2C result. */
-  mutex_lock(&max9296_power_lock);
-  WRITE_ONCE(sensor->stream_commit_epoch, 0);
-  mutex_unlock(&max9296_power_lock);
-}
-
-static void
 max9296_invalidate_exposure_hardware_locked(struct max9296_dev *sensor) {
   lockdep_assert_held(&sensor->lock);
 
   max9296_require_exposure_reinit_locked(sensor);
   sensor->ctrl_cache.firmware_ready = false;
 
-  /* FSYNC and output authorization read these fields under the board lock.
-   * Invalidate under the same final-authority lock so no pulse or output write
-   * can race past a partially applied exposure transaction. */
+  /* Exposure lifetime changes invalidate firmware state. FSYNC and output
+   * authorization read these fields under the same board lock. */
   mutex_lock(&max9296_power_lock);
   WRITE_ONCE(sensor->hardware_valid, false);
   WRITE_ONCE(sensor->initialized_epoch, 0);
@@ -3148,12 +3133,9 @@ static int max9296_apply_channel_controls(struct max9296_dev *sensor,
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            ch_name, mode_name);
 
-  /* Keep the established best-effort behavior for AE/gain/tuning/LED. An
-   * explicit override or sticky reconciliation replay is different: if its
-   * I2C result is unknown, cache/G_CTRL cannot truthfully claim replay success
-   * and warm reuse must be blocked until a fresh firmware initialization. */
-  if (exposure_err)
-    max9296_require_exposure_reinit_locked(sensor);
+  /* Keep the established best-effort behavior for AE/gain/tuning/LED. Report
+   * an explicit exposure replay failure to the caller without requesting a
+   * firmware reload; recovery remains with the existing camera recovery flow. */
   return exposure_err;
 }
 
@@ -3300,20 +3282,22 @@ static int max9296_set_exposure_cluster(struct max9296_dev *sensor) {
     ret = max9296_write_exposure(sensor, AP1302_I2C_ADDR, "shared",
                                  desired.shared);
     if (ret)
-      goto exposure_hardware_failed;
+      return ret;
   }
   if (apply_hardware && write_ch0_hardware) {
     ret = max9296_write_exposure(sensor, ch0_addr, ch0_name, desired.ch0);
     if (ret)
-      goto exposure_hardware_failed;
+      return ret;
   }
   if (apply_hardware && write_ch1_hardware) {
     ret = max9296_write_exposure(sensor, ch1_addr, ch1_name, desired.ch1);
     if (ret)
-      goto exposure_hardware_failed;
+      return ret;
   }
 
-  /* s_ctrl may adjust every new value in a cluster. On success the V4L2 core
+  /* A failed write may have partially changed hardware. Return its error
+   * without committing the request or changing stream/reset authority.
+   * s_ctrl may adjust every new value in a cluster. On success the V4L2 core
    * copies these values into cur, keeping G_CTRL aligned with our cache and
    * with the writes above. */
   ctrls->exp_time->val = desired.shared;
@@ -3334,14 +3318,6 @@ static int max9296_set_exposure_cluster(struct max9296_dev *sensor) {
     max9296_mark_prepare_stale_locked(sensor);
 
   return 0;
-
-exposure_hardware_failed:
-  /* An I2C error does not prove whether the target accepted the write. This is
-   * especially important for a multi-control batch, where an earlier channel
-   * may already have changed. Refuse all warm reuse until firmware init has
-   * established a known pair again. */
-  max9296_revoke_exposure_stream_locked(sensor);
-  return ret;
 }
 
 static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
@@ -5376,7 +5352,8 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     }
     ret = max9296_apply_cached_controls(sensor);
     if (ret) {
-      max9296_invalidate_exposure_hardware_locked(sensor);
+      /* Abort this start without discarding the programmed topology. A later
+       * STREAMON can retry cached controls without reloading the firmware. */
       max9296_drop_fsync_contract_locked(sensor);
       goto out;
     }

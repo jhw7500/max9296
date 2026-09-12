@@ -357,30 +357,6 @@ def main() -> int:
     ):
         if token not in apply_hardware_expr:
             failures.append(f"live exposure hardware-state gate is incomplete: {token}")
-    if (
-        "exposure_hardware_failed:" not in exposure_cluster_set
-        or "max9296_revoke_exposure_stream_locked(sensor);"
-        not in exposure_cluster_set
-    ):
-        failures.append(
-            "partial live exposure writes can leave cached and hardware state divergent"
-        )
-    revoke_exposure = function(source, "max9296_revoke_exposure_stream_locked")
-    revoke_lock = revoke_exposure.find("mutex_lock(&max9296_power_lock);")
-    revoke_stream = revoke_exposure.find(
-        "WRITE_ONCE(sensor->stream_commit_epoch, 0);"
-    )
-    revoke_unlock = revoke_exposure.find("mutex_unlock(&max9296_power_lock);")
-    if not (0 <= revoke_lock < revoke_stream < revoke_unlock):
-        failures.append("failed live exposure write does not revoke FSYNC atomically")
-    for forbidden in (
-        "WRITE_ONCE(sensor->hardware_valid, false);",
-        "WRITE_ONCE(sensor->initialized_epoch, 0);",
-    ):
-        if forbidden in revoke_exposure:
-            failures.append(
-                "runtime exposure failure erases topology identity before its guard"
-            )
     invalidate_exposure = function(
         source, "max9296_invalidate_exposure_hardware_locked"
     )
@@ -390,7 +366,7 @@ def main() -> int:
     ):
         if token not in invalidate_exposure:
             failures.append(
-                f"failed exposure transaction does not invalidate hardware: {token}"
+                f"exposure lifetime change does not invalidate hardware: {token}"
             )
     power_lock = invalidate_exposure.find("mutex_lock(&max9296_power_lock);")
     hardware_clear = invalidate_exposure.find(
