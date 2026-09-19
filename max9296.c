@@ -95,6 +95,15 @@ static int debug;
 #define AP1302_REG_PREVIEW_SENSOR_MODE 0x2014
 #define AP1302_REG_PREVIEW_LINE_TIME 0x201c
 #define AP1302_REG_PREVIEW_MAX_FPS 0x2020
+/*
+ * Preview-context AE exposure ceiling (microseconds, 32-bit). The firmware
+ * seeds 33333. Board measurement (2026-09-18) shows the effective exposure is
+ * min(SENSOR_TOTAL_FRAME_TIME, this register) in every AE_CTRL mode, manual
+ * included -- the datasheet describes it as an auto-AE-only limit, which does
+ * not match this firmware. Raising it is the only way past the 33.3 ms wall.
+ */
+#define AP1302_REG_PREVIEW_AE_MAX_ET 0x2028
+#define MAX9296_PREVIEW_AE_MAX_ET_DEFAULT 33333
 #define AP1302_REG_TRIGGER_MAX_MISMATCH 0x6112
 #define AP1302_REG_DZ_TGT_FCT 0x1010
 #define AP1302_REG_DZ_STEP_FCT 0x1012
@@ -224,6 +233,9 @@ static int debug;
 #define V4L2_CID_DZ_Y_CH0 (V4L2_CID_USER_BASE + 0x1029)
 #define V4L2_CID_DZ_Y_CH1 (V4L2_CID_USER_BASE + 0x102a)
 #define V4L2_CID_CROP_ENABLE (V4L2_CID_USER_BASE + 0x102b)
+/* Investigation knob for AP1302_REG_PREVIEW_AE_MAX_ET. Device-scoped: a
+ * four-camera board needs the same write on both deserializer subdevs. */
+#define V4L2_CID_PREVIEW_AE_MAX_ET (V4L2_CID_USER_BASE + 0x102c)
 
 /*
  * MAX9295 serializer addresses (matches mcp4018_ctrl.sh channel table).
@@ -374,6 +386,7 @@ struct max9296_ctrls {
   struct v4l2_ctrl_handler handler;
   struct v4l2_ctrl *pixel_rate;
   struct v4l2_ctrl *exp_time;
+  struct v4l2_ctrl *preview_ae_max_et;
   struct v4l2_ctrl *dz;
   struct v4l2_ctrl *dz_x;
   struct v4l2_ctrl *dz_y;
@@ -454,6 +467,10 @@ struct max9296_ctrl_cache {
 
   /* Shared setting value, applied to both channels when set */
   int exposure; /* V4L2_CID_EXP_TIME - exp_time (u32) */
+  /* AE ceiling (AP1302 0x2028, us). Cached and replayed like every other
+   * runtime control so G_CTRL never describes a ceiling the hardware lost to a
+   * firmware reload. */
+  int preview_ae_max_et;
   u8 exposure_override_mask;
   bool exposure_reinit_required;
   u64 exposure_session_generation;
@@ -2524,6 +2541,51 @@ static int max9296_write_exposure(struct max9296_dev *sensor, u32 i2c_addr,
                              2, 4);
 }
 
+/*
+ * The exposure ceiling is not clamped -- this is an investigation knob and the
+ * operator owns the value. A request above the frame period is reported the
+ * way an over-period exposure write is, because that is where the pair starts
+ * losing frames rather than gaining light.
+ */
+static int max9296_write_preview_ae_max_et(struct max9296_dev *sensor,
+                                           u32 value) {
+  const struct max9296_mode_info *mode = sensor->current_mode;
+  u32 fps = READ_ONCE(sensor->fps);
+  u32 frame_period_us = max9296_exposure_frame_period_us(fps);
+
+  if (frame_period_us && value > frame_period_us)
+    printk(KERN_WARNING
+           "[%s:%d][%s:%d] preview_ae_max_et above frame period "
+           "mode=%ux%u(id=%d) fps=%u value=%u frame_period_us=%u "
+           "over_period=%u action=write",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+           mode ? mode->width : 0, mode ? mode->height : 0,
+           mode ? mode->id : -1, fps, value, frame_period_us,
+           value >= frame_period_us ? 1U : 0U);
+
+  return max9296_write_per_channel(sensor, AP1302_REG_PREVIEW_AE_MAX_ET, value,
+                                   2, 4);
+}
+
+/*
+ * Share the exposure cluster's hardware gate rather than the weaker general
+ * s_ctrl one: a stale epoch or a changed enable mask means the serializer map
+ * may have moved, and this register must not reach that bus.
+ */
+static int max9296_apply_preview_ae_max_et(struct max9296_dev *sensor,
+                                           u32 value) {
+  if (!max9296_exposure_hardware_can_apply(
+          sensor->ctrl_cache.exposure_session_resetting,
+          sensor->pending_mode_change, sensor->pending_fmt_change,
+          sensor->enable == sensor->initialized_fingerprint.enable,
+          sensor->power_count != 0, sensor->ctrl_cache.firmware_ready,
+          READ_ONCE(sensor->hardware_valid),
+          READ_ONCE(sensor->initialized_epoch), READ_ONCE(max9296_hw_epoch)))
+    return 0;
+
+  return max9296_write_preview_ae_max_et(sensor, value);
+}
+
 static int max9296_preflight_exposure(struct max9296_dev *sensor,
                                        const char *channel, u32 exposure) {
   const struct max9296_mode_info *mode = sensor->current_mode;
@@ -3169,6 +3231,18 @@ static int max9296_apply_cached_controls(struct max9296_dev *sensor) {
 
   /* Shared tuning values */
 
+  /* Restore the AE ceiling before the exposure seed that follows: the firmware
+   * reload preceding this replay reset 0x2028 to its firmware default, and a
+   * seed written under that stale ceiling would be silently clamped.
+   * Best-effort by design -- an investigation knob must not fail cold init. */
+  ret = max9296_write_preview_ae_max_et(
+      sensor, sensor->ctrl_cache.preview_ae_max_et);
+  if (ret)
+    printk(KERN_NOTICE
+           "[%s:%d][%s:%d] preview_ae_max_et replay failed value=%d ret=%d",
+           KEYWORD, i2c_nr, _FILE_, __LINE__,
+           sensor->ctrl_cache.preview_ae_max_et, ret);
+
   if (dual) {
     /* Dual-channel mode: apply each channel's settings separately.
      * MCP4018 per-port wiper is inlined via max9296_apply_channel_controls. */
@@ -3347,6 +3421,18 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
   /* v4l2_ctrl_cluster() delivers every exposure member through exp_time. */
   if (ctrl == sensor->ctrls.exp_time)
     return max9296_set_exposure_cluster(sensor);
+
+  /* Deliberately outside the exposure cluster: this is the ceiling, not an
+   * exposure, and it must not take part in the cluster's override bookkeeping
+   * or drag prepare invalidation along with it. It is still cached and replayed
+   * like every other runtime control -- the hardware gate below can reject the
+   * write, and a firmware reload resets 0x2028, so without a cache G_CTRL would
+   * report a ceiling the hardware does not have. Restart semantics are
+   * unchanged: the cache dies with the module, so edgeconf JSON still wins. */
+  if (ctrl->id == V4L2_CID_PREVIEW_AE_MAX_ET) {
+    sensor->ctrl_cache.preview_ae_max_et = ctrl->val;
+    return max9296_apply_preview_ae_max_et(sensor, ctrl->val);
+  }
 
   if (ctrl->id == V4L2_CID_CROP_ENABLE) {
     bool requested = !!ctrl->val;
@@ -3744,6 +3830,22 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
         .flags = V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
     };
     ctrls->exp_time = v4l2_ctrl_new_custom(hdl, &cfg_exp_time, NULL);
+  }
+  /* preview_ae_max_et: AP1302 preview AE exposure ceiling (0x2028, us) */
+  {
+    static const struct v4l2_ctrl_config cfg_preview_ae_max_et = {
+        .ops = &max9296_ctrl_ops,
+        .id = V4L2_CID_PREVIEW_AE_MAX_ET,
+        .type = V4L2_CTRL_TYPE_INTEGER,
+        .name = "preview_ae_max_et",
+        .min = 0,
+        .max = INT_MAX,
+        .def = MAX9296_PREVIEW_AE_MAX_ET_DEFAULT,
+        .step = 1,
+        .flags = V4L2_CTRL_FLAG_EXECUTE_ON_WRITE,
+    };
+    ctrls->preview_ae_max_et =
+        v4l2_ctrl_new_custom(hdl, &cfg_preview_ae_max_et, NULL);
   }
   {
     static const struct v4l2_ctrl_config cfg_crop_enable = {
@@ -6994,6 +7096,10 @@ static int max9296_probe(struct i2c_client *client) {
 
   sensor->ctrl_cache.exposure =
       sensor->ctrls.exp_time ? sensor->ctrls.exp_time->val : 10000;
+  sensor->ctrl_cache.preview_ae_max_et =
+      sensor->ctrls.preview_ae_max_et
+          ? sensor->ctrls.preview_ae_max_et->val
+          : MAX9296_PREVIEW_AE_MAX_ET_DEFAULT;
   sensor->ctrl_cache.crop_enable =
       sensor->ctrls.crop_enable ? !!sensor->ctrls.crop_enable->val : false;
   sensor->ctrl_cache.dz =
