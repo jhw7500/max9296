@@ -235,6 +235,7 @@ v4l2-ctl -d /dev/v4l-subdev2 -c hflip_ch0=1,vflip_ch0=1   # ch0 180°
 | [`docs/prepare-board-gate-v1.md`](docs/prepare-board-gate-v1.md) | prepare 보드 게이트 G1~G4 실측 (전부 통과) |
 | [`docs/360p-readout-120fps-validation.md`](docs/360p-readout-120fps-validation.md) | 640x360 readout / crop / 120 FPS 보드 검증 |
 | [`docs/fps-limit-analysis.md`](docs/fps-limit-analysis.md) | FHD 60fps가 안 되는 이유 (실측 분석) |
+| [`docs/exposure-limits.md`](docs/exposure-limits.md) | 노출 시간 상·하한 실측과 측정법 (해상도·fps별, `0x2028` 조절 포함) |
 | `docs/imx8mp-evk.dts`, `docs/imx8mp.dtsi` | 참고용 디바이스 트리 |
 | [`dw100-spike/REPORT.md`](dw100-spike/REPORT.md) | i.MX8MP Dewarp(dw100) 백포팅 타당성 스파이크 — 결론: 타당 |
 | `artifacts/` | 보드 자격 시험의 검토된 증적 (원시 로그·백업은 제외 — 위 §알려진 제약) |

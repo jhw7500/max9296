@@ -74,6 +74,7 @@ CH1 컨트롤은 `_ch0` → `_ch1`로 동일 구조.
 | `hue` | 0~359 | 0 | Hue |
 | `power_line_frequency` | 0~3 | 1(50Hz) | 전원 주파수 필터 |
 | `crop_enable` | 0~1 | 0 | hardware digital crop 적용 여부 |
+| `preview_ae_max_et` | 0~INT_MAX | 33333 | AE 노출 상한 (µs, AP1302 `0x2028`) → [`exposure-limits.md`](exposure-limits.md) |
 
 ### 2.4 MCP4018 디지털 가변저항
 
