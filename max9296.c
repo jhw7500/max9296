@@ -2556,10 +2556,12 @@ static int max9296_write_preview_ae_max_et(struct max9296_dev *sensor,
   if (frame_period_us && value > frame_period_us)
     printk(KERN_WARNING
            "[%s:%d][%s:%d] preview_ae_max_et above frame period "
-           "mode=%ux%u(id=%d) fps=%u value=%u frame_period_us=%u action=write",
+           "mode=%ux%u(id=%d) fps=%u value=%u frame_period_us=%u "
+           "over_period=%u action=write",
            KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
            mode ? mode->width : 0, mode ? mode->height : 0,
-           mode ? mode->id : -1, fps, value, frame_period_us);
+           mode ? mode->id : -1, fps, value, frame_period_us,
+           value >= frame_period_us ? 1U : 0U);
 
   return max9296_write_per_channel(sensor, AP1302_REG_PREVIEW_AE_MAX_ET, value,
                                    2, 4);
