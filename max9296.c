@@ -467,6 +467,10 @@ struct max9296_ctrl_cache {
 
   /* Shared setting value, applied to both channels when set */
   int exposure; /* V4L2_CID_EXP_TIME - exp_time (u32) */
+  /* AE ceiling (AP1302 0x2028, us). Cached and replayed like every other
+   * runtime control so G_CTRL never describes a ceiling the hardware lost to a
+   * firmware reload. */
+  int preview_ae_max_et;
   u8 exposure_override_mask;
   bool exposure_reinit_required;
   u64 exposure_session_generation;
@@ -3225,6 +3229,18 @@ static int max9296_apply_cached_controls(struct max9296_dev *sensor) {
 
   /* Shared tuning values */
 
+  /* Restore the AE ceiling before the exposure seed that follows: the firmware
+   * reload preceding this replay reset 0x2028 to its firmware default, and a
+   * seed written under that stale ceiling would be silently clamped.
+   * Best-effort by design -- an investigation knob must not fail cold init. */
+  ret = max9296_write_preview_ae_max_et(
+      sensor, sensor->ctrl_cache.preview_ae_max_et);
+  if (ret)
+    printk(KERN_NOTICE
+           "[%s:%d][%s:%d] preview_ae_max_et replay failed value=%d ret=%d",
+           KEYWORD, i2c_nr, _FILE_, __LINE__,
+           sensor->ctrl_cache.preview_ae_max_et, ret);
+
   if (dual) {
     /* Dual-channel mode: apply each channel's settings separately.
      * MCP4018 per-port wiper is inlined via max9296_apply_channel_controls. */
@@ -3406,11 +3422,15 @@ static int max9296_s_ctrl(struct v4l2_ctrl *ctrl) {
 
   /* Deliberately outside the exposure cluster: this is the ceiling, not an
    * exposure, and it must not take part in the cluster's override bookkeeping
-   * or drag prepare invalidation along with it. Not cached or replayed either
-   * -- edgeconf JSON is the source of truth across restarts, so a runtime
-   * write lasts for this session only, like every other runtime control. */
-  if (ctrl->id == V4L2_CID_PREVIEW_AE_MAX_ET)
+   * or drag prepare invalidation along with it. It is still cached and replayed
+   * like every other runtime control -- the hardware gate below can reject the
+   * write, and a firmware reload resets 0x2028, so without a cache G_CTRL would
+   * report a ceiling the hardware does not have. Restart semantics are
+   * unchanged: the cache dies with the module, so edgeconf JSON still wins. */
+  if (ctrl->id == V4L2_CID_PREVIEW_AE_MAX_ET) {
+    sensor->ctrl_cache.preview_ae_max_et = ctrl->val;
     return max9296_apply_preview_ae_max_et(sensor, ctrl->val);
+  }
 
   if (ctrl->id == V4L2_CID_CROP_ENABLE) {
     bool requested = !!ctrl->val;
@@ -7074,6 +7094,10 @@ static int max9296_probe(struct i2c_client *client) {
 
   sensor->ctrl_cache.exposure =
       sensor->ctrls.exp_time ? sensor->ctrls.exp_time->val : 10000;
+  sensor->ctrl_cache.preview_ae_max_et =
+      sensor->ctrls.preview_ae_max_et
+          ? sensor->ctrls.preview_ae_max_et->val
+          : MAX9296_PREVIEW_AE_MAX_ET_DEFAULT;
   sensor->ctrl_cache.crop_enable =
       sensor->ctrls.crop_enable ? !!sensor->ctrls.crop_enable->val : false;
   sensor->ctrl_cache.dz =
