@@ -17,12 +17,15 @@
  * 720p runs an 11.87 us line time while 1080p runs a 30 fps-class 26.27 us
  * one.  (Re-measured 2026-09-21 from AR0234 LINE_LENGTH_PCK / 90 MHz: 720p =
  * 1068 -> 11.867 us, 1080p = 2364 -> 26.267 us.  This comment previously said
- * 14.80 us for 720p.  That figure is not wrong, but it is not the current
- * default either; which condition produced it is unconfirmed.  Forcing
- * PREVIEW_LINE_TIME (R0x201C) to 14.8 us does reproduce LINE_LENGTH_PCK 1332
- * exactly, so it is a sufficient cause, not a proven one; a preview-resolution
- * difference is ruled out (an 11-point sweep contains no 1332).  The driver
- * never writes R0x201C and
+ * 14.80 us for 720p.  That figure is not wrong; it is the value with the
+ * 1.25x digital crop applied (dz=125), which shrinks the sensor readout window
+ * to 1536x864 so the AP1302 stretches the line to keep the ~12.8 ms frame
+ * readout, giving LINE_LENGTH_PCK 1332.  Reproduced register-for-register on
+ * this driver and cross-checked against a board running a pre-1108e57 driver
+ * that applies the crop unconditionally.  Crop is gated behind crop_enable
+ * (default off) since 1108e57, so a default build reads 1920x1080 and gets
+ * 11.867 us.  Note a cropped build's exposure floor rises to 29.6 us.
+ * The driver never writes R0x201C and
  * tests/max9296_360p_zoom_exposure_test.py pins it automatic, so a
  * qualification build always sees 11.867 us -- faster than 14.80, so the 60
  * fps ceiling below holds with more margin, not less.  See
