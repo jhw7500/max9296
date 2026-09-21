@@ -14,8 +14,13 @@
 #endif
 
 /* The AP1302 firmware uses a different sensor line time per resolution mode:
- * 720p runs a 60 fps-class 14.80 us line time while 1080p runs a 30 fps-class
- * 26.27 us one.  Board measurement recorded 1280x720 delivering 54.0-55.5 fps
+ * 720p runs an 11.87 us line time while 1080p runs a 30 fps-class 26.27 us
+ * one.  (Re-measured 2026-09-21 from AR0234 LINE_LENGTH_PCK / 90 MHz: 720p =
+ * 1068 -> 11.867 us, 1080p = 2364 -> 26.267 us.  This comment previously said
+ * 14.80 us for 720p, quoting a stale row in docs/fps-limit-analysis.md; the
+ * real value is faster, so the 60 fps ceiling below holds with more margin,
+ * not less.  See docs/exposure-limits.md section 2.3.)
+ * Board measurement recorded 1280x720 delivering 54.0-55.5 fps
  * at a 60 fps request with no firmware, driver or DTS change, so the previous
  * 30 fps ceiling was a driver-side limit rather than a hardware one.  1080p is
  * different and keeps 30: its 26.27 us line time cannot read a frame inside a
