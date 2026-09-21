@@ -296,7 +296,8 @@ AP1302 데이터시트는 `PREVIEW_AE_MAX_ET` 를 "AE 알고리즘이 결정한 
 
 ```bash
 # 0) 보드 점유 (공유 자원)
-set -a; . ~/.config/jhw-control/control.env; set +a
+#    launcher 가 설정을 스스로 읽는다. control.env 를 소싱하지 말 것 —
+#    `set -a` 는 자격증명을 이후 모든 자식 프로세스 환경으로 전파한다.
 "$HOME/.local/bin/jhw-control-host" board with pim --mode exclusive --for 30m \
     --session <id> --purpose "노출 상하한 측정" -- <측정 스크립트>
 
@@ -314,14 +315,30 @@ v4l2-ctl -d /dev/v4l-subdev2 -c exp_time=20000
 
 모드를 직접 협상하려면(gstApp 없이):
 
+이 블록은 공유 자원의 상태를 네 군데 바꾼다(서비스 정지 · 앱 종료 · 하드 리셋 · `prepare` 전이).
+**복구까지가 한 절차다** — 중간에 그만두면 다음 점유자가 망가진 보드를 물려받는다.
+
 ```bash
+# 전환
 systemctl stop cam-operate.service; pkill -9 -x gstApp
 bash /root/camtest/cam_hard_reset.sh -q
 printf '1 %s 1280 360 30 3\n' "$(date +%s%N)" > /sys/bus/i2c/devices/2-0048/prepare
 v4l2-ctl -d /dev/video4 --set-fmt-video=width=1280,height=360,pixelformat=UYVY
-setsid nohup v4l2-ctl -d /dev/video4 --stream-mmap --stream-count=100000 \
+# stream-count 는 점유 시간 안에 끝나도록 잡는다. 30fps x 600s = 18,000.
+setsid nohup v4l2-ctl -d /dev/video4 --stream-mmap --stream-count=18000 \
     --stream-to=/dev/null </dev/null >/tmp/stream.log 2>&1 &
+echo $! > /tmp/stream.pid
+
+# 복구 (측정이 끝나면, 또는 중단하더라도 반드시)
+kill "$(cat /tmp/stream.pid)" 2>/dev/null; sleep 1
+pkill -9 -x v4l2-ctl                      # -f 금지 (§4.3)
+bash /root/camtest/cam_hard_reset.sh -q
+systemctl start cam-operate.service
+cat /sys/bus/i2c/devices/2-0048/prepare    # CONSUMED 로 돌아왔는지 확인
 ```
+
+`setsid nohup` 으로 떼어낸 스트리머는 ssh 종료로도 점유 해제로도 죽지 않는다. PID 를 남겨
+두고 직접 끝내지 않으면 점유 시간을 넘겨 계속 돈다.
 
 `prepare` 쓰기 형식은 `1 <generation> <width> <height> <fps> <enable>` 이다
 (→ [`parallel-prepare-v1.md`](parallel-prepare-v1.md)).
