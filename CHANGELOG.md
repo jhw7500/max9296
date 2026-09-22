@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 변경 — `crop_enable=false` 가 줌 레지스터를 기본값으로 되쓴다 (동작 변경)
+
+- **이전 동작**: `crop_enable` 이 false 면 `max9296_apply_cached_crop()` 이 조기
+  return 해 AP1302 `0x1010`/`0x1012`/`0x118c`/`0x118e` 를 **전혀 건드리지 않았다.**
+  "false = host write 생략" 이 2.9 에서 정한 원칙이었다.
+- **문제**: 되돌릴 주체가 없어 런타임에 올린 줌이 살아남는다. `dz=125` 를 건 뒤
+  `crop_enable=0` + `dz=100` 으로 내리고 gstApp 을 재기동해도 `0x1010` 이 `0x0140`
+  으로 남고, 그 상태에서 V4L2 는 `crop_enable: 0 / dz: 100` 을 보고한다. 다른
+  컨트롤은 캐시에서 재적용되는데 줌만 예외라 설정값과 하드웨어가 갈린다.
+  보드 하드 리셋(`cam_hard_reset.sh`)과 서비스 재시작으로도 지워지지 않았다
+  (2026-09-21 pim-camera-v016 실측).
+- **새 동작**: false 여도 줌 튜플을 쓴다. 단 사용자 캐시가 아니라 **모드 테이블에
+  선언된 해상도별 기본값**을 쓴다. `ctrl_cache` 는 손대지 않으므로 다시 true 로
+  올리면 사용자 값이 그대로 복원된다.
+- **기본값 선언 위치**: `struct max9296_mode_info` 에 `default_dz` /
+  `default_dz_x` / `default_dz_y` 를 추가하고 10개 모드 엔트리 전부에 넣었다.
+  **현재 값은 전 모드 동일** — `MAX9296_DZ_DEFAULT`(100 = 1.00배)와
+  `MAX9296_DZ_CENTER_DEFAULT`(0x8000 = 중앙). 해상도별로 따로 둔 이유는 벤더
+  펌웨어가 실제로 720p 에만 1.25배를 넣었던 전례(`c555c59`)가 있어서, 다시 갈릴 때
+  적용 경로를 건드리지 않고 테이블만 고치면 되게 하려는 것이다.
+- **화각 영향 없음**: 기본값이 1.00배이므로 크롭을 쓰지 않는 운영 구성에서 보이는
+  그림은 그대로다. 달라지는 것은 크롭을 켰다 끈 뒤의 복구뿐이다.
+- 관찰 가능한 차이: `crop_enable=0` 에서도 채널당 i2c write 4회가 발생하고
+  커널 로그에 `crop apply enable=0 ...` 이 남는다(이전에는 로그도 없었다).
+- **실기 A/B 검증 (2026-09-21, pim-camera-v016 192.168.214.4)**: 같은 보드에서 모듈만
+  바꿔 같은 스크립트를 돌렸다. `crop_enable` 은 전 구간 0 으로 고정해 fingerprint 를
+  바꾸지 않았고(리셋·펌웨어 재적재 없음 — dmesg firmware 언급 0줄), `0x1010` 을
+  out-of-band i2c 로 `0x0140` 주입한 뒤 warm 재진입시켰다.
+
+  | 모듈 | srcversion | warm 재진입 후 `0x1010` | `0x00d8` | `crop apply` 로그 |
+  |---|---|---|---|---|
+  | HEAD `b17e7c2` | `26C05C5B…` | **`0x0140` 유지** | 14.8000 us | 없음 (건너뜀) |
+  | 변경 적용 | `55DAE1C4…` | **`0x0100` 복귀** | 11.8667 us | `crop apply enable=0 … dz=100` |
+
+  두 경우 모두 V4L2 는 `crop_enable: 0 / dz: 100` 을 보고했다 — 즉 HEAD 에서는 보고값과
+  하드웨어가 갈렸고 변경 후에는 일치한다. 크롭 ON 경로도 같이 확인했다: `dz=125` 에서
+  `0x0140` / 14.8000 us 로 정상 적용되고 되돌리면 `0x0100` / 11.8667 us 로 복귀한다.
+  위 조건은 chip 재초기화가 없음을 확인한 상태에서 쟀다 — 같은 창에서 probe(`shared Init`)
+  0건, 펌웨어 재적재(`loaded v4l-ap1302-…`) 0건, `max9296_reset` 0건.
+- **왜 기존 동작이 우연에 기대는가**: 앱 재기동 뒤 `0x1010` 이 깨끗해 보이는 경우가 있는데
+  그것은 드라이버가 되돌려서가 아니라 **복구 계획이 `camera_hard_reset` 으로 승격**돼
+  디바이스 rebind → probe → `max9296_reset` → AP1302 펌웨어 재적재를 거치기 때문이다
+  (`cam_operate_control` 로그 `plan: action=camera_hard_reset reason=dirty=true`). 승격은
+  직전 실행이 상태를 dirty 로 남겼을 때만 일어나므로 **보장되지 않는다.** 승격 없이
+  gstApp 만 다시 뜨면(`cam_action_gstapp_restart` 는 `rmmod`/`modprobe`/`unbind` 를 하지
+  않는다) 이전 줌이 그대로 남는다. 이 변경은 그 우연을 제거해 드라이버가 스스로 기본값을
+  보장하게 한다.
+- **범위 한계**: dual 2560x720 에서만 쟀다. single 토폴로지는 컴파일 테스트로만 덮었고
+  실기 확인은 하지 않았다. `0x118c`/`0x118e` 의 펌웨어 power-on 기본값이 `0x0080`(중앙)
+  이라는 전제는 측정하지 않았다 — `dz=1.00` 에서는 중심이 화면에 영향을 주지 않으므로
+  무해하다고 보지만 논리이지 실측이 아니다.
+- **리뷰 반영 (tribunal 라운드 1, MEDIUM 1 + LOW 1)**:
+  - 시드를 `sensor->current_mode` 가 아니라 `max9296_resolve_prepare_mode_locked()`
+    에서 받는다. 우측 단일채널 테이블(`_R`)은 좌측과 **공개 모드 id 를 공유**하고
+    `current_mode` 로 발행되기 전에 좌측 쌍둥이로 정규화되므로, `current_mode` 를
+    읽으면 single-right(`enable==0x02`)에서 **좌측 시드가 조용히 적용**되고 `_R`
+    엔트리의 시드는 영원히 도달 불가였다. 오늘은 열 엔트리 값이 같아 오동작이
+    없지만, 값을 분기시키는 순간 효과도 진단도 없이 무시되는 함정이었다.
+  - 모드 테이블 검사를 토큰 개수에서 **엔트리별 구조 검사**로 바꿨다. 기존 검사는
+    `MAX9296_DZ_DEFAULT` 출현 횟수를 세어, 한 모드의 시드를 분기시키면 실패했다 —
+    필드를 둔 목적(테이블만 고치는 분기)을 테스트가 스스로 막고 있었다. 이제 각
+    엔트리가 세 값을 선언하고 값이 ABI 범위 안이면 통과하며, 빠지면 실패한다.
+  - harness 에 **우측 시드 반영 케이스**를 추가했다(+8 checks). 해석기가 좌측과 다른
+    `_R` 테이블을 돌려줄 때 하드웨어가 그 값을 받는지 본다. 수정을 되돌리면 실패한다.
+- **리뷰 반영 2차 (tribunal 새 라운드 1, MEDIUM 1 + LOW 2 + refuted 1)**:
+  - **문서 여섯 곳의 `crop_enable=false → 쓰기 없음` 규범을 정정했다.** `RELEASE_NOTES.md`
+    (같은 미릴리스 창에서 "원칙 유지" 라고 선언하고 있었다), `V4L2_CTRL_GUIDE.md`(3곳),
+    `docs/parallel-prepare-v1.md`, `docs/360p-readout-120fps-validation.md`,
+    `docs/exposure-limits.md`(§2.3 본문과 §4.3 운영 복구 절차). 특히 운영 런북은
+    수동 `i2cwrite 0x1010 0x0100` 을 유일한 복구로 안내하고 있어, 그대로 두면 현재
+    드라이버에서 운영자가 틀린 상태를 예상하게 된다. 구버전 보드용 절차로 범위를 좁혔다.
+  - 시드 출처를 **published 하드웨어 신원 우선**으로 바꿨다. `resolve_prepare_mode_locked()`
+    는 요청값 `sensor->enable` 을 보는데 sysfs 로 재프로그램 없이 움직일 수 있고, 주소는
+    프로그램된 `last_mode` 에서 온다. 다른 write 경로가 모두 쓰는 게이트가 crop 에만
+    없어, 없앤 silent-wrong-seed 가 다른 입력으로 재진입했다. 이제
+    `hardware_valid` 면 `initialized_fingerprint.mode`, 아니면(cold prepare) resolver 다.
+  - 시드에 **ABI 범위 검증**을 붙였다. 사용자 튜플은 `preflight_prepare_locked` 가
+    범위 밖이면 `-EINVAL` 인데, 시드는 그 경로를 타지 않아 truncate 된 채 기록될 수
+    있었다. 범위 밖이면 기본값으로 떨어지고 경고를 남긴다.
+  - CHANGELOG 의 "구 코드에서 10건 실패" 를 **19건**으로 정정했다(리뷰어가 반증).
+- 테스트: `tests/max9296_360p_zoom_exposure_test.py` 의 "disabled crop is not gated
+  before every AP1302 write" 계약을 새 계약으로 교체했고,
+  `tests/max9296_exposure_failure_test.py` 에 `crop_enable=false` 가 실제로 기본값을
+  내려쓰는지 컴파일해서 확인하는 케이스를 3개 토폴로지(single-left/single-right/dual)에
+  추가했다(357 → 395 checks). 구 코드에 새 테스트를 걸면 19건이 실패한다.
+
 ### 기록 정정 — 2.9 의 720p 화각 변경 (2026-09-21 확인, 동작 변경 없음)
 
 - **2.9 이전에는 720p 모드에 1.25배 디지털 줌이 하드코딩돼 있었다.** 최초 벤더 소스

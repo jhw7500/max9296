@@ -16,6 +16,10 @@ def build_harness(source: str) -> str:
     names = [
         "max9296_require_exposure_reinit_locked",
         "max9296_invalidate_exposure_hardware_locked",
+        "max9296_zoom_seed_mode_locked",
+        "max9296_zoom_seed_factor",
+        "max9296_zoom_seed_center",
+        "max9296_zoom_seed_from_mode",
         "max9296_apply_cached_crop",
         "max9296_set_exposure_cluster",
         "max9296_stream_commit_locked",
@@ -37,8 +41,13 @@ typedef uint64_t u64;
 struct v4l2_ctrl { int val; bool is_new; };
 struct v4l2_subdev { int unused; };
 struct max9296_ctrls { struct v4l2_ctrl *exp_time, *exposure_ch0, *exposure_ch1; };
-struct max9296_hw_fingerprint { unsigned int enable, fps; };
+struct max9296_mode_info;
+struct max9296_hw_fingerprint {
+  unsigned int enable, fps;
+  const struct max9296_mode_info *mode;
+};
 struct max9296_channel_ctrl { int exposure, dz_x, dz_y; };
+struct max9296_mode_info { u32 default_dz, default_dz_x, default_dz_y; };
 struct max9296_ctrl_cache {
   int exposure, dz;
   struct max9296_channel_ctrl ch0, ch1;
@@ -52,6 +61,7 @@ struct max9296_dev {
   struct max9296_ctrls ctrls;
   struct max9296_ctrl_cache ctrl_cache;
   struct max9296_hw_fingerprint initialized_fingerprint;
+  const struct max9296_mode_info *current_mode;
   struct test_client *i2c_client;
   int lock, prepare_request_lock, prepare_state, worker_errno, power_count;
   unsigned int enable;
@@ -66,6 +76,12 @@ struct max9296_dev {
 #define AP1302_I2C_ADDR 0x3cU
 #define AP1302_CH0_I2C_ADDR 0x11U
 #define AP1302_CH1_I2C_ADDR 0x12U
+#define MAX9296_DZ_DEFAULT 100
+#define MAX9296_DZ_CENTER_DEFAULT 0x8000
+#define MAX9296_DZ_MIN 100
+#define MAX9296_DZ_MAX 300
+#define _FILE_ "harness"
+#define KERN_WARNING ""
 #define MAX9296_PREP_PREPARING 1
 #define MAX9296_STATE_IDLE 0
 #define READ_ONCE(x) (x)
@@ -74,7 +90,19 @@ struct max9296_dev {
 #define mutex_lock(x) ((void)(x))
 #define mutex_unlock(x) ((void)(x))
 #define mutex_trylock(x) ((void)(x), true)
-#define printk(...) ((void)0)
+/* Consume the arguments so production logging keeps its parameters used under
+ * -Werror=unused-parameter; the harness still prints nothing. */
+static inline void harness_log_sink(const char *fmt, ...) { (void)fmt; }
+#define printk harness_log_sink
+#define KEYWORD "harness"
+/* Kernel log-level prefixes concatenate with the format string. */
+#define KERN_EMERG ""
+#define KERN_ALERT ""
+#define KERN_CRIT ""
+#define KERN_ERR ""
+#define KERN_NOTICE ""
+#define KERN_INFO ""
+#define KERN_DEBUG ""
 
 static int max9296_power_lock, debug;
 static u64 max9296_hw_epoch = 7;
@@ -86,6 +114,15 @@ static int replay_error;
 
 static struct max9296_dev *to_max9296_dev(struct v4l2_subdev *sd) {
   (void)sd; return active_sensor;
+}
+/* The production apply path resolves the exact table being programmed, which
+ * current_mode alone cannot name for a single-right topology. Expose it as a
+ * controllable pointer so a test can diverge the right-hand seed. */
+static const struct max9296_mode_info *resolved_mode;
+static const struct max9296_mode_info *max9296_resolve_prepare_mode_locked(
+    const struct max9296_dev *sensor) {
+  (void)sensor;
+  return resolved_mode;
 }
 static bool max9296_hw_is_dual(const struct max9296_dev *sensor) {
   return sensor->initialized_fingerprint.enable == 3U;
@@ -184,6 +221,7 @@ static struct max9296_dev fixture(struct v4l2_ctrl *ctrls) {
   ctrls[2] = (struct v4l2_ctrl){.val = 7000};
   write_count = fail_at = init_count = 0;
   crop_write_count = crop_fail_at = 0;
+  resolved_mode = NULL;
   for (unsigned int ch = 0; ch < 2; ch++)
     crop_hw_x[ch] = crop_hw_y[ch] = crop_hw_zoom[ch] = 0;
   replay_error = 0;
@@ -283,6 +321,130 @@ int main(void) {
         }
       }
     }
+  }
+
+  /* crop_enable=false must seed the per-mode default instead of leaving the
+   * previous owner's zoom on the AP1302.  This path used to return early, so a
+   * runtime dz/dz_x/dz_y outlived crop_enable=0 and a gstApp restart. */
+  {
+    static const struct max9296_mode_info seed_mode = {
+        MAX9296_DZ_DEFAULT, MAX9296_DZ_CENTER_DEFAULT, MAX9296_DZ_CENTER_DEFAULT};
+
+    for (unsigned int mode = 1; mode <= 3; mode++) {
+      unsigned int channel_count = mode == 3 ? 2 : 1;
+
+      sensor = fixture(ctrls);
+      active_sensor = &sensor;
+      sensor.enable = sensor.initialized_fingerprint.enable = mode;
+      sensor.current_mode = &seed_mode;
+      resolved_mode = &seed_mode;
+      sensor.initialized_fingerprint.mode = &seed_mode;
+      sensor.streaming = false;
+      sensor.stream_commit_epoch = 0;
+      sensor.ctrl_cache.crop_enable = false;
+      /* A stale user tuple that must not reach the hardware. */
+      sensor.ctrl_cache.dz = 0x0180;
+      sensor.ctrl_cache.ch0.dz_x = 100;
+      sensor.ctrl_cache.ch0.dz_y = 200;
+      sensor.ctrl_cache.ch1.dz_x = 300;
+      sensor.ctrl_cache.ch1.dz_y = 400;
+
+      CHECK(max9296_s_stream(&sd, 1) == 0);
+      CHECK(crop_write_count == channel_count);
+      CHECK(crop_hw_zoom[0] == ((mode & 1) ? MAX9296_DZ_DEFAULT : 0));
+      CHECK(crop_hw_zoom[1] == ((mode & 2) ? MAX9296_DZ_DEFAULT : 0));
+      CHECK(crop_hw_x[0] == ((mode & 1) ? MAX9296_DZ_CENTER_DEFAULT : 0));
+      CHECK(crop_hw_y[0] == ((mode & 1) ? MAX9296_DZ_CENTER_DEFAULT : 0));
+      CHECK(crop_hw_x[1] == ((mode & 2) ? MAX9296_DZ_CENTER_DEFAULT : 0));
+      CHECK(crop_hw_y[1] == ((mode & 2) ? MAX9296_DZ_CENTER_DEFAULT : 0));
+      /* The cache itself is untouched so re-enabling restores the user tuple. */
+      CHECK(sensor.ctrl_cache.dz == 0x0180);
+      CHECK(sensor.ctrl_cache.ch0.dz_x == 100 && sensor.ctrl_cache.ch1.dz_y == 400);
+    }
+  }
+
+  /* The seed must come from the exact table being programmed. A single-right
+   * topology programs a _R table whose public mode id equals its left-hand
+   * twin's, so seeding from current_mode would silently apply the left-hand
+   * values and make every _R seed unreachable. */
+  {
+    static const struct max9296_mode_info left_mode = {
+        MAX9296_DZ_DEFAULT, MAX9296_DZ_CENTER_DEFAULT, MAX9296_DZ_CENTER_DEFAULT};
+    static const struct max9296_mode_info right_mode = {125, 0x4000, 0x2000};
+
+    sensor = fixture(ctrls);
+    active_sensor = &sensor;
+    sensor.enable = sensor.initialized_fingerprint.enable = 2;
+    sensor.current_mode = &left_mode;   /* public selection: left-hand twin */
+    resolved_mode = &right_mode;        /* exact table actually programmed */
+    sensor.initialized_fingerprint.mode = &right_mode;
+    sensor.streaming = false;
+    sensor.stream_commit_epoch = 0;
+    sensor.ctrl_cache.crop_enable = false;
+
+    CHECK(max9296_s_stream(&sd, 1) == 0);
+    CHECK(crop_write_count == 1);
+    /* enable==2 routes the single AP1302 write to the ch1 slot. */
+    CHECK(crop_hw_zoom[1] == 125);
+    CHECK(crop_hw_x[1] == 0x4000);
+    CHECK(crop_hw_y[1] == 0x2000);
+    /* The left-hand twin must not have supplied any of it. */
+    CHECK(crop_hw_zoom[1] != MAX9296_DZ_DEFAULT);
+    CHECK(crop_hw_x[1] != MAX9296_DZ_CENTER_DEFAULT);
+    CHECK(crop_hw_zoom[0] == 0 && crop_hw_x[0] == 0 && crop_hw_y[0] == 0);
+  }
+
+  /* sensor->enable is the requested value; sysfs can move it without
+   * reprogramming the hardware, and the resolver reads it. Once the hardware
+   * identity is published it must win, or the wrong seed reaches the AP1302
+   * with no diagnostic. */
+  {
+    static const struct max9296_mode_info programmed = {200, 0x1000, 0x1100};
+    static const struct max9296_mode_info requested = {125, 0x4000, 0x2000};
+
+    sensor = fixture(ctrls);
+    active_sensor = &sensor;
+    sensor.enable = sensor.initialized_fingerprint.enable = 1;
+    sensor.current_mode = &requested;
+    resolved_mode = &requested;                    /* what the resolver would pick */
+    sensor.initialized_fingerprint.mode = &programmed; /* what is really programmed */
+    sensor.hardware_valid = true;
+    sensor.streaming = false;
+    sensor.stream_commit_epoch = 0;
+    sensor.ctrl_cache.crop_enable = false;
+
+    CHECK(max9296_s_stream(&sd, 1) == 0);
+    CHECK(crop_write_count == 1);
+    CHECK(crop_hw_zoom[0] == 200);
+    CHECK(crop_hw_x[0] == 0x1000);
+    CHECK(crop_hw_y[0] == 0x1100);
+    /* The requested-but-not-programmed table must not have supplied any of it. */
+    CHECK(crop_hw_zoom[0] != 125);
+    CHECK(crop_hw_x[0] != 0x4000);
+  }
+
+  /* The seed never passes the prepare preflight, so an out-of-range table
+   * entry must fall back to the documented default instead of being
+   * truncated into the registers. */
+  {
+    static const struct max9296_mode_info bad = {900, 70000, 99999};
+
+    sensor = fixture(ctrls);
+    active_sensor = &sensor;
+    sensor.enable = sensor.initialized_fingerprint.enable = 1;
+    sensor.current_mode = &bad;
+    resolved_mode = &bad;
+    sensor.initialized_fingerprint.mode = &bad;
+    sensor.hardware_valid = true;
+    sensor.streaming = false;
+    sensor.stream_commit_epoch = 0;
+    sensor.ctrl_cache.crop_enable = false;
+
+    CHECK(max9296_s_stream(&sd, 1) == 0);
+    CHECK(crop_write_count == 1);
+    CHECK(crop_hw_zoom[0] == MAX9296_DZ_DEFAULT);
+    CHECK(crop_hw_x[0] == MAX9296_DZ_CENTER_DEFAULT);
+    CHECK(crop_hw_y[0] == MAX9296_DZ_CENTER_DEFAULT);
   }
 
   /* A successful explicit retry commits the requested exposure normally. */

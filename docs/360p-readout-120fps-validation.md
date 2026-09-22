@@ -125,8 +125,9 @@ SoC 정지 이력이 있는 manual-WB `0x510A` 쓰기가 없고 AWB는 `0x5100`�
 
 사용자 ABI는 `dz=100..300`, `dz_x/dz_y=0..65535`이며 `dz=150`은 1.5배,
 `dz=200`은 2배다. 배율은 dual 센서 timing 비대칭을 막기 위해 CSI domain 공통이고,
-중심은 채널별이다. `crop_enable=false`는 cache만 갱신하고 네 crop register를 쓰지
-않는다. `true`에서는 step→X→Y→factor 순서이며 factor가 마지막이다. streaming 중
+중심은 채널별이다. `crop_enable=false`는 cache를 유지한 채 네 crop register에
+해상도별 기본값(현재 전 모드 1.00배·중앙)을 기록한다. `true`에서는 step→X→Y→factor
+순서이며 factor가 마지막이다. streaming 중
 factor/center tuple은 변경 가능하지만 enable 전환은 `-EBUSY`다.
 
 해상도와 crop은 독립이다. FHD/HD/360p 어느 출력에서도 crop을 사용할 수 있지만

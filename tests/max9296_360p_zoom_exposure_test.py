@@ -32,6 +32,22 @@ def function(source: str, name: str) -> str:
     return ""
 
 
+MAX9296_DZ_MIN = 100
+MAX9296_DZ_MAX = 300
+SEED_MACROS = {"MAX9296_DZ_DEFAULT": 100, "MAX9296_DZ_CENTER_DEFAULT": 0x8000}
+
+
+def seed_value_in_range(token: str, low: int, high: int) -> bool:
+    """A seed is a known policy macro or a literal inside the ABI range."""
+    if token in SEED_MACROS:
+        return low <= SEED_MACROS[token] <= high
+    try:
+        value = int(token, 0)
+    except ValueError:
+        return False
+    return low <= value <= high
+
+
 def dz_percent_to_fixed8(percent: int) -> int:
     if not 100 <= percent <= 300:
         raise ValueError("digital zoom percent")
@@ -694,16 +710,96 @@ def main() -> int:
         failures.append("enable worker can consume output request after crop failure")
 
     apply_crop = function(source, "max9296_apply_cached_crop")
-    gate = apply_crop.find("if (!sensor->ctrl_cache.crop_enable)")
+    branch = apply_crop.find("if (enabled) {")
     first_write = apply_crop.find("max9296_write_zoom_channel")
-    if gate < 0 or first_write < 0 or gate > first_write:
-        failures.append("disabled crop is not gated before every AP1302 write")
+    if branch < 0 or first_write < 0 or branch > first_write:
+        failures.append("crop apply does not resolve the tuple before every AP1302 write")
+    # Disabling crop must restore the per-mode seed, not skip the write. Skipping
+    # let a runtime dz/dz_x/dz_y outlive crop_enable=0, a gstApp restart and a
+    # board hard reset (measured 2026-09-21).
+    if first_write >= 0 and "return 0;" in apply_crop[:first_write]:
+        failures.append("disabled crop still skips the AP1302 write instead of seeding defaults")
+    for token in (
+        "max9296_zoom_seed_from_mode(sensor, mode, &seed)",
+        "max9296_zoom_seed_factor(sensor, mode)",
+    ):
+        if token not in apply_crop:
+            failures.append(f"disabled crop does not seed the per-mode default: {token}")
     if "sensor->enable == 0x02" not in apply_crop:
         failures.append("single-right firmware reload does not select the active ch1 crop cache")
     if "max9296_hw_is_dual(sensor)" not in apply_crop:
         failures.append("crop restore does not use the programmed hardware topology")
-    if apply_crop.count("sensor->ctrl_cache.dz") < 3:
-        failures.append("single and both dual AP1302 writes do not share one cached zoom factor")
+    if apply_crop.count(", dz);") < 3:
+        failures.append("single and both dual AP1302 writes do not share one resolved zoom factor")
+    # The right-hand single-channel tables share their public mode ids with the
+    # left-hand ones and are normalised away before current_mode is published,
+    # so seeding from current_mode would silently apply the left-hand values on
+    # a single-right topology and make the _R entries' seeds unreachable.
+    if "max9296_zoom_seed_mode_locked(sensor)" not in apply_crop:
+        failures.append("crop seed does not resolve the exact table being programmed")
+    if "sensor->current_mode" in apply_crop:
+        failures.append("crop seed still reads current_mode, which cannot name an _R table")
+    # sensor->enable is the requested value and sysfs can move it without
+    # reprogramming, so a published hardware identity must win over the
+    # prepare resolver. Otherwise the wrong-seed class returns via the other
+    # input the resolver reads.
+    seed_mode = function(source, "max9296_zoom_seed_mode_locked")
+    for token in (
+        "READ_ONCE(sensor->hardware_valid)",
+        "sensor->initialized_fingerprint.mode",
+        "max9296_resolve_prepare_mode_locked(sensor)",
+    ):
+        if token not in seed_mode:
+            failures.append(f"seed source does not prefer the programmed identity: {token}")
+    # The seed bypasses max9296_preflight_prepare_locked, which is what
+    # range-checks the user tuple, so it needs its own validation.
+    seed_factor = function(source, "max9296_zoom_seed_factor")
+    if "MAX9296_DZ_MIN" not in seed_factor or "MAX9296_DZ_MAX" not in seed_factor:
+        failures.append("mode seed zoom factor is not range-checked")
+    if "return MAX9296_DZ_DEFAULT;" not in seed_factor:
+        failures.append("out-of-range seed factor does not fall back to the default")
+    seed_center = function(source, "max9296_zoom_seed_center")
+    if "65535" not in seed_center or "MAX9296_DZ_CENTER_DEFAULT" not in seed_center:
+        failures.append("mode seed centre is not range-checked")
+
+    # The disabled seed is declared per resolution so a future mode can diverge
+    # the way the vendor 720p tables did (1.25x in c555c59).
+    mode_struct = source[source.find("struct max9296_mode_info {") :]
+    mode_struct = mode_struct[: mode_struct.find("};") + 2]
+    for field in ("u32 default_dz;", "u32 default_dz_x;", "u32 default_dz_y;"):
+        if field not in mode_struct:
+            failures.append(f"mode table cannot carry a per-resolution zoom seed: {field}")
+    table_start = source.find("static const struct max9296_mode_info max9296_mode_init_data")
+    table_end = source.find("static bool max9296_mode_is_dual(")
+    if table_start < 0 or table_end < 0:
+        failures.append("mode tables not found")
+    else:
+        table = source[table_start:table_end]
+        # Parse each entry instead of counting tokens. A future mode must be
+        # able to diverge its own seed -- the c555c59 720p case the struct
+        # comment names -- while an entry with a missing or out-of-range seed
+        # still fails. Counting MAX9296_DZ_DEFAULT occurrences forbade exactly
+        # the divergence the fields exist to allow.
+        entries = re.findall(
+            r"MAX9296_EXPOSURE_SAFE_MAX_FPS,\s*([^}]*?)\}", table, re.S
+        )
+        if not entries:
+            failures.append("mode table entries could not be parsed")
+        for index, tail in enumerate(entries):
+            seed = [token.strip() for token in tail.split(",") if token.strip()]
+            if len(seed) != 3:
+                failures.append(
+                    f"mode entry {index} does not declare exactly three seed values"
+                )
+                continue
+            factor, center_x, center_y = seed
+            if not seed_value_in_range(factor, MAX9296_DZ_MIN, MAX9296_DZ_MAX):
+                failures.append(f"mode entry {index} zoom factor seed is out of range")
+            for axis, value in (("x", center_x), ("y", center_y)):
+                if not seed_value_in_range(value, 0, 65535):
+                    failures.append(
+                        f"mode entry {index} zoom centre {axis} seed is out of range"
+                    )
 
     apply_start = source.find("static int max9296_apply_cached_crop(")
     apply_end = apply_start + len(apply_crop) if apply_start >= 0 else -1
