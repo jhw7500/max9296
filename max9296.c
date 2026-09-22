@@ -2754,16 +2754,64 @@ static int max9296_write_zoom_channel(
                              2);
 }
 
+/*
+ * Table whose seed the disabled-crop path applies.  sensor->enable is the
+ * requested value and sysfs_enable_store can move it without touching the
+ * programmed hardware, so once the hardware identity is published it is the
+ * authority; before that (cold prepare) the prepare fingerprint has already
+ * published both inputs the resolver reads.
+ */
+static const struct max9296_mode_info *
+max9296_zoom_seed_mode_locked(const struct max9296_dev *sensor) {
+  if (READ_ONCE(sensor->hardware_valid) && sensor->initialized_fingerprint.mode)
+    return sensor->initialized_fingerprint.mode;
+  return max9296_resolve_prepare_mode_locked(sensor);
+}
+
+/*
+ * The seed reaches the AP1302 without passing max9296_preflight_prepare_locked,
+ * which is what range-checks the user tuple.  Validate it here so a future
+ * diverged table entry cannot be silently truncated into the registers.
+ */
+static u32 max9296_zoom_seed_factor(const struct max9296_dev *sensor,
+                                    const struct max9296_mode_info *mode) {
+  u32 dz = mode ? mode->default_dz : MAX9296_DZ_DEFAULT;
+
+  if (dz < MAX9296_DZ_MIN || dz > MAX9296_DZ_MAX) {
+    printk(KERN_WARNING
+           "[%s:%d][%s:%d] mode seed dz=%u out of [%u,%u]; using %u",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, dz,
+           (u32)MAX9296_DZ_MIN, (u32)MAX9296_DZ_MAX, (u32)MAX9296_DZ_DEFAULT);
+    return MAX9296_DZ_DEFAULT;
+  }
+  return dz;
+}
+
+static int max9296_zoom_seed_center(const struct max9296_dev *sensor,
+                                    u32 value, char axis) {
+  if (value > 65535) {
+    printk(KERN_WARNING
+           "[%s:%d][%s:%d] mode seed dz_%c=%u out of [0,65535]; using 0x%x",
+           KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, axis,
+           value, (u32)MAX9296_DZ_CENTER_DEFAULT);
+    return MAX9296_DZ_CENTER_DEFAULT;
+  }
+  return (int)value;
+}
+
 /* Per-resolution zoom tuple used while the user tuple is not honoured. */
 static void max9296_zoom_seed_from_mode(
+    const struct max9296_dev *sensor,
     const struct max9296_mode_info *mode,
     struct max9296_channel_ctrl *seed) {
-  seed->dz_x = mode ? (int)mode->default_dz_x : MAX9296_DZ_CENTER_DEFAULT;
-  seed->dz_y = mode ? (int)mode->default_dz_y : MAX9296_DZ_CENTER_DEFAULT;
+  seed->dz_x = mode ? max9296_zoom_seed_center(sensor, mode->default_dz_x, 'x')
+                    : MAX9296_DZ_CENTER_DEFAULT;
+  seed->dz_y = mode ? max9296_zoom_seed_center(sensor, mode->default_dz_y, 'y')
+                    : MAX9296_DZ_CENTER_DEFAULT;
 }
 
 static int max9296_apply_cached_crop(struct max9296_dev *sensor) {
-  const struct max9296_mode_info *mode = max9296_resolve_prepare_mode_locked(sensor);
+  const struct max9296_mode_info *mode = max9296_zoom_seed_mode_locked(sensor);
   bool enabled = sensor->ctrl_cache.crop_enable;
   struct max9296_channel_ctrl seed = { 0 };
   const struct max9296_channel_ctrl *ch0_ctrl;
@@ -2785,18 +2833,18 @@ static int max9296_apply_cached_crop(struct max9296_dev *sensor) {
    * alone cannot name: the right-hand single-channel tables share their public
    * mode ids with the left-hand ones and are normalised away before
    * current_mode is published, so reading it would silently apply the
-   * left-hand seed on a single-right topology.  Resolving through
-   * max9296_resolve_prepare_mode_locked() honours the _R entries.  Both inputs
-   * it reads (current_mode and enable) are published by the prepare
-   * fingerprint before the hardware prepare path reaches this call.
+   * left-hand seed on a single-right topology.
+   * max9296_zoom_seed_mode_locked prefers the published hardware identity
+   * and falls back to the prepare resolver only before it exists, and the
+   * seed it yields is range-checked because it bypasses the prepare preflight.
    */
   if (enabled) {
     dz = sensor->ctrl_cache.dz;
     ch0_ctrl = &sensor->ctrl_cache.ch0;
     ch1_ctrl = &sensor->ctrl_cache.ch1;
   } else {
-    max9296_zoom_seed_from_mode(mode, &seed);
-    dz = mode ? mode->default_dz : MAX9296_DZ_DEFAULT;
+    max9296_zoom_seed_from_mode(sensor, mode, &seed);
+    dz = max9296_zoom_seed_factor(sensor, mode);
     ch0_ctrl = &seed;
     ch1_ctrl = &seed;
   }
@@ -6144,7 +6192,7 @@ static int max9296_parse_prepare_command(
    * `enable`.  That is safe only because both tables share the same max_fps
    * macro for a given resolution.  If a right-hand table ever takes a different
    * ceiling, this check would admit or reject the wrong requests; the accurate
-   * gate is max9296_preflight_prepare_locked(), which validates against
+   * gate is max9296_preflight_prepare_locked, which validates against
    * fingerprint->mode->max_fps.
    */
   if (command->fps > max9296_mode_data[command->mode_id].max_fps)

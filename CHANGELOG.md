@@ -71,11 +71,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     엔트리가 세 값을 선언하고 값이 ABI 범위 안이면 통과하며, 빠지면 실패한다.
   - harness 에 **우측 시드 반영 케이스**를 추가했다(+8 checks). 해석기가 좌측과 다른
     `_R` 테이블을 돌려줄 때 하드웨어가 그 값을 받는지 본다. 수정을 되돌리면 실패한다.
+- **리뷰 반영 2차 (tribunal 새 라운드 1, MEDIUM 1 + LOW 2 + refuted 1)**:
+  - **문서 여섯 곳의 `crop_enable=false → 쓰기 없음` 규범을 정정했다.** `RELEASE_NOTES.md`
+    (같은 미릴리스 창에서 "원칙 유지" 라고 선언하고 있었다), `V4L2_CTRL_GUIDE.md`(3곳),
+    `docs/parallel-prepare-v1.md`, `docs/360p-readout-120fps-validation.md`,
+    `docs/exposure-limits.md`(§2.3 본문과 §4.3 운영 복구 절차). 특히 운영 런북은
+    수동 `i2cwrite 0x1010 0x0100` 을 유일한 복구로 안내하고 있어, 그대로 두면 현재
+    드라이버에서 운영자가 틀린 상태를 예상하게 된다. 구버전 보드용 절차로 범위를 좁혔다.
+  - 시드 출처를 **published 하드웨어 신원 우선**으로 바꿨다. `resolve_prepare_mode_locked()`
+    는 요청값 `sensor->enable` 을 보는데 sysfs 로 재프로그램 없이 움직일 수 있고, 주소는
+    프로그램된 `last_mode` 에서 온다. 다른 write 경로가 모두 쓰는 게이트가 crop 에만
+    없어, 없앤 silent-wrong-seed 가 다른 입력으로 재진입했다. 이제
+    `hardware_valid` 면 `initialized_fingerprint.mode`, 아니면(cold prepare) resolver 다.
+  - 시드에 **ABI 범위 검증**을 붙였다. 사용자 튜플은 `preflight_prepare_locked` 가
+    범위 밖이면 `-EINVAL` 인데, 시드는 그 경로를 타지 않아 truncate 된 채 기록될 수
+    있었다. 범위 밖이면 기본값으로 떨어지고 경고를 남긴다.
+  - CHANGELOG 의 "구 코드에서 10건 실패" 를 **19건**으로 정정했다(리뷰어가 반증).
 - 테스트: `tests/max9296_360p_zoom_exposure_test.py` 의 "disabled crop is not gated
   before every AP1302 write" 계약을 새 계약으로 교체했고,
   `tests/max9296_exposure_failure_test.py` 에 `crop_enable=false` 가 실제로 기본값을
   내려쓰는지 컴파일해서 확인하는 케이스를 3개 토폴로지(single-left/single-right/dual)에
-  추가했다(357 → 395 checks). 구 코드에 새 테스트를 걸면 10건이 실패한다.
+  추가했다(357 → 395 checks). 구 코드에 새 테스트를 걸면 19건이 실패한다.
 
 ### 기록 정정 — 2.9 의 720p 화각 변경 (2026-09-21 확인, 동작 변경 없음)
 

@@ -133,20 +133,22 @@ V4L2 컨트롤은 기본적으로 정수값으로 노출된다. 대부분은 레
 `0x8000`만 쓴다. `0x1014`는 optical zoom factor이므로 중심 좌표로 사용하지
 않고 이번 구현에서는 쓰지 않는다. 실제 중심은 `0x118c/0x118e`다.
 
-`crop_enable=false`이면 `dz`와 중심값은 cache만 갱신하며 prepare, STREAMON,
-firmware replay, live apply 어느 경로에서도 `0x1010`, `0x1012`, `0x118c`,
-`0x118e` host I2C 쓰기를 발행하지 않는다. 해상도용 AP1302 preview context
-(`0x2000` 등)는 디지털 crop과 별개이므로 계속 설정한다.
+`crop_enable=false`이면 `dz`와 중심값 cache는 그대로 두고, prepare, STREAMON,
+firmware replay, live apply 각 경로에서 `0x1012`, `0x118c`, `0x118e`, `0x1010`에
+**해상도별 기본값을 기록한다**(현재 모든 모드가 1.00배·중앙). 즉 false는 "사용자
+튜플을 적용하지 않는다"이지 "레지스터를 건드리지 않는다"가 아니다. cache를 건드리지
+않으므로 다시 `true`로 올리면 이전 사용자 값이 그대로 복원된다. 해상도용 AP1302
+preview context(`0x2000` 등)는 디지털 crop과 별개이므로 계속 설정한다.
 
 `crop_enable=true`에서는 스트리밍 중 공통 배율과 채널별 중심을 변경할 수 있다.
 여러 값을 함께 바꿀 때는 한 번의 `VIDIOC_S_EXT_CTRLS`가 되도록 쉼표로 묶고,
 드라이버는 step→X→Y→factor 순서로 각 활성 AP1302에 적용한다. factor `0x1010`이
 마지막이다. `crop_enable` 값의 스트리밍 중 전환은 `-EBUSY`이고 동일 값 no-op은
 성공한다.
-정지 상태의 enable 변경은 cache와 prepare fingerprint를 stale로 만들지만 false로
-바꿀 때 기존 하드웨어 crop을 1배로 덮어쓰지는 않는다. 이전 crop을 확실히 제거할
-때는 `cam_hard_reset.sh -s -S` 또는 `init_cam.sh`로 firmware를 다시 로드한다.
-gstApp 재시작만으로는 하드웨어 epoch가 바뀌지 않는다.
+정지 상태의 enable 변경은 cache와 prepare fingerprint를 stale로 만든다. false로
+바꾼 뒤 다음 apply 경로가 돌면 드라이버가 기본값을 되써서 이전 하드웨어 crop이
+제거된다 — firmware 재로드를 기다릴 필요가 없다. gstApp 재시작만으로는 하드웨어
+epoch가 바뀌지 않지만, apply 경로는 그때도 실행되므로 기본값 복원은 일어난다.
 
 초기화가 완료된 하드웨어의 STREAMON crop 캐시 재적용이 실패하면 시작 오류를
 반환하고 초기화 상태를 보존한다. 다음 STREAMON은 펌웨어 재초기화 없이 활성 채널의
@@ -467,8 +469,8 @@ sudo v4l2-ctl -d /dev/v4l-subdev2 \
 
 이 값은 드라이버 캐시에 유지되며 스트림 재시작과 AP1302 펌웨어 재로드 뒤에도
 재적용된다. 싱글 right(`enable=2`)는 공통 배율과 해당 전역 홀수 채널의 중심 캐시를
-복원한다. 단, `crop_enable=false`이면 cache만 유지하고 네 digital-crop 레지스터는
-쓰지 않는다.
+복원한다. 단, `crop_enable=false`이면 cache는 유지한 채 네 digital-crop 레지스터에는
+해상도별 기본값을 기록한다.
 
 ### 4.5 Auto/Manual 권장 순서
 

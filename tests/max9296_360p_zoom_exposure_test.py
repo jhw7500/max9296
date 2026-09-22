@@ -720,8 +720,8 @@ def main() -> int:
     if first_write >= 0 and "return 0;" in apply_crop[:first_write]:
         failures.append("disabled crop still skips the AP1302 write instead of seeding defaults")
     for token in (
-        "max9296_zoom_seed_from_mode(mode, &seed)",
-        "mode ? mode->default_dz : MAX9296_DZ_DEFAULT",
+        "max9296_zoom_seed_from_mode(sensor, mode, &seed)",
+        "max9296_zoom_seed_factor(sensor, mode)",
     ):
         if token not in apply_crop:
             failures.append(f"disabled crop does not seed the per-mode default: {token}")
@@ -735,10 +735,32 @@ def main() -> int:
     # left-hand ones and are normalised away before current_mode is published,
     # so seeding from current_mode would silently apply the left-hand values on
     # a single-right topology and make the _R entries' seeds unreachable.
-    if "max9296_resolve_prepare_mode_locked(sensor)" not in apply_crop:
+    if "max9296_zoom_seed_mode_locked(sensor)" not in apply_crop:
         failures.append("crop seed does not resolve the exact table being programmed")
     if "sensor->current_mode" in apply_crop:
         failures.append("crop seed still reads current_mode, which cannot name an _R table")
+    # sensor->enable is the requested value and sysfs can move it without
+    # reprogramming, so a published hardware identity must win over the
+    # prepare resolver. Otherwise the wrong-seed class returns via the other
+    # input the resolver reads.
+    seed_mode = function(source, "max9296_zoom_seed_mode_locked")
+    for token in (
+        "READ_ONCE(sensor->hardware_valid)",
+        "sensor->initialized_fingerprint.mode",
+        "max9296_resolve_prepare_mode_locked(sensor)",
+    ):
+        if token not in seed_mode:
+            failures.append(f"seed source does not prefer the programmed identity: {token}")
+    # The seed bypasses max9296_preflight_prepare_locked, which is what
+    # range-checks the user tuple, so it needs its own validation.
+    seed_factor = function(source, "max9296_zoom_seed_factor")
+    if "MAX9296_DZ_MIN" not in seed_factor or "MAX9296_DZ_MAX" not in seed_factor:
+        failures.append("mode seed zoom factor is not range-checked")
+    if "return MAX9296_DZ_DEFAULT;" not in seed_factor:
+        failures.append("out-of-range seed factor does not fall back to the default")
+    seed_center = function(source, "max9296_zoom_seed_center")
+    if "65535" not in seed_center or "MAX9296_DZ_CENTER_DEFAULT" not in seed_center:
+        failures.append("mode seed centre is not range-checked")
 
     # The disabled seed is declared per resolution so a future mode can diverge
     # the way the vendor 720p tables did (1.25x in c555c59).

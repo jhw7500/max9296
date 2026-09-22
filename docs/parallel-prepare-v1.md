@@ -60,11 +60,13 @@ Sensor-readout candidates are separate build artifacts and are classified only
 from AR0234 timing/read-mode plus full-FOV evidence.
 
 Hardware digital crop is orthogonal to this tuple. `crop_enable=false` is the
-default and produces no host I2C writes to AP1302 `0x1010`, `0x1012`, `0x118c`
-or `0x118e`. gstApp submits crop enable and the complete cached crop tuple
+default; it does not honour the cached user tuple, but it still writes the
+per-resolution seed to AP1302 `0x1012`, `0x118c`, `0x118e` and `0x1010` (every
+mode currently seeds 1.00x at the frame centre), so a previously applied crop
+cannot outlive the flag. The cache itself is untouched, so re-enabling restores
+the user tuple. gstApp submits crop enable and the complete cached crop tuple
 before `prepare`; the prepare fingerprint includes enable state. A streaming
-enable transition fails with `EBUSY`. Use a hard reset/firmware reload to clear
-an old true crop reliably; restarting gstApp alone is not a hardware epoch.
+enable transition fails with `EBUSY`.
 
 Above the 30 FPS exposure-safety limit — 640x360 at 31-120 FPS and 1280x720 at
 31-60 FPS — AE-auto preparation skips the `0x500c` exposure seed but preserves
