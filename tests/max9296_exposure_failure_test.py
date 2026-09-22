@@ -92,6 +92,15 @@ static int replay_error;
 static struct max9296_dev *to_max9296_dev(struct v4l2_subdev *sd) {
   (void)sd; return active_sensor;
 }
+/* The production apply path resolves the exact table being programmed, which
+ * current_mode alone cannot name for a single-right topology. Expose it as a
+ * controllable pointer so a test can diverge the right-hand seed. */
+static const struct max9296_mode_info *resolved_mode;
+static const struct max9296_mode_info *max9296_resolve_prepare_mode_locked(
+    const struct max9296_dev *sensor) {
+  (void)sensor;
+  return resolved_mode;
+}
 static bool max9296_hw_is_dual(const struct max9296_dev *sensor) {
   return sensor->initialized_fingerprint.enable == 3U;
 }
@@ -189,6 +198,7 @@ static struct max9296_dev fixture(struct v4l2_ctrl *ctrls) {
   ctrls[2] = (struct v4l2_ctrl){.val = 7000};
   write_count = fail_at = init_count = 0;
   crop_write_count = crop_fail_at = 0;
+  resolved_mode = NULL;
   for (unsigned int ch = 0; ch < 2; ch++)
     crop_hw_x[ch] = crop_hw_y[ch] = crop_hw_zoom[ch] = 0;
   replay_error = 0;
@@ -304,6 +314,7 @@ int main(void) {
       active_sensor = &sensor;
       sensor.enable = sensor.initialized_fingerprint.enable = mode;
       sensor.current_mode = &seed_mode;
+      resolved_mode = &seed_mode;
       sensor.streaming = false;
       sensor.stream_commit_epoch = 0;
       sensor.ctrl_cache.crop_enable = false;
@@ -326,6 +337,36 @@ int main(void) {
       CHECK(sensor.ctrl_cache.dz == 0x0180);
       CHECK(sensor.ctrl_cache.ch0.dz_x == 100 && sensor.ctrl_cache.ch1.dz_y == 400);
     }
+  }
+
+  /* The seed must come from the exact table being programmed. A single-right
+   * topology programs a _R table whose public mode id equals its left-hand
+   * twin's, so seeding from current_mode would silently apply the left-hand
+   * values and make every _R seed unreachable. */
+  {
+    static const struct max9296_mode_info left_mode = {
+        MAX9296_DZ_DEFAULT, MAX9296_DZ_CENTER_DEFAULT, MAX9296_DZ_CENTER_DEFAULT};
+    static const struct max9296_mode_info right_mode = {125, 0x4000, 0x2000};
+
+    sensor = fixture(ctrls);
+    active_sensor = &sensor;
+    sensor.enable = sensor.initialized_fingerprint.enable = 2;
+    sensor.current_mode = &left_mode;   /* public selection: left-hand twin */
+    resolved_mode = &right_mode;        /* exact table actually programmed */
+    sensor.streaming = false;
+    sensor.stream_commit_epoch = 0;
+    sensor.ctrl_cache.crop_enable = false;
+
+    CHECK(max9296_s_stream(&sd, 1) == 0);
+    CHECK(crop_write_count == 1);
+    /* enable==2 routes the single AP1302 write to the ch1 slot. */
+    CHECK(crop_hw_zoom[1] == 125);
+    CHECK(crop_hw_x[1] == 0x4000);
+    CHECK(crop_hw_y[1] == 0x2000);
+    /* The left-hand twin must not have supplied any of it. */
+    CHECK(crop_hw_zoom[1] != MAX9296_DZ_DEFAULT);
+    CHECK(crop_hw_x[1] != MAX9296_DZ_CENTER_DEFAULT);
+    CHECK(crop_hw_zoom[0] == 0 && crop_hw_x[0] == 0 && crop_hw_y[0] == 0);
   }
 
   /* A successful explicit retry commits the requested exposure normally. */

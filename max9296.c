@@ -644,6 +644,8 @@ static bool max9296_fingerprint_equal(
     const struct max9296_hw_fingerprint *right);
 static void max9296_mark_prepare_stale_locked(struct max9296_dev *sensor);
 static void max9296_refresh_worker_status_locked(struct max9296_dev *sensor);
+static const struct max9296_mode_info *
+max9296_resolve_prepare_mode_locked(const struct max9296_dev *sensor);
 
 static inline struct max9296_dev *to_max9296_dev(struct v4l2_subdev *sd) {
   return container_of(sd, struct max9296_dev, sd);
@@ -2761,7 +2763,7 @@ static void max9296_zoom_seed_from_mode(
 }
 
 static int max9296_apply_cached_crop(struct max9296_dev *sensor) {
-  const struct max9296_mode_info *mode = sensor->current_mode;
+  const struct max9296_mode_info *mode = max9296_resolve_prepare_mode_locked(sensor);
   bool enabled = sensor->ctrl_cache.crop_enable;
   struct max9296_channel_ctrl seed = { 0 };
   const struct max9296_channel_ctrl *ch0_ctrl;
@@ -2779,9 +2781,14 @@ static int max9296_apply_cached_crop(struct max9296_dev *sensor) {
    * runtime dz/dz_x/dz_y outlived crop_enable=0, a gstApp restart and a board
    * hard reset while V4L2 kept reporting the defaults (measured 2026-09-21).
    *
-   * The seed comes from the mode being programmed, not the outgoing one: the
-   * prepare fingerprint publishes current_mode before the hardware prepare
-   * path reaches this call.
+   * The seed comes from the exact table being programmed, which current_mode
+   * alone cannot name: the right-hand single-channel tables share their public
+   * mode ids with the left-hand ones and are normalised away before
+   * current_mode is published, so reading it would silently apply the
+   * left-hand seed on a single-right topology.  Resolving through
+   * max9296_resolve_prepare_mode_locked() honours the _R entries.  Both inputs
+   * it reads (current_mode and enable) are published by the prepare
+   * fingerprint before the hardware prepare path reaches this call.
    */
   if (enabled) {
     dz = sensor->ctrl_cache.dz;

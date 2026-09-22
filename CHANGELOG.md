@@ -58,11 +58,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   실기 확인은 하지 않았다. `0x118c`/`0x118e` 의 펌웨어 power-on 기본값이 `0x0080`(중앙)
   이라는 전제는 측정하지 않았다 — `dz=1.00` 에서는 중심이 화면에 영향을 주지 않으므로
   무해하다고 보지만 논리이지 실측이 아니다.
+- **리뷰 반영 (tribunal 라운드 1, MEDIUM 1 + LOW 1)**:
+  - 시드를 `sensor->current_mode` 가 아니라 `max9296_resolve_prepare_mode_locked()`
+    에서 받는다. 우측 단일채널 테이블(`_R`)은 좌측과 **공개 모드 id 를 공유**하고
+    `current_mode` 로 발행되기 전에 좌측 쌍둥이로 정규화되므로, `current_mode` 를
+    읽으면 single-right(`enable==0x02`)에서 **좌측 시드가 조용히 적용**되고 `_R`
+    엔트리의 시드는 영원히 도달 불가였다. 오늘은 열 엔트리 값이 같아 오동작이
+    없지만, 값을 분기시키는 순간 효과도 진단도 없이 무시되는 함정이었다.
+  - 모드 테이블 검사를 토큰 개수에서 **엔트리별 구조 검사**로 바꿨다. 기존 검사는
+    `MAX9296_DZ_DEFAULT` 출현 횟수를 세어, 한 모드의 시드를 분기시키면 실패했다 —
+    필드를 둔 목적(테이블만 고치는 분기)을 테스트가 스스로 막고 있었다. 이제 각
+    엔트리가 세 값을 선언하고 값이 ABI 범위 안이면 통과하며, 빠지면 실패한다.
+  - harness 에 **우측 시드 반영 케이스**를 추가했다(+8 checks). 해석기가 좌측과 다른
+    `_R` 테이블을 돌려줄 때 하드웨어가 그 값을 받는지 본다. 수정을 되돌리면 실패한다.
 - 테스트: `tests/max9296_360p_zoom_exposure_test.py` 의 "disabled crop is not gated
   before every AP1302 write" 계약을 새 계약으로 교체했고,
   `tests/max9296_exposure_failure_test.py` 에 `crop_enable=false` 가 실제로 기본값을
   내려쓰는지 컴파일해서 확인하는 케이스를 3개 토폴로지(single-left/single-right/dual)에
-  추가했다(+30 checks). 구 코드에 새 테스트를 걸면 10건이 실패한다.
+  추가했다(357 → 395 checks). 구 코드에 새 테스트를 걸면 10건이 실패한다.
 
 ### 기록 정정 — 2.9 의 720p 화각 변경 (2026-09-21 확인, 동작 변경 없음)
 

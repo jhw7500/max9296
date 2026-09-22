@@ -32,6 +32,22 @@ def function(source: str, name: str) -> str:
     return ""
 
 
+MAX9296_DZ_MIN = 100
+MAX9296_DZ_MAX = 300
+SEED_MACROS = {"MAX9296_DZ_DEFAULT": 100, "MAX9296_DZ_CENTER_DEFAULT": 0x8000}
+
+
+def seed_value_in_range(token: str, low: int, high: int) -> bool:
+    """A seed is a known policy macro or a literal inside the ABI range."""
+    if token in SEED_MACROS:
+        return low <= SEED_MACROS[token] <= high
+    try:
+        value = int(token, 0)
+    except ValueError:
+        return False
+    return low <= value <= high
+
+
 def dz_percent_to_fixed8(percent: int) -> int:
     if not 100 <= percent <= 300:
         raise ValueError("digital zoom percent")
@@ -715,6 +731,14 @@ def main() -> int:
         failures.append("crop restore does not use the programmed hardware topology")
     if apply_crop.count(", dz);") < 3:
         failures.append("single and both dual AP1302 writes do not share one resolved zoom factor")
+    # The right-hand single-channel tables share their public mode ids with the
+    # left-hand ones and are normalised away before current_mode is published,
+    # so seeding from current_mode would silently apply the left-hand values on
+    # a single-right topology and make the _R entries' seeds unreachable.
+    if "max9296_resolve_prepare_mode_locked(sensor)" not in apply_crop:
+        failures.append("crop seed does not resolve the exact table being programmed")
+    if "sensor->current_mode" in apply_crop:
+        failures.append("crop seed still reads current_mode, which cannot name an _R table")
 
     # The disabled seed is declared per resolution so a future mode can diverge
     # the way the vendor 720p tables did (1.25x in c555c59).
@@ -729,11 +753,31 @@ def main() -> int:
         failures.append("mode tables not found")
     else:
         table = source[table_start:table_end]
-        entries = table.count("MAX9296_EXPOSURE_SAFE_MAX_FPS,")
-        if table.count("MAX9296_DZ_DEFAULT,") != entries:
-            failures.append("not every mode declares a default zoom factor")
-        if table.count("MAX9296_DZ_CENTER_DEFAULT,") != entries * 2:
-            failures.append("not every mode declares a default zoom centre")
+        # Parse each entry instead of counting tokens. A future mode must be
+        # able to diverge its own seed -- the c555c59 720p case the struct
+        # comment names -- while an entry with a missing or out-of-range seed
+        # still fails. Counting MAX9296_DZ_DEFAULT occurrences forbade exactly
+        # the divergence the fields exist to allow.
+        entries = re.findall(
+            r"MAX9296_EXPOSURE_SAFE_MAX_FPS,\s*([^}]*?)\}", table, re.S
+        )
+        if not entries:
+            failures.append("mode table entries could not be parsed")
+        for index, tail in enumerate(entries):
+            seed = [token.strip() for token in tail.split(",") if token.strip()]
+            if len(seed) != 3:
+                failures.append(
+                    f"mode entry {index} does not declare exactly three seed values"
+                )
+                continue
+            factor, center_x, center_y = seed
+            if not seed_value_in_range(factor, MAX9296_DZ_MIN, MAX9296_DZ_MAX):
+                failures.append(f"mode entry {index} zoom factor seed is out of range")
+            for axis, value in (("x", center_x), ("y", center_y)):
+                if not seed_value_in_range(value, 0, 65535):
+                    failures.append(
+                        f"mode entry {index} zoom centre {axis} seed is out of range"
+                    )
 
     apply_start = source.find("static int max9296_apply_cached_crop(")
     apply_end = apply_start + len(apply_crop) if apply_start >= 0 else -1
