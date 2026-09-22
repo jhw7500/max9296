@@ -16,6 +16,7 @@ def build_harness(source: str) -> str:
     names = [
         "max9296_require_exposure_reinit_locked",
         "max9296_invalidate_exposure_hardware_locked",
+        "max9296_zoom_seed_from_mode",
         "max9296_apply_cached_crop",
         "max9296_set_exposure_cluster",
         "max9296_stream_commit_locked",
@@ -39,6 +40,7 @@ struct v4l2_subdev { int unused; };
 struct max9296_ctrls { struct v4l2_ctrl *exp_time, *exposure_ch0, *exposure_ch1; };
 struct max9296_hw_fingerprint { unsigned int enable, fps; };
 struct max9296_channel_ctrl { int exposure, dz_x, dz_y; };
+struct max9296_mode_info { u32 default_dz, default_dz_x, default_dz_y; };
 struct max9296_ctrl_cache {
   int exposure, dz;
   struct max9296_channel_ctrl ch0, ch1;
@@ -52,6 +54,7 @@ struct max9296_dev {
   struct max9296_ctrls ctrls;
   struct max9296_ctrl_cache ctrl_cache;
   struct max9296_hw_fingerprint initialized_fingerprint;
+  const struct max9296_mode_info *current_mode;
   struct test_client *i2c_client;
   int lock, prepare_request_lock, prepare_state, worker_errno, power_count;
   unsigned int enable;
@@ -66,6 +69,8 @@ struct max9296_dev {
 #define AP1302_I2C_ADDR 0x3cU
 #define AP1302_CH0_I2C_ADDR 0x11U
 #define AP1302_CH1_I2C_ADDR 0x12U
+#define MAX9296_DZ_DEFAULT 100
+#define MAX9296_DZ_CENTER_DEFAULT 0x8000
 #define MAX9296_PREP_PREPARING 1
 #define MAX9296_STATE_IDLE 0
 #define READ_ONCE(x) (x)
@@ -282,6 +287,44 @@ int main(void) {
           CHECK(crop_hw_zoom[1] == ((mode & 2) ? 0x0180 : 0));
         }
       }
+    }
+  }
+
+  /* crop_enable=false must seed the per-mode default instead of leaving the
+   * previous owner's zoom on the AP1302.  This path used to return early, so a
+   * runtime dz/dz_x/dz_y outlived crop_enable=0 and a gstApp restart. */
+  {
+    static const struct max9296_mode_info seed_mode = {
+        MAX9296_DZ_DEFAULT, MAX9296_DZ_CENTER_DEFAULT, MAX9296_DZ_CENTER_DEFAULT};
+
+    for (unsigned int mode = 1; mode <= 3; mode++) {
+      unsigned int channel_count = mode == 3 ? 2 : 1;
+
+      sensor = fixture(ctrls);
+      active_sensor = &sensor;
+      sensor.enable = sensor.initialized_fingerprint.enable = mode;
+      sensor.current_mode = &seed_mode;
+      sensor.streaming = false;
+      sensor.stream_commit_epoch = 0;
+      sensor.ctrl_cache.crop_enable = false;
+      /* A stale user tuple that must not reach the hardware. */
+      sensor.ctrl_cache.dz = 0x0180;
+      sensor.ctrl_cache.ch0.dz_x = 100;
+      sensor.ctrl_cache.ch0.dz_y = 200;
+      sensor.ctrl_cache.ch1.dz_x = 300;
+      sensor.ctrl_cache.ch1.dz_y = 400;
+
+      CHECK(max9296_s_stream(&sd, 1) == 0);
+      CHECK(crop_write_count == channel_count);
+      CHECK(crop_hw_zoom[0] == ((mode & 1) ? MAX9296_DZ_DEFAULT : 0));
+      CHECK(crop_hw_zoom[1] == ((mode & 2) ? MAX9296_DZ_DEFAULT : 0));
+      CHECK(crop_hw_x[0] == ((mode & 1) ? MAX9296_DZ_CENTER_DEFAULT : 0));
+      CHECK(crop_hw_y[0] == ((mode & 1) ? MAX9296_DZ_CENTER_DEFAULT : 0));
+      CHECK(crop_hw_x[1] == ((mode & 2) ? MAX9296_DZ_CENTER_DEFAULT : 0));
+      CHECK(crop_hw_y[1] == ((mode & 2) ? MAX9296_DZ_CENTER_DEFAULT : 0));
+      /* The cache itself is untouched so re-enabling restores the user tuple. */
+      CHECK(sensor.ctrl_cache.dz == 0x0180);
+      CHECK(sensor.ctrl_cache.ch0.dz_x == 100 && sensor.ctrl_cache.ch1.dz_y == 400);
     }
   }
 

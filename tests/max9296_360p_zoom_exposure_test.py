@@ -694,16 +694,46 @@ def main() -> int:
         failures.append("enable worker can consume output request after crop failure")
 
     apply_crop = function(source, "max9296_apply_cached_crop")
-    gate = apply_crop.find("if (!sensor->ctrl_cache.crop_enable)")
+    branch = apply_crop.find("if (enabled) {")
     first_write = apply_crop.find("max9296_write_zoom_channel")
-    if gate < 0 or first_write < 0 or gate > first_write:
-        failures.append("disabled crop is not gated before every AP1302 write")
+    if branch < 0 or first_write < 0 or branch > first_write:
+        failures.append("crop apply does not resolve the tuple before every AP1302 write")
+    # Disabling crop must restore the per-mode seed, not skip the write. Skipping
+    # let a runtime dz/dz_x/dz_y outlive crop_enable=0, a gstApp restart and a
+    # board hard reset (measured 2026-09-21).
+    if first_write >= 0 and "return 0;" in apply_crop[:first_write]:
+        failures.append("disabled crop still skips the AP1302 write instead of seeding defaults")
+    for token in (
+        "max9296_zoom_seed_from_mode(mode, &seed)",
+        "mode ? mode->default_dz : MAX9296_DZ_DEFAULT",
+    ):
+        if token not in apply_crop:
+            failures.append(f"disabled crop does not seed the per-mode default: {token}")
     if "sensor->enable == 0x02" not in apply_crop:
         failures.append("single-right firmware reload does not select the active ch1 crop cache")
     if "max9296_hw_is_dual(sensor)" not in apply_crop:
         failures.append("crop restore does not use the programmed hardware topology")
-    if apply_crop.count("sensor->ctrl_cache.dz") < 3:
-        failures.append("single and both dual AP1302 writes do not share one cached zoom factor")
+    if apply_crop.count(", dz);") < 3:
+        failures.append("single and both dual AP1302 writes do not share one resolved zoom factor")
+
+    # The disabled seed is declared per resolution so a future mode can diverge
+    # the way the vendor 720p tables did (1.25x in c555c59).
+    mode_struct = source[source.find("struct max9296_mode_info {") :]
+    mode_struct = mode_struct[: mode_struct.find("};") + 2]
+    for field in ("u32 default_dz;", "u32 default_dz_x;", "u32 default_dz_y;"):
+        if field not in mode_struct:
+            failures.append(f"mode table cannot carry a per-resolution zoom seed: {field}")
+    table_start = source.find("static const struct max9296_mode_info max9296_mode_init_data")
+    table_end = source.find("static bool max9296_mode_is_dual(")
+    if table_start < 0 or table_end < 0:
+        failures.append("mode tables not found")
+    else:
+        table = source[table_start:table_end]
+        entries = table.count("MAX9296_EXPOSURE_SAFE_MAX_FPS,")
+        if table.count("MAX9296_DZ_DEFAULT,") != entries:
+            failures.append("not every mode declares a default zoom factor")
+        if table.count("MAX9296_DZ_CENTER_DEFAULT,") != entries * 2:
+            failures.append("not every mode declares a default zoom centre")
 
     apply_start = source.find("static int max9296_apply_cached_crop(")
     apply_end = apply_start + len(apply_crop) if apply_start >= 0 else -1
