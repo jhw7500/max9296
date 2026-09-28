@@ -133,4 +133,26 @@ static inline unsigned int max9296_preview_output_uses_high_fps(
          fps <= MAX9296_360P_MAX_FPS && max9296_preview_uses_high_fps(fps);
 }
 
+/*
+ * The preview ceiling is one of the registers the driver derives from fps, not
+ * the only one: max9296_exposure_fps_seed_route() carries the other, and the
+ * enumeration above max9296_fingerprint_equal() lists the whole set.  This
+ * helper models 0x2020 and the 0x6112 write that shares its predicate, so a
+ * rate that programs neither returns 0.  Two hardware fingerprints differing
+ * only in such a rate agree on this axis and must compare equal on it -- they
+ * are the same programmed hardware only if every other axis also agrees.
+ *
+ * Callers compare this value instead of raw fps, and must not restate the
+ * predicate above: the compared value has to follow whatever the writer
+ * actually programs, so that changing the window changes both at once.  Note
+ * that entering the window, leaving it, and moving inside it all yield
+ * different values, because the register encodes the exact rate.
+ */
+static inline unsigned int max9296_preview_programmed_max_fps(
+    unsigned int width, unsigned int height, unsigned int fps) {
+  return max9296_preview_output_uses_high_fps(width, height, fps)
+             ? max9296_preview_max_fps_fixed8(fps)
+             : 0U;
+}
+
 #endif

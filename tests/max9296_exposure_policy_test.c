@@ -32,6 +32,45 @@ static void test_shared_baseline_keeps_pair_policy(void) {
   CHECK(decision.value == 7000U);
 }
 
+/*
+ * max9296 #82.  The hardware identity compares this route, so a cadence change
+ * that flips it must change the value and one that does not must not.  The 720p
+ * modes are the ones that matter: their mode ceiling is 60 while their exposure
+ * ceiling is 30, and they never enter the 640x360 preview window, so the preview
+ * ceiling stays 0 across the whole range and this is the only axis that moves.
+ */
+static void test_fps_seed_route_is_comparable_hardware_state(void) {
+  /* Crossing the exposure ceiling changes which registers a replay writes. */
+  CHECK(max9296_exposure_fps_seed_route(0U, 30U, 30U) !=
+        max9296_exposure_fps_seed_route(0U, 60U, 30U));
+  CHECK(max9296_exposure_fps_seed_route(1U, 30U, 30U) !=
+        max9296_exposure_fps_seed_route(1U, 60U, 30U));
+
+  /* Two rates on the same side of it are the same programmed route, which is
+   * what still lets warm reuse accept a cadence change. */
+  CHECK(max9296_exposure_fps_seed_route(0U, 45U, 30U) ==
+        max9296_exposure_fps_seed_route(0U, 60U, 30U));
+  CHECK(max9296_exposure_fps_seed_route(1U, 45U, 30U) ==
+        max9296_exposure_fps_seed_route(1U, 60U, 30U));
+  CHECK(max9296_exposure_fps_seed_route(0U, 15U, 30U) ==
+        max9296_exposure_fps_seed_route(0U, 30U, 30U));
+
+  /* A mode whose ceiling equals its exposure ceiling cannot cross it at all. */
+  CHECK(max9296_exposure_fps_seed_route(1U, 1U, 30U) ==
+        max9296_exposure_fps_seed_route(1U, 30U, 30U));
+
+  /* It reports the real route rather than a restatement of the condition, so
+   * dual and single differ below the ceiling and agree above it. */
+  CHECK(max9296_exposure_fps_seed_route(0U, 60U, 30U) ==
+        MAX9296_EXPOSURE_SEED_SKIP);
+  CHECK(max9296_exposure_fps_seed_route(1U, 60U, 30U) ==
+        MAX9296_EXPOSURE_SEED_SKIP);
+  CHECK(max9296_exposure_fps_seed_route(1U, 30U, 30U) ==
+        MAX9296_EXPOSURE_SEED_PAIR);
+  CHECK(max9296_exposure_fps_seed_route(0U, 30U, 30U) ==
+        MAX9296_EXPOSURE_SEED_CHANNEL);
+}
+
 static void test_dual_runtime_override_replays_each_channel(void) {
   struct max9296_exposure_replay_decision ch0;
   struct max9296_exposure_replay_decision ch1;
@@ -200,6 +239,7 @@ static void test_shared_and_channel_batch_applies_override_after_baseline(void) 
 
 int main(void) {
   test_shared_baseline_keeps_pair_policy();
+  test_fps_seed_route_is_comparable_hardware_state();
   test_dual_runtime_override_replays_each_channel();
   test_single_runtime_override_uses_active_channel();
   test_single_live_write_targets_only_the_active_channel();

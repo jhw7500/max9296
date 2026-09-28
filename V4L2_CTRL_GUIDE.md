@@ -210,10 +210,16 @@ frame period, `over_period` 여부, 안전 상한, `action=write` 가 기록된�
 모드가 허용하지 않는 FPS, 0 FPS, 잘못된 검증 상한은 레지스터를 건드리기 전에
 `-EINVAL` 로 거부하며 `exposure write rejected` 로그를 남긴다.
 
-`exp_time` 값 자체에는 상한이 없다 (`0 ~ INT_MAX`, 기본 10000). frame period 초과를
-알리는 `over_period` 는 위 경고 안에서만 계산·기록되므로, 안전 상한 이하로 도는
-모드에서는 frame period를 크게 넘는 노출값을 넣어도 경고가 남지 않는다. 값의 타당성은
-호출자가 판단해야 한다. 참고로 nominal frame period는 120 FPS에서 약 8,333 us,
+`exp_time` 값 자체에는 상한이 없다 (`0 ~ INT_MAX`, 기본 10000). frame period 초과는
+두 FPS 구간 모두에서 보고하지만 경계 판정이 다르다 — 안전 상한을 넘는 구간에서는 위
+`exposure write outside qualified range` 경고의 `over_period` 필드가
+`exposure >= frame period`로, 안전 상한 이하 구간에서는 별도
+`exposure write above frame period` 경고가 `exposure > frame period`로 낸다. 그래서
+`exposure == frame period`는 앞 구간에서만 보고된다 — 30 FPS의 33,333 us, 곧 바로
+아래에서 설명하는 `0x2028` 펌웨어 기본값이 정확히 그 경우다. 뒤 경고는
+`printk_ratelimited`이므로 버스트에서 일부가 누락되며, 로그 건수를 계수 근거로 쓸 수
+없다. 어느 쪽도 값을
+클램프하지 않으므로 값의 타당성은 호출자가 판단해야 한다. 참고로 nominal frame period는 120 FPS에서 약 8,333 us,
 60 FPS에서 약 16,667 us다.
 
 **다만 하드웨어는 상한을 건다.** 실효 노출은

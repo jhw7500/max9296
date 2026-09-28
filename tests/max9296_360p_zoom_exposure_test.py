@@ -13,22 +13,69 @@ SOURCE = ROOT / "max9296.c"
 POLICY = ROOT / "max9296_360p_policy.h"
 
 
+def blank_comments(source: str) -> str:
+    """Replace every C comment with same-length blanks, preserving offsets.
+
+    Searching this copy keeps a definition search out of prose -- a comment that
+    mentions ``name()`` used to let the match span past ``*/`` and swallow the
+    next definition -- while offsets still index the original, so callers slice
+    real text and a parameter list may legitimately contain ``/`` again.
+    """
+    return re.sub(
+        r"/\*.*?\*/|//[^\n]*",
+        lambda match: re.sub(r"[^\n]", " ", match.group(0)),
+        source,
+        flags=re.S,
+    )
+
+
 def function(source: str, name: str) -> str:
-    """Return one C function body using brace matching."""
-    match = re.search(rf"\b{name}\s*\([^;]*?\)\s*\{{", source, re.S)
+    """Return one C function body using brace matching.
+
+    Raises LookupError when the definition is absent.  No caller treats absence
+    as acceptable, and an empty return would satisfy every ``token not in body``
+    assertion, so a missing function has to stop the run instead of quietly
+    passing the checks that exist to catch its regressions.  The ``if not
+    <name>`` guards some callers already carry are kept rather than deleted: they
+    are unreachable while this raises, and they are what would keep those
+    callers loud if it ever returned a falsy body again.
+    """
+    searchable = blank_comments(source)
+    match = re.search(rf"\b{name}\s*\([^;]*?\)\s*\{{", searchable, re.S)
     if not match:
-        return ""
+        raise LookupError(f"C function is missing from the source: {name}")
 
     start = match.start()
-    brace = source.find("{", match.start())
+    brace = searchable.find("{", match.start())
     depth = 0
-    for index in range(brace, len(source)):
-        if source[index] == "{":
+    for index in range(brace, len(searchable)):
+        if searchable[index] == "{":
             depth += 1
-        elif source[index] == "}":
+        elif searchable[index] == "}":
             depth -= 1
             if depth == 0:
                 return source[start : index + 1]
+    raise LookupError(f"C function body is not brace-matchable: {name}")
+
+
+def block_at(body: str, marker: str) -> str:
+    """Return the brace-matched block whose condition contains marker."""
+    index = body.find(marker)
+    if index < 0:
+        return ""
+
+    brace = body.find("{", index)
+    if brace < 0:
+        return ""
+
+    depth = 0
+    for position in range(brace, len(body)):
+        if body[position] == "{":
+            depth += 1
+        elif body[position] == "}":
+            depth -= 1
+            if depth == 0:
+                return body[brace : position + 1]
     return ""
 
 
@@ -283,6 +330,111 @@ def main() -> int:
         failures.append("mode-valid high-FPS exposure is still rejected with -EBUSY")
     if "warn_high_fps" not in exposure_policy_check:
         failures.append("exposure preflight cannot suppress duplicate high-FPS warnings")
+
+    # max9296 #82. Whether a request reaches the frame period is a property of
+    # the requested rate, not of the qualified-range boundary, so the comparison
+    # must not live only inside that warning: every mode at or below
+    # safe_max_fps used to report nothing. Remove the qualified-range block and
+    # require the remainder to still compare the frame period.
+    qualified_block = block_at(
+        exposure_policy_check, "MAX9296_EXPOSURE_POLICY_WARN && warn_high_fps"
+    )
+    if not qualified_block:
+        failures.append("qualified-range warning block is not brace-matchable")
+    elif "frame_period_us" not in exposure_policy_check.replace(qualified_block, "", 1):
+        failures.append(
+            "frame period is compared only inside the qualified-range warning"
+        )
+
+    # max9296 #82. The hardware identity must follow what fps actually programs
+    # rather than the requested rate, so it derives the preview ceiling from the
+    # same predicate the writer uses instead of reading fps directly.
+    fingerprint_equal = function(source, "max9296_fingerprint_equal")
+    if not fingerprint_equal:
+        failures.append("max9296_fingerprint_equal is missing")
+    else:
+        if "max9296_fingerprint_preview_max_fps" not in fingerprint_equal:
+            failures.append(
+                "hardware identity does not derive the programmed preview ceiling"
+            )
+        if "max9296_fingerprint_exposure_seed_route" not in fingerprint_equal:
+            failures.append(
+                "hardware identity does not compare the exposure seed route"
+            )
+        if "->fps==" in re.sub(r"\s+", "", fingerprint_equal):
+            failures.append("hardware identity still compares raw fps")
+
+    # The preview ceiling is not the only register derived from fps: the rate also
+    # decides whether a cached replay writes the EXP_TIME seed and its AE_CTRL
+    # MANUAL pre-write. Warm reuse skips that replay, and on the 720p modes the
+    # crossing is invisible to the preview ceiling, so the identity has to carry
+    # it as its own term -- derived by asking the real route rather than by
+    # restating its condition.
+    seed_derivation = function(
+        source, "max9296_fingerprint_exposure_seed_route"
+    )
+    if not seed_derivation:
+        failures.append("exposure seed route derivation is missing")
+    else:
+        if "max9296_exposure_fps_seed_route" not in seed_derivation:
+            failures.append(
+                "seed route derivation does not ask the real replay decision"
+            )
+        if "exposure_safe_max_fps" not in seed_derivation:
+            failures.append(
+                "seed route derivation does not use the mode's exposure ceiling"
+            )
+        if ">" in re.sub(r"\s+", "", seed_derivation).replace("->", ""):
+            failures.append("seed route derivation restates the fps comparison")
+
+    # max9296 #82 round-1 blocker. The register writer halves the width for dual
+    # modes before it evaluates the preview predicate, so the identity
+    # comparison must apply that same transformation instead of the raw stored
+    # width, which derives 0 at every dual rate.
+    preview_derivation = function(source, "max9296_fingerprint_preview_max_fps")
+    if not preview_derivation:
+        failures.append("per-channel preview ceiling derivation is missing")
+    elif "max9296_mode_is_dual" not in preview_derivation:
+        failures.append("preview ceiling derivation ignores the dual-mode width")
+
+    # Request identity keeps raw fps: a prepare resubmission or a match= report
+    # that differs only in cadence is a different command.
+    request_equal = function(source, "max9296_request_fingerprint_equal")
+    if not request_equal:
+        failures.append("request identity predicate is missing")
+    elif "->fps==" not in re.sub(r"\s+", "", request_equal):
+        failures.append("request identity does not compare raw fps")
+
+    # Both request-identity consumers must keep seeing the cadence: the
+    # generation-rebind guard and the sysfs match= bit.
+    prepare_request = function(source, "max9296_prepare_request")
+    if not prepare_request:
+        failures.append("max9296_prepare_request is missing")
+    elif "prepare_fingerprint.fps!=" not in re.sub(r"\s+", "", prepare_request):
+        failures.append("generation rebind guard does not compare raw fps")
+    prepare_show = function(source, "sysfs_prepare_show")
+    if not prepare_show:
+        failures.append("sysfs_prepare_show is missing")
+    elif "max9296_request_fingerprint_equal" not in prepare_show:
+        failures.append("sysfs match= does not use request identity")
+
+    # The independent frame-period warning must be bounded and must not fire at
+    # the AP1302 AE ceiling firmware default, which equals the 30 fps period
+    # exactly. Scope this to that block: the qualified-range warning above keeps
+    # reporting over_period with >= as a field, which is not a gate.
+    independent_block = block_at(
+        exposure_policy_check,
+        "warn_high_fps && decision != MAX9296_EXPOSURE_POLICY_WARN",
+    )
+    if not independent_block:
+        failures.append("independent frame-period block is not brace-matchable")
+    else:
+        if "printk_ratelimited" not in independent_block:
+            failures.append("frame-period warning is not ratelimited")
+        if "exposure>=frame_period_us" in re.sub(r"\s+", "", independent_block):
+            failures.append(
+                "frame-period gate still warns at the AE ceiling default"
+            )
 
     direct_exposure_writes = re.findall(
         r"maxim_ops_i2c_write\s*\([^;]*?AP1302_REG_EXP_TIME", source, re.S
@@ -921,4 +1073,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        status = main()
+    except LookupError as error:
+        print(f"FAIL: {error}", file=sys.stderr)
+        status = 1
+    raise SystemExit(status)

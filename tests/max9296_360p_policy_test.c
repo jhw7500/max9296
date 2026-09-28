@@ -39,6 +39,69 @@ static void test_high_fps_policy_uses_fixed8_values(void) {
   CHECK(max9296_preview_max_fps_fixed8(120U) == 0x7800U);
 }
 
+/*
+ * max9296 #82.  This is one of the two fps footprints a hardware identity
+ * compares, not the whole of it -- the cached-exposure seed route is the other
+ * and is covered by tests/max9296_exposure_policy_test.c.  Rates that program
+ * no preview ceiling must agree on this axis.
+ */
+static void test_programmed_max_fps_models_the_preview_ceiling(void) {
+  /* Outside the 640x360 window nothing is derived from fps, so a cadence
+   * change there is the same programmed hardware. */
+  CHECK(max9296_preview_programmed_max_fps(2560U, 720U, 15U) ==
+        max9296_preview_programmed_max_fps(2560U, 720U, 20U));
+  CHECK(max9296_preview_programmed_max_fps(1280U, 720U, 60U) == 0U);
+  CHECK(max9296_preview_programmed_max_fps(1920U, 1080U, 30U) == 0U);
+
+  /* At or below the window, and past the negotiation ceiling, the register is
+   * left untouched. */
+  CHECK(max9296_preview_programmed_max_fps(640U, 360U, 20U) == 0U);
+  CHECK(max9296_preview_programmed_max_fps(640U, 360U, 30U) == 0U);
+  CHECK(max9296_preview_programmed_max_fps(640U, 360U, 121U) == 0U);
+
+  /* Inside the window the exact rate is encoded.  A build whose ceiling closes
+   * the window derives nothing at any rate, so every expectation below is taken
+   * from the ceiling rather than from a literal and holds in both the
+   * qualification and the restricted build. */
+  CHECK(max9296_preview_programmed_max_fps(640U, 360U,
+                                           MAX9296_360P_EXPECTED_MAX_FPS) ==
+        (MAX9296_360P_EXPECTED_MAX_FPS >= 31U
+             ? max9296_preview_max_fps_fixed8(MAX9296_360P_EXPECTED_MAX_FPS)
+             : 0U));
+
+  /* Entering, leaving and moving within the window are each a different
+   * programmed hardware wherever the window is open.  The pair for the last
+   * case is derived from the ceiling so it stays inside that window. */
+  CHECK((max9296_preview_programmed_max_fps(640U, 360U,
+                                            MAX9296_360P_EXPECTED_MAX_FPS) !=
+         max9296_preview_programmed_max_fps(640U, 360U, 20U)) ==
+        (MAX9296_360P_EXPECTED_MAX_FPS >= 31U));
+  CHECK((max9296_preview_programmed_max_fps(640U, 360U, 20U) !=
+         max9296_preview_programmed_max_fps(
+             640U, 360U, MAX9296_360P_EXPECTED_MAX_FPS)) ==
+        (MAX9296_360P_EXPECTED_MAX_FPS >= 31U));
+  CHECK((max9296_preview_programmed_max_fps(640U, 360U,
+                                            MAX9296_360P_EXPECTED_MAX_FPS) !=
+         max9296_preview_programmed_max_fps(
+             640U, 360U, MAX9296_360P_EXPECTED_MAX_FPS - 1U)) ==
+        (MAX9296_360P_EXPECTED_MAX_FPS >= 32U));
+
+  /* Trap (max9296 #82 round-1 blocker).  This helper takes an OUTPUT size, but
+   * the dual 640x360 mode stores the combined width 1280.  Handing it the raw
+   * stored width derives 0 at every rate, which makes two in-window rates
+   * compare equal, so callers must halve the width for dual modes exactly as
+   * the register writer does. */
+  CHECK(max9296_preview_programmed_max_fps(1280U, 360U, 60U) == 0U);
+  CHECK(max9296_preview_programmed_max_fps(1280U, 360U, 120U) == 0U);
+  CHECK(max9296_preview_programmed_max_fps(1280U, 360U,
+                                           MAX9296_360P_EXPECTED_MAX_FPS) == 0U);
+  CHECK((max9296_preview_programmed_max_fps(640U, 360U,
+                                            MAX9296_360P_EXPECTED_MAX_FPS) !=
+         max9296_preview_programmed_max_fps(
+             1280U, 360U, MAX9296_360P_EXPECTED_MAX_FPS)) ==
+        (MAX9296_360P_EXPECTED_MAX_FPS >= 31U));
+}
+
 static void test_only_360p_exposes_the_high_fps_policy(void) {
   CHECK(MAX9296_HD_MAX_FPS == MAX9296_HD_EXPECTED_MAX_FPS);
   CHECK(max9296_mode_max_fps(1920U, 1080U) == 30U);
@@ -98,6 +161,7 @@ static void test_full_fov_roi_is_normalized(void) {
 int main(void) {
   test_sensor_mode_preserves_unowned_bits();
   test_high_fps_policy_uses_fixed8_values();
+  test_programmed_max_fps_models_the_preview_ceiling();
   test_only_360p_exposes_the_high_fps_policy();
   test_high_fps_manual_exposure_warns_without_rejection();
   test_full_fov_roi_is_normalized();

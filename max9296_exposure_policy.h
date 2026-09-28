@@ -92,6 +92,27 @@ max9296_exposure_replay_decision(
   return decision;
 }
 
+/*
+ * The fps footprint of the route above.  The rate decides whether a cached
+ * replay writes the EXP_TIME seed (0x500c) and the AE_CTRL MANUAL pre-write
+ * (0x5002) at all, so a hardware identity that lets warm reuse skip that replay
+ * has to compare this.
+ *
+ * It asks the real decision rather than restating its condition.  fps is the
+ * only axis varied; the others are pinned to the one combination under which
+ * the route depends on fps at all (no runtime override, pair AE on), which is
+ * also the combination warm reuse would replay under.  Changing the condition
+ * above therefore changes this value in the same edit -- restating a writer's
+ * predicate instead of reusing it is exactly what made the preview-ceiling
+ * comparison wrong for dual modes.
+ */
+static inline enum max9296_exposure_seed_route max9296_exposure_fps_seed_route(
+    unsigned int dual, unsigned int fps, unsigned int safe_max_fps) {
+  return max9296_exposure_replay_decision(dual, 0U, 0U, 1U, fps, safe_max_fps,
+                                          0U, 0U, 0U)
+      .route;
+}
+
 static inline unsigned int max9296_exposure_channel_is_active(
     unsigned int dual, unsigned int active_local_channel,
     unsigned int requested_local_channel) {

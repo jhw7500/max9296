@@ -267,8 +267,13 @@ readout 비교(`run_360p_readout_compare.sh`), health 익스포트
   1920x1080은 모드 상한도 30이라 이 구간이 없다 — 30 이하는 경고 없이 쓰고 31 이상은
   `-EINVAL`이다.
 - **`exp_time` 값 자체에는 상한이 없다** (`0 ~ INT_MAX`, 기본 10000). frame period
-  초과를 알리는 `over_period`는 위 경고 안에서만 계산되므로, 안전 상한 이하로 도는
-  모드에서는 비정상적으로 긴 노출값도 경고 없이 그대로 나간다.
+  초과는 두 FPS 구간 모두에서 보고하지만 **경계 판정이 다르다** — 안전 상한 초과
+  구간은 위 경고의 `over_period` 필드가 `exposure >= frame period`로, 안전 상한 이하
+  구간은 별도 `exposure write above frame period` 경고가 `exposure > frame period`로
+  낸다. 따라서 `exposure == frame period`인 경우(30 FPS의 33,333 us — 곧 `0x2028`
+  펌웨어 기본값)는 **안전 상한 초과 구간에서만** 보고된다. 후자는
+  `printk_ratelimited`라 버스트에서 일부가 누락되므로 로그 건수를 계수 근거로 쓸 수
+  없다. 값은 클램프하지 않으므로 타당성은 호출자가 판단한다.
 - 모드가 허용하지 않는 FPS, 0 FPS, 잘못된 검증 상한은 I2C 전에 `-EINVAL`로 거부한다.
 - **1920x1080은 30 FPS를 넘길 수 없다.** 1080p 모드의 라인타임 26.27 us로는 60 FPS
   트리거 주기 안에 한 프레임을 못 읽어 AP1302가 정수 트리거 분주로 떨어지고, 요청을

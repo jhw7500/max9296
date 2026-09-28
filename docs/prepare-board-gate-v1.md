@@ -29,6 +29,13 @@
 | G3 cancel / expiry / 잘못된 요청 정리 | cancel 후 `IDLE`+재 prepare 성공(전원 누수 없음), 미사용 lease 60초 만료, 잘못된 요청 5종 거부 + 상태 불변 |
 | G4 single / dual 반복 사이클 | 매 사이클 hard reset, 병렬 cold prepare, STREAMON을 수행. `CONSUMED`/`lease=0`/`match=1`/`worker_errno=0` 유지와 예상 펌웨어 다운로드 건수(dual 2, single 1)를 확인 |
 
+`match=1` 은 요청 신원(런타임 tuple == 요청 tuple, `fps` 포함)과 하드웨어 신원(raw fps
+대신 fps 가 실제로 프로그래밍하는 레지스터만 비교)이 함께 성립함을 뜻한다 — 정의는
+[`docs/parallel-prepare-v1.md`](parallel-prepare-v1.md) 에 있다. 위 게이트들은 한
+사이클 안에서 `fps` 를 바꾸지 않으므로 하드웨어 항이 raw fps 를 빼도 이 판정 기준은
+약해지지 않는다. cadence 를 바꾸며 재사용을 검증하려면 그 전이를 별도 케이스로 세워야
+한다.
+
 ## 실행
 
 ```sh

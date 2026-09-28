@@ -2559,6 +2559,36 @@ static int max9296_check_exposure_policy(
            safe_max_fps);
   }
 
+  /*
+   * The qualified-range warning computes over_period only past the
+   * administrative fps boundary, so an exposure at or above the frame period
+   * went unreported on every mode running at or below that boundary - which is
+   * every 1080p stream and the whole 1..30 fps range of the other modes.
+   * Whether a request exceeds the frame period is a property of the requested
+   * rate, not of the qualified range, so report it independently.  The WARN
+   * branch above already carries the same field, hence the exclusion rather
+   * than a second line for the same write.
+   */
+  if (warn_high_fps && decision != MAX9296_EXPOSURE_POLICY_WARN) {
+    u32 frame_period_us = max9296_exposure_frame_period_us(fps);
+
+    /* Ratelimited, and strictly above the period like the sibling
+     * preview_ae_max_et report: V4L2_CID_EXP_TIME is EXECUTE_ON_WRITE, so every
+     * S_EXT_CTRLS reaches this path even with an unchanged value, and the
+     * AP1302 AE ceiling firmware default is exactly the 30 fps period.  A
+     * per-write warning at that value would let a video-device holder grow the
+     * kernel log without bound while this driver runs its FSYNC pulse train
+     * from a kthread. */
+    if (frame_period_us && exposure > frame_period_us)
+      printk_ratelimited(KERN_WARNING
+             "[%s:%d][%s:%d] exposure write above frame period "
+             "channel=%s mode=%ux%u(id=%d) fps=%u exposure=%u "
+             "frame_period_us=%u over_period=1 safe_max_fps=%u action=write",
+             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+             channel, mode->width, mode->height, mode->id, fps, exposure,
+             frame_period_us, safe_max_fps);
+  }
+
   return 0;
 }
 
@@ -4676,13 +4706,104 @@ static int max9296_normalize_fingerprint_locked(
   return 0;
 }
 
+/*
+ * This is a hardware identity, and raw fps on its own is not part of it: the
+ * register tables are chosen by resolution, and the guard that consumes this
+ * comparison exists for topology safety (a dual table may have remapped a
+ * serializer).  Comparing raw fps therefore claimed hardware state that no
+ * register backs, and it put a cadence change on the topology gate.
+ *
+ * Compare what fps does program instead.  Enumerating every write the driver
+ * derives from the rate, so that a later edit adds to a list rather than
+ * re-deciding what the list is:
+ *
+ *   0x2020 PREVIEW_MAX_FPS   value and presence, 640x360 output above 30 fps
+ *   0x6112 TRIGGER_MAX_MISMATCH  presence, on the same predicate as 0x2020
+ *   0x500c EXP_TIME seed     presence, cached replay skipped above the mode's
+ *                            exposure_safe_max_fps
+ *   0x5002 AE_CTRL MANUAL    presence, the pre-write on that same gate
+ *
+ * The first two are compared through max9296_fingerprint_preview_max_fps(), the
+ * last two through max9296_fingerprint_exposure_seed_route().  Both helpers
+ * derive from the deciding code rather than restating its condition.  The FSYNC
+ * pulse period is deliberately absent: it is a GPIO cadence the kthread
+ * recomputes from READ_ONCE(sensor->fps) every iteration, so it self-corrects
+ * and no warm reuse can strand it.
+ *
+ * A rate change that moves none of the four is the same programmed hardware and
+ * matches, so warm reuse is still allowed where it is safe -- 45 vs 60 fps on
+ * 1280x720 for instance.  A rate change that moves any of them differs and
+ * still demands reprogramming.
+ */
+/*
+ * max9296_post_firmware_program_locked() halves the width for a dual mode
+ * before it evaluates the preview predicate, so the comparison has to use that
+ * same per-channel output size.  Reusing the predicate without reusing this
+ * transformation made every dual 640x360 rate derive 0, which compared two
+ * in-window rates equal and let warm reuse skip the reprogram the writer would
+ * have done.  Keep the one transformation in one place.
+ */
+static u32 max9296_fingerprint_preview_max_fps(
+    const struct max9296_hw_fingerprint *fingerprint) {
+  u32 output_width = fingerprint->width;
+
+  if (max9296_mode_is_dual(fingerprint->mode))
+    output_width /= 2;
+
+  return max9296_preview_programmed_max_fps(output_width, fingerprint->height,
+                                            fingerprint->fps);
+}
+
+/*
+ * The cached-exposure replay is reached from max9296_prepare_hardware_locked(),
+ * so warm reuse skips it along with the firmware reload that the SEED_SKIP route
+ * assumes has just reset 0x500c.  Every mode whose max_fps exceeds its
+ * exposure_safe_max_fps can therefore cross that gate, and on the 720p modes the
+ * crossing is invisible to the preview ceiling above, which stays 0 from 1 to 60
+ * fps because 1280x720 never enters the 640x360 window.
+ */
+static enum max9296_exposure_seed_route max9296_fingerprint_exposure_seed_route(
+    const struct max9296_hw_fingerprint *fingerprint) {
+  /*
+   * Every current caller reaches this only after the mode pointers compared
+   * equal, and at least one side of every comparison comes from
+   * max9296_normalize_fingerprint_locked(), which never yields a null mode.  A
+   * never-initialized fingerprint is still null, so stay safe without depending
+   * on the order of the terms below, exactly as max9296_mode_is_dual() does.
+   */
+  if (!fingerprint->mode)
+    return MAX9296_EXPOSURE_SEED_SKIP;
+
+  return max9296_exposure_fps_seed_route(
+      max9296_mode_is_dual(fingerprint->mode) ? 1U : 0U, fingerprint->fps,
+      fingerprint->mode->exposure_safe_max_fps);
+}
+
 static bool max9296_fingerprint_equal(
     const struct max9296_hw_fingerprint *left,
     const struct max9296_hw_fingerprint *right) {
   return left->mode == right->mode && left->width == right->width &&
          left->height == right->height && left->code == right->code &&
-         left->fps == right->fps && left->enable == right->enable &&
+         max9296_fingerprint_preview_max_fps(left) ==
+             max9296_fingerprint_preview_max_fps(right) &&
+         max9296_fingerprint_exposure_seed_route(left) ==
+             max9296_fingerprint_exposure_seed_route(right) &&
+         left->enable == right->enable &&
          left->crop_enable == right->crop_enable;
+}
+
+/*
+ * Request identity, not hardware identity.  fps is a first-class field of the
+ * prepare command and of the reported frame interval, so two requests that
+ * differ only in fps are different commands even when they program the same
+ * registers.  The generation-rebind guard and the sysfs match= bit must keep
+ * seeing that difference; match=1 would otherwise be reported on the same line
+ * as a stale fps.
+ */
+static bool max9296_request_fingerprint_equal(
+    const struct max9296_hw_fingerprint *left,
+    const struct max9296_hw_fingerprint *right) {
+  return max9296_fingerprint_equal(left, right) && left->fps == right->fps;
 }
 
 /* Runtime negotiation is allowed after prepare, but READY/CONSUMED must not be
@@ -5239,9 +5360,14 @@ static int max9296_prepare_request(
   if (ret)
     goto preserve_lease;
 
-  /* One orchestration generation cannot be rebound to another command. */
+  /* One orchestration generation cannot be rebound to another command.  This is
+   * request identity, so the cadence counts even when both rates program the
+   * same registers; see max9296_request_fingerprint_equal().  It is spelled out
+   * here rather than called because tests/max9296_cold_init_epoch_test.py
+   * extracts this function against its own coarse fingerprint model. */
   if (sensor->prepare_generation == generation && generation != 0 &&
-      !max9296_fingerprint_equal(&sensor->prepare_fingerprint, fingerprint)) {
+      (!max9296_fingerprint_equal(&sensor->prepare_fingerprint, fingerprint) ||
+       sensor->prepare_fingerprint.fps != fingerprint->fps)) {
     ret = -ESTALE;
     goto preserve_lease;
   }
@@ -6295,7 +6421,7 @@ static ssize_t sysfs_prepare_show(struct device *dev,
   worker_errno = READ_ONCE(sensor->worker_errno);
   if (sensor->hardware_valid && sensor->initialized_epoch == epoch &&
       !max9296_normalize_fingerprint_locked(sensor, &runtime) &&
-      max9296_fingerprint_equal(&runtime, &prepared) &&
+      max9296_request_fingerprint_equal(&runtime, &prepared) &&
       max9296_prepare_matches_locked(sensor, &runtime))
     match = 1;
   mutex_unlock(&max9296_power_lock);
