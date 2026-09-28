@@ -2559,6 +2559,29 @@ static int max9296_check_exposure_policy(
            safe_max_fps);
   }
 
+  /*
+   * The qualified-range warning computes over_period only past the
+   * administrative fps boundary, so an exposure at or above the frame period
+   * went unreported on every mode running at or below that boundary - which is
+   * every 1080p stream and the whole 1..30 fps range of the other modes.
+   * Whether a request exceeds the frame period is a property of the requested
+   * rate, not of the qualified range, so report it independently.  The WARN
+   * branch above already carries the same field, hence the exclusion rather
+   * than a second line for the same write.
+   */
+  if (warn_high_fps && decision != MAX9296_EXPOSURE_POLICY_WARN) {
+    u32 frame_period_us = max9296_exposure_frame_period_us(fps);
+
+    if (frame_period_us && exposure >= frame_period_us)
+      printk(KERN_WARNING
+             "[%s:%d][%s:%d] exposure write above frame period "
+             "channel=%s mode=%ux%u(id=%d) fps=%u exposure=%u "
+             "frame_period_us=%u over_period=1 safe_max_fps=%u action=write",
+             KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__,
+             channel, mode->width, mode->height, mode->id, fps, exposure,
+             frame_period_us, safe_max_fps);
+  }
+
   return 0;
 }
 

@@ -210,10 +210,11 @@ frame period, `over_period` 여부, 안전 상한, `action=write` 가 기록된�
 모드가 허용하지 않는 FPS, 0 FPS, 잘못된 검증 상한은 레지스터를 건드리기 전에
 `-EINVAL` 로 거부하며 `exposure write rejected` 로그를 남긴다.
 
-`exp_time` 값 자체에는 상한이 없다 (`0 ~ INT_MAX`, 기본 10000). frame period 초과를
-알리는 `over_period` 는 위 경고 안에서만 계산·기록되므로, 안전 상한 이하로 도는
-모드에서는 frame period를 크게 넘는 노출값을 넣어도 경고가 남지 않는다. 값의 타당성은
-호출자가 판단해야 한다. 참고로 nominal frame period는 120 FPS에서 약 8,333 us,
+`exp_time` 값 자체에는 상한이 없다 (`0 ~ INT_MAX`, 기본 10000). frame period 초과는
+FPS 구간과 무관하게 보고한다 — 안전 상한을 넘는 구간에서는 위
+`exposure write outside qualified range` 경고의 `over_period` 필드로, 안전 상한 이하
+구간에서는 별도 `exposure write above frame period` 경고로 남는다. 어느 쪽도 값을
+클램프하지 않으므로 값의 타당성은 호출자가 판단해야 한다. 참고로 nominal frame period는 120 FPS에서 약 8,333 us,
 60 FPS에서 약 16,667 us다.
 
 **다만 하드웨어는 상한을 건다.** 실효 노출은

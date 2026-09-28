@@ -32,6 +32,27 @@ def function(source: str, name: str) -> str:
     return ""
 
 
+def block_at(body: str, marker: str) -> str:
+    """Return the brace-matched block whose condition contains marker."""
+    index = body.find(marker)
+    if index < 0:
+        return ""
+
+    brace = body.find("{", index)
+    if brace < 0:
+        return ""
+
+    depth = 0
+    for position in range(brace, len(body)):
+        if body[position] == "{":
+            depth += 1
+        elif body[position] == "}":
+            depth -= 1
+            if depth == 0:
+                return body[brace : position + 1]
+    return ""
+
+
 MAX9296_DZ_MIN = 100
 MAX9296_DZ_MAX = 300
 SEED_MACROS = {"MAX9296_DZ_DEFAULT": 100, "MAX9296_DZ_CENTER_DEFAULT": 0x8000}
@@ -283,6 +304,21 @@ def main() -> int:
         failures.append("mode-valid high-FPS exposure is still rejected with -EBUSY")
     if "warn_high_fps" not in exposure_policy_check:
         failures.append("exposure preflight cannot suppress duplicate high-FPS warnings")
+
+    # max9296 #82. Whether a request reaches the frame period is a property of
+    # the requested rate, not of the qualified-range boundary, so the comparison
+    # must not live only inside that warning: every mode at or below
+    # safe_max_fps used to report nothing. Remove the qualified-range block and
+    # require the remainder to still compare the frame period.
+    qualified_block = block_at(
+        exposure_policy_check, "MAX9296_EXPOSURE_POLICY_WARN && warn_high_fps"
+    )
+    if not qualified_block:
+        failures.append("qualified-range warning block is not brace-matchable")
+    elif "frame_period_us" not in exposure_policy_check.replace(qualified_block, "", 1):
+        failures.append(
+            "frame period is compared only inside the qualified-range warning"
+        )
 
     direct_exposure_writes = re.findall(
         r"maxim_ops_i2c_write\s*\([^;]*?AP1302_REG_EXP_TIME", source, re.S
