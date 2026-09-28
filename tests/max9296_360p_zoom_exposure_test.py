@@ -327,12 +327,61 @@ def main() -> int:
     if not fingerprint_equal:
         failures.append("max9296_fingerprint_equal is missing")
     else:
-        if "max9296_preview_programmed_max_fps" not in fingerprint_equal:
+        if "max9296_fingerprint_preview_max_fps" not in fingerprint_equal:
             failures.append(
                 "hardware identity does not derive the programmed preview ceiling"
             )
         if "->fps==" in re.sub(r"\s+", "", fingerprint_equal):
             failures.append("hardware identity still compares raw fps")
+
+    # max9296 #82 round-1 blocker. The register writer halves the width for dual
+    # modes before it evaluates the preview predicate, so the identity
+    # comparison must apply that same transformation instead of the raw stored
+    # width, which derives 0 at every dual rate.
+    preview_derivation = function(source, "max9296_fingerprint_preview_max_fps")
+    if not preview_derivation:
+        failures.append("per-channel preview ceiling derivation is missing")
+    elif "max9296_mode_is_dual" not in preview_derivation:
+        failures.append("preview ceiling derivation ignores the dual-mode width")
+
+    # Request identity keeps raw fps: a prepare resubmission or a match= report
+    # that differs only in cadence is a different command.
+    request_equal = function(source, "max9296_request_fingerprint_equal")
+    if not request_equal:
+        failures.append("request identity predicate is missing")
+    elif "->fps==" not in re.sub(r"\s+", "", request_equal):
+        failures.append("request identity does not compare raw fps")
+
+    # Both request-identity consumers must keep seeing the cadence: the
+    # generation-rebind guard and the sysfs match= bit.
+    prepare_request = function(source, "max9296_prepare_request")
+    if not prepare_request:
+        failures.append("max9296_prepare_request is missing")
+    elif "prepare_fingerprint.fps!=" not in re.sub(r"\s+", "", prepare_request):
+        failures.append("generation rebind guard does not compare raw fps")
+    prepare_show = function(source, "sysfs_prepare_show")
+    if not prepare_show:
+        failures.append("sysfs_prepare_show is missing")
+    elif "max9296_request_fingerprint_equal" not in prepare_show:
+        failures.append("sysfs match= does not use request identity")
+
+    # The independent frame-period warning must be bounded and must not fire at
+    # the AP1302 AE ceiling firmware default, which equals the 30 fps period
+    # exactly. Scope this to that block: the qualified-range warning above keeps
+    # reporting over_period with >= as a field, which is not a gate.
+    independent_block = block_at(
+        exposure_policy_check,
+        "warn_high_fps && decision != MAX9296_EXPOSURE_POLICY_WARN",
+    )
+    if not independent_block:
+        failures.append("independent frame-period block is not brace-matchable")
+    else:
+        if "printk_ratelimited" not in independent_block:
+            failures.append("frame-period warning is not ratelimited")
+        if "exposure>=frame_period_us" in re.sub(r"\s+", "", independent_block):
+            failures.append(
+                "frame-period gate still warns at the AE ceiling default"
+            )
 
     direct_exposure_writes = re.findall(
         r"maxim_ops_i2c_write\s*\([^;]*?AP1302_REG_EXP_TIME", source, re.S

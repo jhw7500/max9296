@@ -83,6 +83,21 @@ static void test_programmed_max_fps_is_the_only_fps_footprint(void) {
          max9296_preview_programmed_max_fps(
              640U, 360U, MAX9296_360P_EXPECTED_MAX_FPS - 1U)) ==
         (MAX9296_360P_EXPECTED_MAX_FPS >= 32U));
+
+  /* Trap (max9296 #82 round-1 blocker).  This helper takes an OUTPUT size, but
+   * the dual 640x360 mode stores the combined width 1280.  Handing it the raw
+   * stored width derives 0 at every rate, which makes two in-window rates
+   * compare equal, so callers must halve the width for dual modes exactly as
+   * the register writer does. */
+  CHECK(max9296_preview_programmed_max_fps(1280U, 360U, 60U) == 0U);
+  CHECK(max9296_preview_programmed_max_fps(1280U, 360U, 120U) == 0U);
+  CHECK(max9296_preview_programmed_max_fps(1280U, 360U,
+                                           MAX9296_360P_EXPECTED_MAX_FPS) == 0U);
+  CHECK((max9296_preview_programmed_max_fps(640U, 360U,
+                                            MAX9296_360P_EXPECTED_MAX_FPS) !=
+         max9296_preview_programmed_max_fps(
+             1280U, 360U, MAX9296_360P_EXPECTED_MAX_FPS)) ==
+        (MAX9296_360P_EXPECTED_MAX_FPS >= 31U));
 }
 
 static void test_only_360p_exposes_the_high_fps_policy(void) {
