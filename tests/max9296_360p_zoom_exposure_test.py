@@ -320,6 +320,20 @@ def main() -> int:
             "frame period is compared only inside the qualified-range warning"
         )
 
+    # max9296 #82. The hardware identity must follow what fps actually programs
+    # rather than the requested rate, so it derives the preview ceiling from the
+    # same predicate the writer uses instead of reading fps directly.
+    fingerprint_equal = function(source, "max9296_fingerprint_equal")
+    if not fingerprint_equal:
+        failures.append("max9296_fingerprint_equal is missing")
+    else:
+        if "max9296_preview_programmed_max_fps" not in fingerprint_equal:
+            failures.append(
+                "hardware identity does not derive the programmed preview ceiling"
+            )
+        if "->fps==" in re.sub(r"\s+", "", fingerprint_equal):
+            failures.append("hardware identity still compares raw fps")
+
     direct_exposure_writes = re.findall(
         r"maxim_ops_i2c_write\s*\([^;]*?AP1302_REG_EXP_TIME", source, re.S
     )

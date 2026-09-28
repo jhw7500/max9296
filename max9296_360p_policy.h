@@ -133,4 +133,23 @@ static inline unsigned int max9296_preview_output_uses_high_fps(
          fps <= MAX9296_360P_MAX_FPS && max9296_preview_uses_high_fps(fps);
 }
 
+/*
+ * The preview ceiling is the only register the driver derives from fps -- the
+ * mode tables are selected by resolution alone.  A rate that leaves no register
+ * footprint returns 0, so two hardware fingerprints differing only in such a
+ * rate describe the same programmed hardware and must compare equal.
+ *
+ * Callers compare this value instead of raw fps, and must not restate the
+ * predicate above: the compared value has to follow whatever the writer
+ * actually programs, so that changing the window changes both at once.  Note
+ * that entering the window, leaving it, and moving inside it all yield
+ * different values, because the register encodes the exact rate.
+ */
+static inline unsigned int max9296_preview_programmed_max_fps(
+    unsigned int width, unsigned int height, unsigned int fps) {
+  return max9296_preview_output_uses_high_fps(width, height, fps)
+             ? max9296_preview_max_fps_fixed8(fps)
+             : 0U;
+}
+
 #endif

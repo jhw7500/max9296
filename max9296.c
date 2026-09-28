@@ -4699,12 +4699,28 @@ static int max9296_normalize_fingerprint_locked(
   return 0;
 }
 
+/*
+ * This is a hardware identity, and fps on its own is not part of it: the
+ * register tables are chosen by resolution, and the guard that consumes this
+ * comparison exists for topology safety (a dual table may have remapped a
+ * serializer).  Comparing raw fps therefore claimed hardware state that no
+ * register backs, and it put a cadence change on the topology gate.
+ *
+ * Compare the one thing fps does program instead.  The helper derives it from
+ * the same predicate the writer uses, so a mode that programs nothing from fps
+ * now matches across a cadence change, while entering, leaving, or moving
+ * within the preview window still differs and still demands reprogramming.
+ */
 static bool max9296_fingerprint_equal(
     const struct max9296_hw_fingerprint *left,
     const struct max9296_hw_fingerprint *right) {
   return left->mode == right->mode && left->width == right->width &&
          left->height == right->height && left->code == right->code &&
-         left->fps == right->fps && left->enable == right->enable &&
+         max9296_preview_programmed_max_fps(left->width, left->height,
+                                            left->fps) ==
+             max9296_preview_programmed_max_fps(right->width, right->height,
+                                                right->fps) &&
+         left->enable == right->enable &&
          left->crop_enable == right->crop_enable;
 }
 
