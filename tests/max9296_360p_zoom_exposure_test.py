@@ -13,29 +13,49 @@ SOURCE = ROOT / "max9296.c"
 POLICY = ROOT / "max9296_360p_policy.h"
 
 
+def blank_comments(source: str) -> str:
+    """Replace every C comment with same-length blanks, preserving offsets.
+
+    Searching this copy keeps a definition search out of prose -- a comment that
+    mentions ``name()`` used to let the match span past ``*/`` and swallow the
+    next definition -- while offsets still index the original, so callers slice
+    real text and a parameter list may legitimately contain ``/`` again.
+    """
+    return re.sub(
+        r"/\*.*?\*/|//[^\n]*",
+        lambda match: re.sub(r"[^\n]", " ", match.group(0)),
+        source,
+        flags=re.S,
+    )
+
+
 def function(source: str, name: str) -> str:
     """Return one C function body using brace matching.
 
-    The parameter list may not contain ``/``, which keeps the match from
-    escaping a comment: prose that mentions ``name()`` has to reach ``*/``
-    before any ``{``, so such a mention can no longer swallow the next
-    definition and hand back the wrong body.
+    Raises LookupError when the definition is absent.  No caller treats absence
+    as acceptable, and an empty return would satisfy every ``token not in body``
+    assertion, so a missing function has to stop the run instead of quietly
+    passing the checks that exist to catch its regressions.  The ``if not
+    <name>`` guards some callers already carry are kept rather than deleted: they
+    are unreachable while this raises, and they are what would keep those
+    callers loud if it ever returned a falsy body again.
     """
-    match = re.search(rf"\b{name}\s*\([^;/]*?\)\s*\{{", source, re.S)
+    searchable = blank_comments(source)
+    match = re.search(rf"\b{name}\s*\([^;]*?\)\s*\{{", searchable, re.S)
     if not match:
-        return ""
+        raise LookupError(f"C function is missing from the source: {name}")
 
     start = match.start()
-    brace = source.find("{", match.start())
+    brace = searchable.find("{", match.start())
     depth = 0
-    for index in range(brace, len(source)):
-        if source[index] == "{":
+    for index in range(brace, len(searchable)):
+        if searchable[index] == "{":
             depth += 1
-        elif source[index] == "}":
+        elif searchable[index] == "}":
             depth -= 1
             if depth == 0:
                 return source[start : index + 1]
-    return ""
+    raise LookupError(f"C function body is not brace-matchable: {name}")
 
 
 def block_at(body: str, marker: str) -> str:
@@ -1053,4 +1073,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        status = main()
+    except LookupError as error:
+        print(f"FAIL: {error}", file=sys.stderr)
+        status = 1
+    raise SystemExit(status)
