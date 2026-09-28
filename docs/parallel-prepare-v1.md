@@ -131,9 +131,18 @@ state=READY generation=123 epoch=7 mode=dual-wide table=dual width=2560 height=7
 ```
 
 Treat field order and names as the v1 machine-readable contract. `lease=1`
-means the driver still owns the temporary power reference. `match=1` means the
-current runtime tuple and initialized hardware fingerprint still agree in the
-current board-power epoch.
+means the driver still owns the temporary power reference. `match=1` means two
+things hold in the current board-power epoch: the current runtime tuple equals
+the requested tuple including `fps`, and the initialized hardware fingerprint
+equals the runtime one.
+
+That second term compares what `fps` actually programs -- the preview ceiling
+and the cached-exposure seed route -- rather than the raw rate, so `match=1`
+does not by itself prove the hardware was initialized at the exact `fps` printed
+on the same line. It proves no register the driver derives from the rate
+differs. Two rates that program the same registers are the same hardware, which
+is what lets a cadence change reuse an initialized epoch; a rate change that
+moves either derivation reports `match=0` until the hardware is reprogrammed.
 
 `worker_errno=0` means the local enable worker and the current physical FSYNC
 owner worker are available. A negative value is a durable output-path

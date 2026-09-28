@@ -4707,16 +4707,33 @@ static int max9296_normalize_fingerprint_locked(
 }
 
 /*
- * This is a hardware identity, and fps on its own is not part of it: the
+ * This is a hardware identity, and raw fps on its own is not part of it: the
  * register tables are chosen by resolution, and the guard that consumes this
  * comparison exists for topology safety (a dual table may have remapped a
  * serializer).  Comparing raw fps therefore claimed hardware state that no
  * register backs, and it put a cadence change on the topology gate.
  *
- * Compare the one thing fps does program instead.  The helper derives it from
- * the same predicate the writer uses, so a mode that programs nothing from fps
- * now matches across a cadence change, while entering, leaving, or moving
- * within the preview window still differs and still demands reprogramming.
+ * Compare what fps does program instead.  Enumerating every write the driver
+ * derives from the rate, so that a later edit adds to a list rather than
+ * re-deciding what the list is:
+ *
+ *   0x2020 PREVIEW_MAX_FPS   value and presence, 640x360 output above 30 fps
+ *   0x6112 TRIGGER_MAX_MISMATCH  presence, on the same predicate as 0x2020
+ *   0x500c EXP_TIME seed     presence, cached replay skipped above the mode's
+ *                            exposure_safe_max_fps
+ *   0x5002 AE_CTRL MANUAL    presence, the pre-write on that same gate
+ *
+ * The first two are compared through max9296_fingerprint_preview_max_fps(), the
+ * last two through max9296_fingerprint_exposure_seed_route().  Both helpers
+ * derive from the deciding code rather than restating its condition.  The FSYNC
+ * pulse period is deliberately absent: it is a GPIO cadence the kthread
+ * recomputes from READ_ONCE(sensor->fps) every iteration, so it self-corrects
+ * and no warm reuse can strand it.
+ *
+ * A rate change that moves none of the four is the same programmed hardware and
+ * matches, so warm reuse is still allowed where it is safe -- 45 vs 60 fps on
+ * 1280x720 for instance.  A rate change that moves any of them differs and
+ * still demands reprogramming.
  */
 /*
  * max9296_post_firmware_program_locked() halves the width for a dual mode
@@ -4737,6 +4754,31 @@ static u32 max9296_fingerprint_preview_max_fps(
                                             fingerprint->fps);
 }
 
+/*
+ * The cached-exposure replay is reached from max9296_prepare_hardware_locked(),
+ * so warm reuse skips it along with the firmware reload that the SEED_SKIP route
+ * assumes has just reset 0x500c.  Every mode whose max_fps exceeds its
+ * exposure_safe_max_fps can therefore cross that gate, and on the 720p modes the
+ * crossing is invisible to the preview ceiling above, which stays 0 from 1 to 60
+ * fps because 1280x720 never enters the 640x360 window.
+ */
+static enum max9296_exposure_seed_route max9296_fingerprint_exposure_seed_route(
+    const struct max9296_hw_fingerprint *fingerprint) {
+  /*
+   * Every current caller reaches this only after the mode pointers compared
+   * equal, and at least one side of every comparison comes from
+   * max9296_normalize_fingerprint_locked(), which never yields a null mode.  A
+   * never-initialized fingerprint is still null, so stay safe without depending
+   * on the order of the terms below, exactly as max9296_mode_is_dual() does.
+   */
+  if (!fingerprint->mode)
+    return MAX9296_EXPOSURE_SEED_SKIP;
+
+  return max9296_exposure_fps_seed_route(
+      max9296_mode_is_dual(fingerprint->mode) ? 1U : 0U, fingerprint->fps,
+      fingerprint->mode->exposure_safe_max_fps);
+}
+
 static bool max9296_fingerprint_equal(
     const struct max9296_hw_fingerprint *left,
     const struct max9296_hw_fingerprint *right) {
@@ -4744,6 +4786,8 @@ static bool max9296_fingerprint_equal(
          left->height == right->height && left->code == right->code &&
          max9296_fingerprint_preview_max_fps(left) ==
              max9296_fingerprint_preview_max_fps(right) &&
+         max9296_fingerprint_exposure_seed_route(left) ==
+             max9296_fingerprint_exposure_seed_route(right) &&
          left->enable == right->enable &&
          left->crop_enable == right->crop_enable;
 }

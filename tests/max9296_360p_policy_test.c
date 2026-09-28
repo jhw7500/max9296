@@ -40,10 +40,12 @@ static void test_high_fps_policy_uses_fixed8_values(void) {
 }
 
 /*
- * max9296 #82.  fps belongs to a hardware identity only through the preview
- * ceiling, so rates that program nothing must compare equal.
+ * max9296 #82.  This is one of the two fps footprints a hardware identity
+ * compares, not the whole of it -- the cached-exposure seed route is the other
+ * and is covered by tests/max9296_exposure_policy_test.c.  Rates that program
+ * no preview ceiling must agree on this axis.
  */
-static void test_programmed_max_fps_is_the_only_fps_footprint(void) {
+static void test_programmed_max_fps_models_the_preview_ceiling(void) {
   /* Outside the 640x360 window nothing is derived from fps, so a cadence
    * change there is the same programmed hardware. */
   CHECK(max9296_preview_programmed_max_fps(2560U, 720U, 15U) ==
@@ -159,7 +161,7 @@ static void test_full_fov_roi_is_normalized(void) {
 int main(void) {
   test_sensor_mode_preserves_unowned_bits();
   test_high_fps_policy_uses_fixed8_values();
-  test_programmed_max_fps_is_the_only_fps_footprint();
+  test_programmed_max_fps_models_the_preview_ceiling();
   test_only_360p_exposes_the_high_fps_policy();
   test_high_fps_manual_exposure_warns_without_rejection();
   test_full_fov_roi_is_normalized();

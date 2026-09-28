@@ -14,8 +14,14 @@ POLICY = ROOT / "max9296_360p_policy.h"
 
 
 def function(source: str, name: str) -> str:
-    """Return one C function body using brace matching."""
-    match = re.search(rf"\b{name}\s*\([^;]*?\)\s*\{{", source, re.S)
+    """Return one C function body using brace matching.
+
+    The parameter list may not contain ``/``, which keeps the match from
+    escaping a comment: prose that mentions ``name()`` has to reach ``*/``
+    before any ``{``, so such a mention can no longer swallow the next
+    definition and hand back the wrong body.
+    """
+    match = re.search(rf"\b{name}\s*\([^;/]*?\)\s*\{{", source, re.S)
     if not match:
         return ""
 
@@ -331,8 +337,35 @@ def main() -> int:
             failures.append(
                 "hardware identity does not derive the programmed preview ceiling"
             )
+        if "max9296_fingerprint_exposure_seed_route" not in fingerprint_equal:
+            failures.append(
+                "hardware identity does not compare the exposure seed route"
+            )
         if "->fps==" in re.sub(r"\s+", "", fingerprint_equal):
             failures.append("hardware identity still compares raw fps")
+
+    # The preview ceiling is not the only register derived from fps: the rate also
+    # decides whether a cached replay writes the EXP_TIME seed and its AE_CTRL
+    # MANUAL pre-write. Warm reuse skips that replay, and on the 720p modes the
+    # crossing is invisible to the preview ceiling, so the identity has to carry
+    # it as its own term -- derived by asking the real route rather than by
+    # restating its condition.
+    seed_derivation = function(
+        source, "max9296_fingerprint_exposure_seed_route"
+    )
+    if not seed_derivation:
+        failures.append("exposure seed route derivation is missing")
+    else:
+        if "max9296_exposure_fps_seed_route" not in seed_derivation:
+            failures.append(
+                "seed route derivation does not ask the real replay decision"
+            )
+        if "exposure_safe_max_fps" not in seed_derivation:
+            failures.append(
+                "seed route derivation does not use the mode's exposure ceiling"
+            )
+        if ">" in re.sub(r"\s+", "", seed_derivation).replace("->", ""):
+            failures.append("seed route derivation restates the fps comparison")
 
     # max9296 #82 round-1 blocker. The register writer halves the width for dual
     # modes before it evaluates the preview predicate, so the identity
