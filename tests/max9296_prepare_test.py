@@ -79,6 +79,23 @@ class Board:
             owner.fsync_contract_fps = fps
         for camera in self.cameras:
             camera.fps = fps
+            # The driver stores no runtime fingerprint: sysfs_prepare_show()
+            # re-derives it from READ_ONCE(sensor->fps) every read, so a peer
+            # whose rate this just rewrote reports match=0 against its own
+            # request. Rewriting every camera's runtime identity here keeps the
+            # model from certifying a match the driver would refuse.
+            # Rewrite the identity only. max9296_configure_shared_fsync_locked()
+            # does WRITE_ONCE(peer->fps, fps) and calls nothing that marks the
+            # peer stale -- max9296_mark_prepare_stale_locked() is reached only
+            # from max9296_s_frame_interval(), on the calling sensor. Going
+            # through rewrite_runtime() here would transition the peer's
+            # prepare_state, which the driver never does.
+            if camera.runtime_fingerprint is not None:
+                camera.runtime_fingerprint = (
+                    *camera.runtime_fingerprint[:2],
+                    fps,
+                    camera.runtime_fingerprint[3],
+                )
         return True
 
     def physical_fsync_fps(self) -> int:
@@ -387,6 +404,14 @@ class Camera:
         self.stream_commit_epoch = self.board.epoch
         self.board.epoch_guarded = False
         return True
+
+    def stop_stream(self) -> None:
+        """STREAMOFF releases the reservation only when it ended a stream."""
+        was_streaming = self.streaming
+        self.streaming = False
+        self.stream_commit_epoch = 0
+        if was_streaming:
+            self.drop_fsync_contract()
 
     def stream_on_admission(
         self, request_lock_available: bool, sensor_lock_available: bool
@@ -784,6 +809,77 @@ def check_model(failures: list[str]) -> None:
     if peer.set_frame_interval(60) != "estale" or (owner.fps, peer.fps) != before:
         failures.append("bound shared cadence must reject conflicting V4L2 FPS")
 
+    # A reservation protects one shared pulse train, so it is needed while its
+    # instance streams -- not until the board loses power.  The hardware epoch it
+    # is keyed to does not advance while the vendor capture driver holds its power
+    # reference, so keying the lifetime to the epoch bound a rate until the module
+    # was unbound.  Both sides stopping must free the cadence; a peer that still
+    # streams must keep refusing it.
+    common_20 = (2560, 720, 20, 3)
+    board = Board()
+    first, second = Camera(board), Camera(board)
+    first.request_prepare(100, common_30)
+    second.request_prepare(101, common_30)
+    first.commit_stream()
+    second.commit_stream()
+    # A committed stream holds a reservation. This is the rule, stated over the
+    # Python model -- it cannot observe max9296.c, so it does not catch a release
+    # placed on the common path in the driver. What catches that is the executed
+    # case in max9296_exposure_failure_test.py that drives a successful
+    # max9296_s_stream(sd, 1) and requires the release count to stay at zero.
+    for camera, name in ((first, "first"), (second, "second")):
+        if camera.fsync_contract_epoch != board.epoch:
+            failures.append(f"a committed stream ({name}) holds no FSYNC reservation")
+    if first.set_frame_interval(20) != "estale":
+        failures.append("a streaming pair must refuse a shared cadence change")
+    first.stop_stream()
+    if second.set_frame_interval(20) != "estale":
+        failures.append("a still-streaming peer must keep refusing a cadence change")
+    second.stop_stream()
+    if first.set_frame_interval(20) != "ok" or (first.fps, second.fps) != (20, 20):
+        failures.append("a fully stopped pair must accept a new shared cadence")
+    # The peer's rate was rewritten too, so its reported identity must stop
+    # matching its own request -- the driver re-derives runtime from sensor->fps
+    # on every sysfs read and compares raw fps, so it reports match=0 here.
+    if second.prepare_status_matches():
+        failures.append("a peer whose rate was rewritten must not report match=1")
+
+    # An s_stream(0) that never had a start ends nothing, so it must leave the
+    # reservation a successful prepare took. Stripping it there would let a peer
+    # move the cadence out from under an instance whose hardware is already
+    # initialized for the rate it prepared.
+    board = Board()
+    prepared, other = Camera(board), Camera(board)
+    prepared.request_prepare(150, common_30)
+    other.request_prepare(151, common_30)
+    prepared.stop_stream()
+    if prepared.fsync_contract_epoch != board.epoch:
+        failures.append("a stop without a start released the prepared reservation")
+    if other.set_frame_interval(20) != "estale":
+        failures.append("a prepared instance must still refuse a conflicting cadence")
+
+    # An explicit prepare 0 and an expired lease do NOT release the reservation:
+    # max9296_cancel_prepare() and max9296_prepare_lease_timeout() drop the power
+    # reference and move prepare_state, and neither names fsync_contract_epoch,
+    # fsync_contract_fps or the release helper. Those legs of #82 are open, and
+    # the source check below pins exactly that -- absence of those three names,
+    # which is narrower than "touches" but is what a text scan can honestly
+    # assert -- so this comment cannot drift back into a claim. What the
+    # STREAMOFF release fixes is the streaming leg: keying it to the board-power
+    # epoch left a rate bound for the life of the module, because that epoch does
+    # not advance while any global power reference is held and the vendor capture
+    # driver takes one and never gives it back.
+
+
+    # What the released reservation then lets the next prepare do is NOT asserted
+    # here: this model compares hardware identity as an exact fingerprint tuple,
+    # including raw fps, which is the pre-decoupling rule.  The driver compares
+    # only what fps programs, so 2560x720 at 30 and at 20 are one equivalence
+    # class and the real max9296_prepare_matches_locked() accepts the switch this
+    # model would reject.  Asserting acceptance here would pin the stale rule.
+    # The reservation lifetime above is what this change is about; teaching the
+    # model equivalence classes is a separate change.
+
     # GPIO1_IO01 is one active-low board reset owned only by max9296_0.  A cold
     # probe may assert it, but rebinding that owner while the peer keeps the
     # board powered must acquire the descriptor ASIS and preserve both the
@@ -849,6 +945,24 @@ def check_model(failures: list[str]) -> None:
         failures.append("a real shared reset must invalidate the peer hardware fast path")
 
 
+def _statement_end(text: str, at: int) -> int:
+    """Index of the `;` ending the statement that starts at `at`.
+
+    Parentheses are balanced first, so a `;` inside the argument list -- a GNU
+    statement expression, for instance -- is not mistaken for the terminator.
+    """
+    depth = 0
+    for index in range(at, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == ";" and depth <= 0:
+            return index
+    return -1
+
+
 def function(source: str, name: str) -> str:
     start = -1
     for return_type in ("int", "void", "bool", "ssize_t"):
@@ -898,6 +1012,22 @@ def check_source(source: str, failures: list[str]) -> None:
             failures.append(f"missing prepare contract token: {token}")
 
     stream = function(code, "max9296_s_stream")
+    # sensor->streaming is already read with READ_ONCE elsewhere, so annotating
+    # its write side is an ordinary hardening, not a contract change. Normalize
+    # it once, before any check anchors on the literal assignment.
+    # Pad to the matched length: a shorter replacement would shift every later
+    # offset, and the post-bind failure reports a max9296.c line derived from one.
+    stream_at = code.find(stream)
+    for pattern, plain in (
+        (r"WRITE_ONCE\([ \t]*sensor->streaming[ \t]*,[ \t]*true[ \t]*\)",
+         "sensor->streaming = true"),
+        (r"WRITE_ONCE\([ \t]*sensor->streaming[ \t]*,[ \t]*false[ \t]*\)",
+         "sensor->streaming = false"),
+        (r"READ_ONCE\([ \t]*sensor->streaming[ \t]*\)", "sensor->streaming"),
+    ):
+        stream = re.sub(
+            pattern, lambda m, plain=plain: plain.ljust(len(m.group(0))), stream
+        )
     show = function(code, "sysfs_prepare_show")
     store = function(code, "sysfs_prepare_store")
     parser = function(code, "max9296_parse_prepare_command")
@@ -1164,7 +1294,11 @@ def check_source(source: str, failures: list[str]) -> None:
     stream_hardware = stream.find("max9296_prepare_hardware_locked", stream_epoch)
     if not (
         0 <= stream_normalize < stream_preflight < stream_contract < stream_epoch < stream_hardware
-        and "fingerprint.fps, true" in stream[stream_contract:stream_epoch]
+        # The requested rate and reserve=true must reach the bind; their textual
+        # adjacency is not the point, so a wrapper around the argument is fine.
+        and re.search(
+            r"fingerprint\.fps\)?\s*,\s*true", stream[stream_contract:stream_epoch]
+        )
     ):
         failures.append(
             "STREAMON must preflight before binding shared FPS or programming hardware"
@@ -1543,6 +1677,225 @@ def check_source(source: str, failures: list[str]) -> None:
         < disable_power_unlock
     ):
         failures.append("STREAMOFF publication and output disable are not pulse-atomic")
+
+    # The FSYNC reservation lives for as long as this instance needs the pulse
+    # train, not for the life of the hardware epoch -- the epoch does not advance
+    # while the vendor capture driver holds its power reference, which left a
+    # rate bound until the module was unbound.  Releasing it on STREAMOFF has to
+    # happen after the power lock is dropped, because the helper takes the
+    # fsync-config lock and then the power lock itself.
+    # Search from the start of the STREAMOFF branch, not from the power-lock
+    # release: str.find(needle, start) never returns an index below start, so
+    # searching from the release would make the ordering test vacuous -- every
+    # hit would satisfy it and a call placed inside the power-lock region would
+    # be reported as missing instead. Three source states must give three
+    # verdicts: absent, inside the region, and after it.
+    disable_branch = stream.rfind("} else {", 0, disable_power_lock)
+    disable_drop = stream.find(
+        "max9296_drop_fsync_contract_locked(sensor)", disable_branch
+    )
+    if disable_branch < 0:
+        failures.append("STREAMOFF branch is not locatable")
+    elif disable_drop < 0:
+        failures.append("STREAMOFF does not release the FSYNC reservation")
+    elif disable_power_lock < disable_drop < disable_power_unlock:
+        failures.append(
+            "STREAMOFF releases the FSYNC reservation under the power lock"
+        )
+    elif disable_drop < disable_power_lock:
+        failures.append(
+            "STREAMOFF releases the FSYNC reservation before disabling output"
+        )
+    else:
+        # And only when this call ended a stream. An s_stream(0) arriving without
+        # a start ends nothing, so releasing there would take the reservation from
+        # an instance holding a prepared, initialized rate. The flag has to be
+        # captured under the power lock, before sensor->streaming is cleared,
+        # which is why the check looks for it between the lock and the release.
+        captured = stream.find("was_streaming = sensor->streaming", disable_power_lock)
+        cleared = stream.find("sensor->streaming = false", disable_power_lock)
+        if not (0 <= captured < disable_power_unlock):
+            failures.append(
+                "STREAMOFF does not capture whether it ended a stream under the power lock"
+            )
+        elif not (0 <= captured < cleared):
+            # Capturing after the clear would read false every time, so the
+            # release would never fire and the guard would silently disable it.
+            failures.append(
+                "STREAMOFF captures whether it ended a stream after clearing it"
+            )
+        # What the guard must MEAN -- release exactly when this call ended a
+        # stream and the output went off -- is not expressible as a substring
+        # test: reordering the guard and the release, detaching them, spelling
+        # `!ret` as `ret == 0`, or hiding a matching shape in a dead branch all
+        # satisfy any such test while changing the behaviour, and each of those
+        # states was demonstrated against an earlier revision of this check.
+        # max9296_exposure_failure_test.py links the real function and counts
+        # the releases, which answers it directly. What stays here is what
+        # executing the function cannot see: where the call sits relative to the
+        # power lock, and which branch it belongs to.
+
+
+    # A failed start must not take the reservation away from an instance that is
+    # still streaming, because sensor->streaming is written only after the
+    # cached replay succeeds and the kthread keeps pulsing for it meanwhile.
+    # The helper's polarity is checked by executing it, not by matching its text
+    # (see max9296_exposure_failure_test.py). All that is asserted here is that
+    # the field still takes part at all -- a helper that stopped consulting
+    # sensor->streaming would be a different contract, not a reformat.
+    idle_guard = function(code, "max9296_drop_fsync_contract_if_idle_locked")
+    if not idle_guard:
+        failures.append("the failed-start release helper is no longer locatable")
+    elif "sensor->streaming" not in idle_guard:
+        failures.append("the failed-start release does not exempt a streaming instance")
+
+    # Each release belongs inside the failure branch it unwinds, not on the path a
+    # successful start also takes -- a release on the common path would leave every
+    # committed stream without a reservation. Require the release and the errno
+    # assignment to sit in the same block: no brace may separate them.
+    bind_at = stream.find("max9296_update_shared_fsync_locked(")
+    if bind_at < 0:
+        failures.append("STREAMON no longer binds the shared cadence")
+        bind_at = 0
+    for token, label in (
+        ("ret = -ESTALE;", "the identity-mismatch exit"),
+        ("ret = -ENODEV;", "the dying exit"),
+    ):
+        # Search past the bind: the same errno is also returned before it, and
+        # matching that one would judge the wrong branch.
+        at = stream.find(token, bind_at)
+        if at < 0:
+            failures.append(f"STREAMON no longer has {label}")
+            continue
+        release = stream.rfind("drop_fsync_contract", bind_at, at)
+        if release < 0:
+            failures.append(f"{label} does not release the FSYNC reservation")
+        elif "{" in stream[release:at] or "}" in stream[release:at]:
+            failures.append(f"{label} releases outside its own failure branch")
+        elif not re.search(
+            r"if\s*\(\s*bind_reserved\s*\)\s*max9296_$", stream[:release]
+        ):
+            # A failed start gives back only what it reserved. The bind succeeds
+            # when the requested rate equals one already reserved, rewriting the
+            # same two fields, so an unconditional release here would take a
+            # prepare lease's cadence -- the state the model forbids for the
+            # STREAMOFF direction.
+            failures.append(f"{label} releases a reservation the bind did not take")
+
+
+
+    # The contract comment beside the model says prepare 0 and lease expiry leave
+    # the reservation. Pin it: a release appearing there would make the comment
+    # false, and a reader who believed it could drop a release elsewhere as
+    # redundant.
+    for name in ("max9296_cancel_prepare", "max9296_prepare_lease_timeout"):
+        body = function(code, name)
+        if not body:
+            # function() returns "" for a name it cannot find, which would make
+            # this loop pass vacuously after a rename or a return-type change.
+            failures.append(f"{name} is no longer locatable")
+            continue
+        # The comment claims neither touches the reservation, not merely that
+        # neither calls the helper: zeroing the two fields in place would
+        # falsify it just as silently.
+        for token in ("drop_fsync_contract", "fsync_contract_epoch", "fsync_contract_fps"):
+            if token in body:
+                failures.append(f"{name} now releases the FSYNC reservation")
+                break
+
+    # Every release between the bind and the stream commit must go through the
+    # guarded helper. `rfind("drop_fsync_contract")` above matches both names, so
+    # converting one site to the unguarded call passes it -- and that call on a
+    # repeat STREAMON of an already-streaming instance strips the reservation
+    # while the kthread is still pulsing for it, which is the hazard the helper
+    # exists for.
+    # The span starts after the bind's own failure exit, not at the bind: that
+    # exit is reached when the reservation was never taken, so it is the one
+    # post-bind-call exit with nothing to give back.
+    # No pre-bind exit may release. Those exits are reached before the bind, so
+    # there is nothing of this call's to give back, and worker_errno and the
+    # prepare-state gates are re-evaluated on a repeat STREAMON for an instance
+    # the kthread is still pulsing for.
+    enable_at = stream.find("if (enable) {")
+    if not 0 <= enable_at < bind_at:
+        failures.append("STREAMON no longer has a locatable enable branch")
+    elif "drop_fsync_contract" in stream[enable_at:bind_at]:
+        failures.append("a pre-bind STREAMON exit releases a reservation it never took")
+
+    # Anchor on the bind statement's own terminating semicolon, not on the first
+    # `)` after the call: the arguments may contain nested parentheses. Then
+    # require `if (ret)` to be the next statement, tolerating braces -- a brace
+    # style is not a missing check, and reporting it as one sent three messages
+    # that were all false of the source.
+    # The bind statement's own terminator: skip past its balanced arguments so a
+    # `;` inside them (a statement expression) is not mistaken for it.
+    bind_end = _statement_end(stream, bind_at)
+    bind_failed = stream.find("goto out;", bind_at)
+    # `if (ret)` must open the branch, but it may log or otherwise act before the
+    # goto -- other exits in this driver do. Only a brace-free intervening
+    # statement would change which code the goto is under, so require the brace
+    # when anything follows.
+    between = stream[bind_end + 1 : bind_failed] if bind_end >= 0 else ""
+    head = re.match(r"\s*if\s*\(\s*ret\s*\)\s*(\{?)", between)
+    bind_checked = bool(
+        bind_end >= 0
+        and bind_failed > bind_end
+        and head
+        and (head.group(1) == "{" or not between[head.end():].strip())
+    )
+    if not bind_checked:
+        # Without the bind's own error check, a -ESTALE from the bind is ignored
+        # and STREAMON walks on to commit the stream.
+        failures.append("the shared-cadence bind no longer checks its own result")
+    commit_at = stream.find("sensor->streaming = true", bind_at)
+    if commit_at < 0:
+        failures.append("STREAMON no longer commits the stream")
+    if bind_failed < 0:
+        failures.append("STREAMON no longer has a bind failure exit")
+    # The span scan is the only coverage for the prepare-hardware and crop-replay
+    # exits, so it must not depend on the verdict above. When the bind's own exit
+    # cannot be located, fall back to the bind call itself: that only widens the
+    # span, and the widened region's one extra exit is the bind failure, which a
+    # release there would be a defect anyway.
+    if commit_at >= 0:
+        span_at = (
+            bind_failed + len("goto out;") if bind_checked and bind_failed >= 0 else bind_at
+        )
+        span = stream[span_at:commit_at]
+        if "max9296_drop_fsync_contract_locked(" in span:
+            failures.append(
+                "a post-bind STREAMON exit releases without exempting a streaming instance"
+            )
+        # And every exit in that span must release at all -- the two-token loop
+        # above only reaches the two exits it names.
+        for match in re.finditer(r"goto out;", span):
+            at = match.start()
+            if span_at == bind_at and at == bind_failed - bind_at:
+                # The bind's own exit, pulled in by the fallback. It reserved
+                # nothing, and the check 20 lines up forbids releasing there.
+                continue
+            release = span.rfind("max9296_drop_fsync_contract_if_idle_locked", 0, at)
+            if release < 0 or "{" in span[release:at] or "}" in span[release:at]:
+                line = code.count("\n", 0, stream_at + span_at + at) + 1
+                failures.append(
+                    f"the post-bind exit at max9296.c:{line} does not release the FSYNC reservation"
+                )
+
+    # The helper takes the fsync-config lock and then the power lock, so a call
+    # made while the power lock is held self-deadlocks on a non-recursive mutex.
+    # The STREAMOFF release has carried this check from the start; the post-bind
+    # sites depend on the same ordering and nothing enforced it.
+    if commit_at >= 0:
+        commit_lock = stream.rfind("mutex_lock(&max9296_power_lock)", bind_at, commit_at)
+        commit_unlock = stream.find("mutex_unlock(&max9296_power_lock)", commit_lock)
+        if commit_lock < 0 or not (commit_lock < commit_unlock < commit_at):
+            failures.append("STREAMON no longer commits under the power lock")
+        else:
+            held = stream[commit_lock:commit_unlock]
+            if "drop_fsync_contract" in held:
+                failures.append(
+                    "a post-bind STREAMON exit releases while holding the power lock"
+                )
 
     remove_power_lock = remove.find("mutex_lock(&max9296_power_lock)")
     remove_dying = remove.find("WRITE_ONCE(sensor->dying, true)")

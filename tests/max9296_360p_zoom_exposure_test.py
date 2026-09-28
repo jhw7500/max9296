@@ -834,17 +834,34 @@ def main() -> int:
         failures.append("preview-context helper still owns crop replay ordering")
 
     stream_on = function(source, "max9296_s_stream")
-    crop_replay = stream_on.find("ret = max9296_apply_cached_crop(sensor)")
+    crop_call = re.search(
+        r"ret\s*=\s*max9296_apply_cached_crop\s*\([^;]*?\)\s*;", stream_on, re.S
+    )
+    crop_replay = crop_call.start() if crop_call else -1
     stream_commit = stream_on.find("max9296_stream_commit_locked(sensor)")
     if crop_replay < 0 or stream_commit < 0 or crop_replay > stream_commit:
         failures.append(
             "controls cached after prepare are not replayed before output commit"
         )
-    elif "if (ret)" not in stream_on[crop_replay:stream_commit] or (
-        "max9296_drop_fsync_contract_locked(sensor)"
-        not in stream_on[crop_replay:stream_commit]
-    ):
-        failures.append("pre-output crop failure does not abort STREAMON cleanly")
+    # The abort releases the FSYNC reservation through the guarded helper, not
+    # the bare one: sensor->streaming is written only after this replay succeeds,
+    # so a repeat STREAMON that fails here belongs to an instance the kthread is
+    # still pulsing for, and taking its reservation away would let a stopped peer
+    # move the cadence under it.
+    # Anchor on the crop call's OWN result check. Searching forward for any
+    # `if (ret)` lets the anchor slide onto the sibling controls exit when the
+    # crop abort is deleted outright, and that exit's untouched guarded call then
+    # satisfies the check while max9296_apply_cached_crop()'s result is never
+    # tested at all.
+    else:
+        after = stream_on[crop_call.end():]
+        abort = re.match(r"\s*if\s*\(\s*ret\s*(?:<\s*0\s*)?\)\s*\{?", after)
+        exit_at = after.find("goto out;") if abort else -1
+        if not abort or exit_at < 0 or (
+            "max9296_drop_fsync_contract_if_idle_locked(sensor)"
+            not in after[abort.end():exit_at]
+        ):
+            failures.append("pre-output crop failure does not abort STREAMON cleanly")
 
     enable_decl = source.find("static int max9296_enable(void *data)")
     enable_worker = (

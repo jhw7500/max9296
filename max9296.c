@@ -2230,6 +2230,38 @@ static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
   mutex_unlock(&max9296_fsync_config_lock);
 }
 
+/*
+ * Release the reservation after a failed start, unless this instance is already
+ * streaming.  A repeat STREAMON on a streaming instance re-binds the reservation
+ * and can then fail in the cached crop or control replay, but sensor->streaming
+ * and stream_commit_epoch are written only further down, so the kthread keeps
+ * pulsing on its behalf.  Dropping the reservation there would leave it pulsing
+ * with nothing reserving its rate, and a stopped peer -- which holds none either
+ * -- could move the cadence under hardware still programmed for the old rate.
+ *
+ * Not an invariant over every transition, and the paths that break it are not
+ * enumerated here -- a count in a comment is a claim that goes stale.  Known
+ * ones: max9296_cancel_prepare(), the prepare lease timeout,
+ * max9296_remove()'s survivor forced stop, and STREAMOFF itself when
+ * max9296_disable_stream_mipi() fails, which is deliberate and asserted (see
+ * max9296_s_stream).  Each clears or ends something while leaving
+ * fsync_contract_fps bound in the live epoch.  #82 tracks them.  (A power-down
+ * through max9296_set_power_off() is not one: it runs after max9296_hw_epoch++
+ * in the same if (run) block, so a surviving reservation is already stale.)
+ *
+ * What this helper does hold is narrower: no STREAMON failure exit releases a
+ * reservation while the pulse train is still driven for its own instance.
+ */
+static void max9296_drop_fsync_contract_if_idle_locked(
+    struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+
+  if (sensor->streaming)
+    return;
+
+  max9296_drop_fsync_contract_locked(sensor);
+}
+
 static int max9296_set_power(struct max9296_dev *sensor, bool on) {
   int ret = 0;
   bool run;
@@ -5630,6 +5662,9 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
   struct max9296_dev *sensor = to_max9296_dev(sd);
   struct max9296_hw_fingerprint fingerprint;
   u64 epoch;
+  /* Whether the bind below actually created this start's reservation, rather
+   * than re-confirming one an earlier prepare already held.  See the bind. */
+  bool bind_reserved = false;
   int worker_errno;
   int ret = 0;
 
@@ -5686,16 +5721,39 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     ret = max9296_preflight_prepare_locked(sensor, &fingerprint);
     if (ret)
       goto out;
-    ret = max9296_update_shared_fsync_locked(
-        sensor, fingerprint.fps, true);
-    if (ret)
-      goto out;
+    {
+      /* max9296_configure_shared_fsync_locked() refuses only a DIFFERENT live
+       * rate; requesting the rate already reserved succeeds and rewrites the
+       * same two fields, so the reservation this start then sees may be one a
+       * prepare lease took earlier.  Releasing that on a failed start would
+       * take the cadence from an instance whose hardware is already programmed
+       * for it -- the mirror of the rule STREAMOFF follows.  Compare the pair
+       * across the call: unchanged means this start reserved nothing. */
+      u64 prior_epoch = sensor->fsync_contract_epoch;
+      u32 prior_fps = sensor->fsync_contract_fps;
+
+      ret = max9296_update_shared_fsync_locked(
+          sensor, fingerprint.fps, true);
+      if (ret)
+        goto out;
+      bind_reserved = sensor->fsync_contract_epoch != prior_epoch ||
+                      sensor->fsync_contract_fps != prior_fps;
+    }
 
     epoch = READ_ONCE(max9296_hw_epoch);
     if (sensor->hardware_valid && sensor->initialized_epoch == epoch) {
       if (!max9296_prepare_matches_locked(sensor, &fingerprint)) {
         /* Switching dual/left/right programming without a board reset is not
-         * safe: a dual table may have remapped a serializer to 0x60. */
+         * safe: a dual table may have remapped a serializer to 0x60.  Give back
+         * only what this start reserved.  The mismatch says nothing about the
+         * rate -- max9296_fingerprint_equal() compares topology, format and the
+         * two fps-derived classes, not the raw rate -- so a format or enable
+         * change alone reaches here with the rate untouched, and the reservation
+         * then belongs to the prepare that took it.  That one is the rate the
+         * initialized hardware still matches; keeping it is what preserves the
+         * way back. */
+        if (bind_reserved)
+          max9296_drop_fsync_contract_if_idle_locked(sensor);
         ret = -ESTALE;
         goto out;
       }
@@ -5705,7 +5763,9 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     if (!sensor->hardware_valid || sensor->initialized_epoch != epoch) {
       ret = max9296_prepare_hardware_locked(sensor, &fingerprint);
       if (ret) {
-        max9296_drop_fsync_contract_locked(sensor);
+        /* Only this start's own reservation, as at every post-bind exit. */
+        if (bind_reserved)
+          max9296_drop_fsync_contract_if_idle_locked(sensor);
         goto out;
       }
     }
@@ -5717,15 +5777,19 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     ret = max9296_apply_cached_crop(sensor);
     if (ret) {
       /* Keep the completed initialization so a later STREAMON can retry the
-       * crop cache, including a partially applied dual-channel update. */
-      max9296_drop_fsync_contract_locked(sensor);
+       * crop cache, including a partially applied dual-channel update.  Only
+       * this start's own reservation, as at every post-bind exit. */
+      if (bind_reserved)
+        max9296_drop_fsync_contract_if_idle_locked(sensor);
       goto out;
     }
     ret = max9296_apply_cached_controls(sensor);
     if (ret) {
       /* Abort this start without discarding the programmed topology. A later
-       * STREAMON can retry cached controls without reloading the firmware. */
-      max9296_drop_fsync_contract_locked(sensor);
+       * STREAMON can retry cached controls without reloading the firmware.
+       * Only this start's own reservation, as at every post-bind exit. */
+      if (bind_reserved)
+        max9296_drop_fsync_contract_if_idle_locked(sensor);
       goto out;
     }
 
@@ -5735,6 +5799,15 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     mutex_lock(&max9296_power_lock);
     if (READ_ONCE(sensor->dying)) {
       mutex_unlock(&max9296_power_lock);
+      /* Same rule as every other exit past the bind.  A dying instance is
+       * excluded from the conflict test by max9296_ready_shared_peer_locked(),
+       * so leaving it would be harmless today -- but the invariant is what the
+       * source contract pins, and an exception here would be one more path for
+       * the next reader to rediscover.  After the power-lock release, because
+       * the helper takes the fsync-config lock and then the power lock.  Only
+       * this start's own reservation, as at every post-bind exit. */
+      if (bind_reserved)
+        max9296_drop_fsync_contract_if_idle_locked(sensor);
       ret = -ENODEV;
       goto out;
     }
@@ -5746,8 +5819,11 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
   } else {
     /* Stop authorizing FSYNC before the physical output-disable write.  The
      * board lock makes this transition atomic with a pulse in progress. */
+    bool was_streaming;
+
     mutex_lock(&max9296_power_lock);
-    if (sensor->streaming)
+    was_streaming = sensor->streaming;
+    if (was_streaming)
       max9296_health_forget_pair(sensor);
     sensor->streaming = false;
     sensor->stream_on = 0;
@@ -5757,6 +5833,36 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
       sensor->shared.sensor->state.fsync = MAX9296_STATE_IDLE;
     ret = max9296_disable_stream_mipi(sensor);
     mutex_unlock(&max9296_power_lock);
+
+    /* A stream that stops no longer needs the shared pulse train, so give the
+     * reservation back.  Keying it to the board-power epoch instead left a rate
+     * bound: max9296_hw_epoch advances only when max9296_power_users crosses
+     * zero, so any held global power reference freezes it.  Observed in #82, not
+     * derivable here: the capture client in the failing setup kept that count
+     * above zero for as long as it ran, so a bound rate survived until module
+     * unbind.  A peer that is still streaming keeps its own reservation, so a
+     * conflicting rate is still refused exactly when refusing it is right.
+     *
+     * Only when this call actually ended a stream.  An s_stream(0) that arrives
+     * without a start ends nothing, and stripping the reservation there would
+     * take it from an instance holding a prepared, initialized rate.
+     *
+     * And only when the output is proven off.  If the disable write failed, this
+     * instance's CSI output may still be live while the shared FSYNC GPIO keeps
+     * running for a peer -- releasing the reservation there would let that peer
+     * move the cadence and trigger these cameras at a rate their exposure was
+     * never qualified against.  Keeping it is what the caller's error return
+     * already means.  Nothing records that the output was never proven off, so
+     * that retention is not durable either: the next STREAMON that gets past
+     * max9296_update_shared_fsync_locked() and then fails finds streaming clear
+     * and releases.  A STREAMON that fails earlier -- dying, prepare busy,
+     * worker_errno, fingerprint, preflight -- never reaches the bind and leaves
+     * it alone.  So this branch narrows the window rather than closing it, which
+     * is all the error return can honestly claim.  Called after the power lock
+     * is dropped: the helper takes the fsync-config lock and then the power lock
+     * itself. */
+    if (was_streaming && !ret)
+      max9296_drop_fsync_contract_locked(sensor);
 
     sensor->restart = 1;
   }
