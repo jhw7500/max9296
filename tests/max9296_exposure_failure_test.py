@@ -20,6 +20,7 @@ def build_harness(source: str) -> str:
         "max9296_zoom_seed_factor",
         "max9296_zoom_seed_center",
         "max9296_zoom_seed_from_mode",
+        "max9296_drop_fsync_contract_if_idle_locked",
         "max9296_apply_cached_crop",
         "max9296_set_exposure_cluster",
         "max9296_stream_commit_locked",
@@ -67,7 +68,9 @@ struct max9296_dev {
   unsigned int enable;
   bool pending_mode_change, pending_fmt_change, hardware_valid;
   bool dying, prepare_releasing, streaming;
-  u64 initialized_epoch, stream_commit_epoch;
+  u64 initialized_epoch, stream_commit_epoch, fsync_contract_epoch;
+  u32 fsync_contract_fps;
+  bool prepare_lease_held;
   int stream_on, restart;
   struct { int fsync; } state;
   struct { struct max9296_dev *sensor; } shared;
@@ -147,31 +150,75 @@ static int max9296_write_exposure(struct max9296_dev *sensor, u32 addr,
   if (addr == AP1302_CH1_I2C_ADDR || addr == AP1302_I2C_ADDR) hw_ch1 = value;
   return 0;
 }
+/* Zero means "ask for exactly what is initialized"; a non-zero value makes the
+ * request differ so the identity-mismatch exit is reachable. */
+static unsigned int requested_fps;
+static unsigned int requested_enable;
 static int max9296_normalize_fingerprint_locked(
     struct max9296_dev *sensor, struct max9296_hw_fingerprint *fingerprint) {
-  *fingerprint = sensor->initialized_fingerprint; return 0;
+  *fingerprint = sensor->initialized_fingerprint;
+  if (requested_fps)
+    fingerprint->fps = requested_fps;
+  if (requested_enable)
+    fingerprint->enable = requested_enable;
+  return 0;
 }
 static int max9296_preflight_prepare_locked(
     struct max9296_dev *sensor, const struct max9296_hw_fingerprint *fingerprint) {
   (void)sensor; (void)fingerprint; return 0;
 }
+static int bind_error;
+static unsigned int bound_fps;
+static bool bound_reserve;
+/* Mirrors max9296_configure_shared_fsync_locked()'s two observable effects: it
+ * refuses only a DIFFERENT live rate, and on success writes the same two fields
+ * -- so requesting the rate already reserved is a no-op re-confirmation.  A
+ * stateless stub cannot express that, and the driver now branches on it. */
 static int max9296_update_shared_fsync_locked(struct max9296_dev *sensor,
                                               unsigned int fps, bool reserve) {
-  (void)sensor; (void)fps; (void)reserve; return 0;
+  bound_fps = fps;
+  bound_reserve = reserve;
+  if (bind_error)
+    return bind_error;
+  if (sensor->fsync_contract_epoch == max9296_hw_epoch &&
+      sensor->fsync_contract_fps != fps)
+    return -ESTALE;
+  if (reserve) {
+    sensor->fsync_contract_epoch = max9296_hw_epoch;
+    sensor->fsync_contract_fps = fps;
+  }
+  return 0;
 }
 static bool max9296_prepare_matches_locked(
     struct max9296_dev *sensor, const struct max9296_hw_fingerprint *fingerprint) {
   return sensor->initialized_fingerprint.enable == fingerprint->enable &&
          sensor->initialized_fingerprint.fps == fingerprint->fps;
 }
+/* Warm cases must not initialize hardware, so the default is a failure; the one
+ * cold case sets cold_init_ok to exercise a successful initialization. */
+static bool cold_init_ok;
 static int max9296_prepare_hardware_locked(
     struct max9296_dev *sensor, const struct max9296_hw_fingerprint *fingerprint) {
-  (void)sensor; (void)fingerprint;
+  (void)fingerprint;
   init_count++;
-  return -EIO; /* No hardware initialization is allowed in these warm cases. */
+  if (!cold_init_ok)
+    return -EIO;
+  sensor->hardware_valid = true;
+  sensor->initialized_epoch = max9296_hw_epoch;
+  sensor->initialized_fingerprint = *fingerprint;
+  return 0;
 }
+/* Counted, not mirrored: max9296_drop_fsync_contract_if_idle_locked() is
+ * extracted from the driver and linked in below, so what runs here is the real
+ * predicate.  A text scan cannot express "the release is the statement this
+ * `if` controls" -- swapping the two statements, decoupling them, or hiding a
+ * matching shape in a dead branch all defeat it, and every such state was
+ * demonstrated.  Executing the function answers the question directly. */
+static unsigned int fsync_release_count;
 static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
-  (void)sensor;
+  sensor->fsync_contract_epoch = 0;
+  sensor->fsync_contract_fps = 0;
+  fsync_release_count++;
 }
 static int max9296_write_zoom_channel(
     struct max9296_dev *sensor, unsigned int addr, const char *channel,
@@ -193,8 +240,9 @@ static int max9296_apply_cached_controls(struct max9296_dev *sensor) {
 static void max9296_health_forget_pair(struct max9296_dev *sensor) {
   (void)sensor;
 }
+static int disable_error;
 static int max9296_disable_stream_mipi(struct max9296_dev *sensor) {
-  (void)sensor; return 0;
+  (void)sensor; return disable_error;
 }
 ''' + production + r'''
 
@@ -226,6 +274,11 @@ static struct max9296_dev fixture(struct v4l2_ctrl *ctrls) {
     crop_hw_x[ch] = crop_hw_y[ch] = crop_hw_zoom[ch] = 0;
   replay_error = 0;
   hw_ch0 = hw_ch1 = 7000;
+  fsync_release_count = disable_error = bind_error = requested_fps = 0;
+  cold_init_ok = false;
+  requested_enable = 0;
+  bound_fps = 0;
+  bound_reserve = false;
   return sensor;
 }
 
@@ -475,6 +528,198 @@ int main(void) {
   fail_at = 1;
   CHECK(max9296_set_exposure_cluster(&sensor) == -EIO);
   CHECK(sensor.ctrl_cache.exposure_reinit_required);
+
+  /* --- FSYNC reservation lifetime (#82), executed rather than scanned ---
+   *
+   * These run the real max9296_s_stream() and the real
+   * max9296_drop_fsync_contract_if_idle_locked() and count how many times the
+   * release actually fires.  That makes the checks immune to the whole class
+   * of source rewrites a text scan cannot separate: reordering the guard and
+   * the release, detaching the release from the `if` it should be under,
+   * spelling `!ret` as `ret == 0`, wrapping the read in READ_ONCE, bracing the
+   * body, commuting the operands, or hiding a matching shape in a dead branch.
+   */
+
+  /* STREAMOFF releases when it ended a stream and the output went off. */
+  sensor = fixture(ctrls);
+  active_sensor = &sensor;
+  CHECK(max9296_s_stream(&sd, 0) == 0);
+  CHECK(fsync_release_count == 1);
+
+  /* A stop that ended nothing must not take a prepared instance's reservation. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  active_sensor = &sensor;
+  CHECK(max9296_s_stream(&sd, 0) == 0);
+  CHECK(fsync_release_count == 0);
+
+  /* A failed output disable keeps it: the CSI output may still be live while
+   * the shared GPIO keeps pulsing for a peer. */
+  sensor = fixture(ctrls);
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(fsync_release_count == 0);
+
+  /* Both conditions must hold, so neither alone releases. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(fsync_release_count == 0);
+
+  /* A start that fails after the bind gives the reservation back, but only
+   * when this instance is not the one the kthread is pulsing for. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  requested_fps = 60;                       /* forces the identity mismatch */
+  active_sensor = &sensor;
+  CHECK(max9296_s_stream(&sd, 1) == -ESTALE);
+  CHECK(fsync_release_count == 1);
+
+  sensor = fixture(ctrls);
+  requested_fps = 60;
+  active_sensor = &sensor;                  /* still streaming: keep it */
+  CHECK(max9296_s_stream(&sd, 1) == -ESTALE);
+  CHECK(fsync_release_count == 0);
+
+  /* The replay-failure exit behaves the same way on both sides of the guard. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  active_sensor = &sensor;
+  replay_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 1) == -EIO);
+  CHECK(fsync_release_count == 1);
+
+  sensor = fixture(ctrls);
+  active_sensor = &sensor;
+  replay_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 1) == -EIO);
+  CHECK(fsync_release_count == 0);
+
+  /* A bind that fails reserved nothing, so that exit must not release. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  active_sensor = &sensor;
+  bind_error = -ESTALE;
+  CHECK(max9296_s_stream(&sd, 1) == -ESTALE);
+  CHECK(fsync_release_count == 0);
+
+  /* A start that succeeds must keep its reservation: the release belongs in the
+   * failure branches, and a call on the common path would commit every stream
+   * with nothing reserving its rate.  Every case above forces a failure exit, so
+   * without this one that position is unobserved. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  active_sensor = &sensor;
+  CHECK(max9296_s_stream(&sd, 1) == 0);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.streaming && sensor.stream_commit_epoch == 7);
+  /* And the rate it reserved is the one the caller asked for, reserved rather
+   * than released -- the arguments the bind receives, not the text of the call. */
+  CHECK(bound_fps == sensor.initialized_fingerprint.fps && bound_reserve);
+
+  /* Same for a repeat start on an instance that is already streaming. */
+  sensor = fixture(ctrls);
+  active_sensor = &sensor;
+  CHECK(max9296_s_stream(&sd, 1) == 0);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.streaming);
+
+  /* A failed start gives back only what it reserved.  The identity mismatch
+   * says nothing about the rate -- topology, format and crop all reach it with
+   * the rate untouched -- so the two sub-cases must be told apart.
+   *
+   * (a) The request changes the rate: the bind creates this start's reservation
+   *     and the failure gives it back. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  requested_fps = 60;                       /* no live reservation to re-confirm */
+  active_sensor = &sensor;
+  CHECK(max9296_s_stream(&sd, 1) == -ESTALE);
+  CHECK(fsync_release_count == 1);
+  CHECK(sensor.fsync_contract_epoch == 0 && sensor.fsync_contract_fps == 0);
+
+  /* (b) The request asks for the rate already reserved, so the bind only
+   *     re-confirms it and this start took nothing.  It is left alone whoever
+   *     holds it -- the exit does not try to work that out.
+   *
+   *     (b1) A prepare lease holds it.  Releasing would take the cadence from
+   *          an instance whose hardware is programmed for it and hand a stopped
+   *          peer the freedom to move the pulse train. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  sensor.prepare_lease_held = true;
+  requested_enable = 1;                       /* topology mismatch, same rate */
+  active_sensor = &sensor;
+  CHECK(max9296_s_stream(&sd, 1) == -ESTALE);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+
+  /*     (b2) A failed disable retains the reservation, and nothing on the
+   *          STREAMON side gives it back: a failed start releases only what its
+   *          own bind created. */
+  sensor = fixture(ctrls);
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+  disable_error = 0;
+  replay_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 1) == -EIO);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+
+  /*          A stop retry does not end it either -- the first attempt already
+   *          cleared streaming, so the retry ends nothing.  Ending it there
+   *          would mean deciding nobody else has taken the reservation
+   *          meanwhile, which this driver's state cannot answer: a consumed
+   *          prepare lease leaves prepare_lease_held false while the prepared
+   *          instance still means to use the rate.  #88 removes the question by
+   *          making the paths that orphan a reservation release their own. */
+  CHECK(max9296_s_stream(&sd, 0) == 0);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+
+  /*          A full stream cycle does end it: that stop ended a stream and
+   *          disabled the output, which is the rule without any inference. */
+  replay_error = 0;
+  CHECK(max9296_s_stream(&sd, 1) == 0);
+  CHECK(max9296_s_stream(&sd, 0) == 0);
+  CHECK(fsync_release_count == 1);
+  CHECK(sensor.fsync_contract_epoch == 0);
+
+  /*     (b3) A reservation no one holds is left alone too.  Sweeping it from
+   *          here is what #88 replaces: this exit cannot tell it apart from a
+   *          reservation a prepare still means to use. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  replay_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 1) == -EIO);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+
+  /* A cold start -- the fixture above is always warm, so this is the only case
+   * that runs max9296_prepare_hardware_locked() to success.  A release anywhere
+   * on that path would commit the stream with nothing reserving its rate. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  sensor.hardware_valid = false;
+  cold_init_ok = true;
+  active_sensor = &sensor;
+  CHECK(max9296_s_stream(&sd, 1) == 0);
+  CHECK(init_count == 1);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.streaming && sensor.fsync_contract_fps == 30);
 
   printf("max9296 exposure failure binding: %u checks, %u failures\n", checks, failures);
   return failures ? 1 : 0;
