@@ -707,6 +707,19 @@ def check_model(failures: list[str]) -> None:
     if renewed.fsync_contract_epoch == bound:
         failures.append("an idempotent re-request erased the reservation it owned")
 
+    # The unarmed-failure path carries the same rule: a prepare that could not
+    # publish its expiry owner returns only what its own bind took.
+    board = Board()
+    keeper, unowned = Camera(board), Camera(board)
+    keeper.power_on()
+    retained = board.target_epoch()
+    unowned.fsync_contract_epoch = retained
+    unowned.fsync_contract_fps = 60
+    if unowned.request_prepare(92, (2560, 720, 60, 3), arm_succeeds=False) != "ebusy":
+        failures.append("an unarmable prepare must report busy")
+    if unowned.fsync_contract_epoch != retained:
+        failures.append("an unarmable prepare returned a reservation it never took")
+
     # The converse is what makes those releases safe: a reservation the lease
     # did not create is not the lease's to return. This stands in for a
     # STREAMOFF whose disable write failed -- it keeps its reservation on
@@ -2013,16 +2026,31 @@ def check_source(source: str, failures: list[str]) -> None:
         helper_end = len(code)
     # The expiry site adds a local not-streaming term, so the lease guard may
     # carry extra conjuncts; what it may not do is drop the ownership test.
-    approved = re.compile(
-        r"(?:if\(sensor->prepare_lease_reserved(?:&&[^()]*)?\)"
-        r"|if\(was_streaming&&!\w+\))\{?$"
-    )
+    lease_guard = re.compile(r"if\(sensor->prepare_lease_reserved(?:&&[^()]*)?\)\{?$")
+    # was_streaming names a stop this call performed, so it only answers for a
+    # release inside the two functions that perform one. Adjacent text is not
+    # enough: the same guard sitting before a release in some other function
+    # would otherwise vouch for an owner it knows nothing about.
+    stream_guard = re.compile(r"if\(was_streaming&&!\w+\)\{?$")
+    stream_spans = []
+    for name in ("max9296_s_stream", "max9296_remove"):
+        at = code.find(f"static int {name}(")
+        if at < 0:
+            failures.append(f"{name} is no longer locatable")
+            continue
+        end = code.find("\nstatic ", at + 8)
+        stream_spans.append((at, end if end > 0 else len(code)))
     inspected = 0
     for match in re.finditer(r"max9296_drop_fsync_contract_locked\s*\(\s*\w+\s*\)", code):
         if helper_at <= match.start() < helper_end:
             continue
         inspected += 1
-        if not approved.search(re.sub(r"\s+", "", code[: match.start()])):
+        prefix = re.sub(r"\s+", "", code[: match.start()])
+        stops_here = any(at <= match.start() < end for at, end in stream_spans)
+        if not (
+            lease_guard.search(prefix)
+            or (stops_here and stream_guard.search(prefix))
+        ):
             line = code[: match.start()].count("\n") + 1
             failures.append(
                 f"a FSYNC release at max9296.c:{line} names no reservation it owns"

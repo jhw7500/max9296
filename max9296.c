@@ -5996,11 +5996,13 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * their own reservation now, so none of them leaves this path an orphan to
      * sweep.  That is about the paths that end something, not a claim that no
      * reservation outlives its user.  A lease consumed by max9296_s_power(1) is
-     * governed by this rule afterwards, and invalidation is on the way in --
-     * max9296_set_power() advances max9296_hw_epoch and resets the hardware at
-     * the 0->1 crossing, not on the way out -- so on a board whose capture
-     * driver never calls s_power(0) the count does not return to zero by itself
-     * and an external reset is what clears such a reservation.
+     * governed by this rule afterwards.  What clears a reservation nothing
+     * releases is max9296_set_power(): max9296_hw_epoch++ sits in the if (run)
+     * block both branches share, so the epoch advances whenever
+     * max9296_power_users crosses zero in EITHER direction -- only the reset in
+     * max9296_set_power_on() is on-the-way-in.  On a board whose capture driver
+     * never calls s_power(0) that count does not return to zero by itself, so
+     * neither crossing happens again and an external reset is what clears it.
      * Called after the power lock is dropped: the helper takes the fsync-config
      * lock and then the power lock itself. */
     if (was_streaming && !ret) {
