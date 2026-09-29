@@ -595,11 +595,13 @@ struct max9296_dev {
    * These reservations are compared only within their board-power epoch. */
   u64 fsync_contract_epoch;
   u32 fsync_contract_fps;
-  /* Set when a STREAMOFF ended a stream but its output-disable write failed, so
-   * the CSI output may still be live even though this instance is not
-   * streaming.  It is what separates a reservation deliberately retained by
-   * that path from one no owner holds at all. */
-  bool fsync_output_unproven;
+  /* The board-power epoch in which a STREAMOFF ended a stream but its
+   * output-disable write failed, so the CSI output may still be live even
+   * though this instance is not streaming.  It is what separates a reservation
+   * deliberately retained by that path from one no owner holds at all.  Zero
+   * means none, and a value from an older epoch means the concern is moot: the
+   * power transition that advanced the epoch reset the hardware. */
+  u64 fsync_output_unproven_epoch;
 
   struct v4l2_mbus_framefmt fmt;
   bool pending_fmt_change;
@@ -2231,7 +2233,7 @@ static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
   mutex_lock(&max9296_power_lock);
   sensor->fsync_contract_epoch = 0;
   sensor->fsync_contract_fps = 0;
-  sensor->fsync_output_unproven = false;
+  sensor->fsync_output_unproven_epoch = 0;
   mutex_unlock(&max9296_power_lock);
   mutex_unlock(&max9296_fsync_config_lock);
 }
@@ -2272,11 +2274,20 @@ static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
  *
  * The caller has already established that this start did not take it.
  */
+static bool max9296_fsync_output_unproven_locked(
+    struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+
+  return sensor->fsync_output_unproven_epoch != 0 &&
+         sensor->fsync_output_unproven_epoch == READ_ONCE(max9296_hw_epoch);
+}
+
 static bool max9296_fsync_contract_unowned_locked(
     struct max9296_dev *sensor) {
   lockdep_assert_held(&sensor->lock);
 
-  return !sensor->prepare_lease_held && !sensor->fsync_output_unproven;
+  return !sensor->prepare_lease_held &&
+         !max9296_fsync_output_unproven_locked(sensor);
 }
 
 static void max9296_drop_fsync_contract_if_idle_locked(
@@ -5840,7 +5851,7 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
       max9296_health_forget_pair(sensor);
     max9296_stream_commit_locked(sensor);
     sensor->streaming = true;
-    sensor->fsync_output_unproven = false;
+    sensor->fsync_output_unproven_epoch = 0;
     mutex_unlock(&max9296_power_lock);
   } else {
     /* Stop authorizing FSYNC before the physical output-disable write.  The
@@ -5878,24 +5889,27 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * running for a peer -- releasing the reservation there would let that peer
      * move the cadence and trigger these cameras at a rate their exposure was
      * never qualified against.  Keeping it is what the caller's error return
-     * already means.  fsync_output_unproven records that, so a later failed
-     * STREAMON can tell this retention apart from a reservation nobody holds
-     * and leaves it alone: see max9296_fsync_contract_unowned_locked().  It is
-     * cleared when the reservation is released or when a start commits, so the
-     * retention lasts exactly until this instance's output is accounted for
-     * again -- a successful stop, or a stream that deliberately turns it on.
+     * already means.  fsync_output_unproven_epoch records that, so a later
+     * failed STREAMON can tell this retention apart from a reservation nobody
+     * holds and leaves it alone: see max9296_fsync_contract_unowned_locked().
+     * It is cleared when the reservation is released, when a start commits, and
+     * by a stop that finally does disable the output, so the retention lasts
+     * exactly until this instance's output is accounted for again.  Recording
+     * the epoch rather than a bare flag also expires it across a board-power
+     * transition: that reset makes the live-output concern moot, and a stale
+     * qualifier would otherwise block the next epoch's cleanup.
      * Called after the power lock is dropped: the helper takes the fsync-config
      * lock and then the power lock itself. */
     if (was_streaming && !ret) {
       max9296_drop_fsync_contract_locked(sensor);
     } else if (was_streaming) {
-      sensor->fsync_output_unproven = true;
-    } else if (!ret && sensor->fsync_output_unproven) {
+      sensor->fsync_output_unproven_epoch = READ_ONCE(max9296_hw_epoch);
+    } else if (!ret && sensor->fsync_output_unproven_epoch) {
       /* A retry of a stop that had failed.  The first attempt already cleared
        * sensor->streaming, so this one ends nothing -- but it does what the
        * qualifier was waiting for: it proves the output off.  The retention is
        * over, so give the reservation back unless something took it meanwhile. */
-      sensor->fsync_output_unproven = false;
+      sensor->fsync_output_unproven_epoch = 0;
       if (max9296_fsync_contract_unowned_locked(sensor))
         max9296_drop_fsync_contract_locked(sensor);
     }

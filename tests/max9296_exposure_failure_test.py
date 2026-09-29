@@ -20,6 +20,7 @@ def build_harness(source: str) -> str:
         "max9296_zoom_seed_factor",
         "max9296_zoom_seed_center",
         "max9296_zoom_seed_from_mode",
+        "max9296_fsync_output_unproven_locked",
         "max9296_fsync_contract_unowned_locked",
         "max9296_drop_fsync_contract_if_idle_locked",
         "max9296_apply_cached_crop",
@@ -71,7 +72,8 @@ struct max9296_dev {
   bool dying, prepare_releasing, streaming;
   u64 initialized_epoch, stream_commit_epoch, fsync_contract_epoch;
   u32 fsync_contract_fps;
-  bool fsync_output_unproven, prepare_lease_held;
+  u64 fsync_output_unproven_epoch;
+  bool prepare_lease_held;
   int stream_on, restart;
   struct { int fsync; } state;
   struct { struct max9296_dev *sensor; } shared;
@@ -219,7 +221,7 @@ static unsigned int fsync_release_count;
 static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
   sensor->fsync_contract_epoch = 0;
   sensor->fsync_contract_fps = 0;
-  sensor->fsync_output_unproven = false;
+  sensor->fsync_output_unproven_epoch = 0;
   fsync_release_count++;
 }
 static int max9296_write_zoom_channel(
@@ -672,7 +674,7 @@ int main(void) {
   disable_error = -EIO;
   CHECK(max9296_s_stream(&sd, 0) == -EIO);
   CHECK(fsync_release_count == 0);
-  CHECK(sensor.fsync_output_unproven);
+  CHECK(sensor.fsync_output_unproven_epoch);
   disable_error = 0;
   replay_error = -EIO;
   CHECK(max9296_s_stream(&sd, 1) == -EIO);
@@ -688,10 +690,10 @@ int main(void) {
   active_sensor = &sensor;
   disable_error = -EIO;
   CHECK(max9296_s_stream(&sd, 0) == -EIO);
-  CHECK(sensor.fsync_output_unproven);
+  CHECK(sensor.fsync_output_unproven_epoch);
   disable_error = 0;
   CHECK(max9296_s_stream(&sd, 1) == 0);
-  CHECK(!sensor.fsync_output_unproven);
+  CHECK(!sensor.fsync_output_unproven_epoch);
 
   /*          A retry of the failed stop proves the output off.  The first
    *          attempt already cleared streaming, so this one ends nothing -- but
@@ -703,11 +705,11 @@ int main(void) {
   active_sensor = &sensor;
   disable_error = -EIO;
   CHECK(max9296_s_stream(&sd, 0) == -EIO);
-  CHECK(fsync_release_count == 0 && sensor.fsync_output_unproven);
+  CHECK(fsync_release_count == 0 && sensor.fsync_output_unproven_epoch);
   disable_error = 0;
   CHECK(max9296_s_stream(&sd, 0) == 0);
   CHECK(fsync_release_count == 1);
-  CHECK(!sensor.fsync_output_unproven && sensor.fsync_contract_epoch == 0);
+  CHECK(!sensor.fsync_output_unproven_epoch && sensor.fsync_contract_epoch == 0);
 
   /*          A retry that fails again proves nothing, so the retention holds. */
   sensor = fixture(ctrls);
@@ -716,10 +718,10 @@ int main(void) {
   active_sensor = &sensor;
   disable_error = -EIO;
   CHECK(max9296_s_stream(&sd, 0) == -EIO);
-  CHECK(sensor.fsync_output_unproven);
+  CHECK(sensor.fsync_output_unproven_epoch);
   CHECK(max9296_s_stream(&sd, 0) == -EIO);
   CHECK(fsync_release_count == 0);
-  CHECK(sensor.fsync_output_unproven);
+  CHECK(sensor.fsync_output_unproven_epoch);
   CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
 
   /*          Unless a prepare took it while the stop was failing: the lease
@@ -734,8 +736,34 @@ int main(void) {
   disable_error = 0;
   CHECK(max9296_s_stream(&sd, 0) == 0);
   CHECK(fsync_release_count == 0);
-  CHECK(!sensor.fsync_output_unproven);
+  CHECK(!sensor.fsync_output_unproven_epoch);
   CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+
+  /*          The qualifier belongs to the epoch it was raised in.  A board
+   *          power transition resets the hardware, so the live-output concern
+   *          it recorded is moot; a stale one must not keep the next epoch's
+   *          reservation from being swept up. */
+  sensor = fixture(ctrls);
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(sensor.fsync_output_unproven_epoch == 7);
+  /* s_power(0) then a fresh power-on: the epoch advances and a new prepare
+   * takes the reservation, whose lease the first V4L2 power-on then consumes. */
+  disable_error = 0;
+  max9296_hw_epoch = 8;
+  sensor.initialized_epoch = 8;
+  sensor.fsync_contract_epoch = 8;
+  sensor.fsync_contract_fps = 30;
+  sensor.prepare_lease_held = false;
+  fsync_release_count = 0;
+  replay_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 1) == -EIO);
+  CHECK(fsync_release_count == 1);
+  CHECK(sensor.fsync_contract_epoch == 0);
+  max9296_hw_epoch = 7;
 
   /*          Releasing the reservation drops the qualifier with it.  Reached
    *          through a board-power epoch advance: the retained reservation goes
@@ -747,14 +775,14 @@ int main(void) {
   active_sensor = &sensor;
   disable_error = -EIO;
   CHECK(max9296_s_stream(&sd, 0) == -EIO);
-  CHECK(sensor.fsync_output_unproven);
+  CHECK(sensor.fsync_output_unproven_epoch);
   disable_error = 0;
   max9296_hw_epoch = 8;
   sensor.initialized_epoch = 8;
   replay_error = -EIO;
   CHECK(max9296_s_stream(&sd, 1) == -EIO);
   CHECK(fsync_release_count == 1);
-  CHECK(!sensor.fsync_output_unproven && sensor.fsync_contract_epoch == 0);
+  CHECK(!sensor.fsync_output_unproven_epoch && sensor.fsync_contract_epoch == 0);
   max9296_hw_epoch = 7;
 
   /*     (b3) Nobody holds it -- max9296_cancel_prepare() or the lease timeout
