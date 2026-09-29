@@ -40,11 +40,11 @@ at least 1 and must not exceed the selected tuple's ordinary limit:
 
 | width x height | enable | table | ordinary max FPS | exposure-write max FPS |
 | --- | --- | --- | ---: | ---: |
-| 2560x720 | 3 | dual-wide (1280x720 per channel) | 30 | 30 |
+| 2560x720 | 3 | dual-wide (1280x720 per channel) | 60 | 30 |
 | 3840x1080 | 3 | dual-wide (1920x1080 per channel) | 30 | 30 |
 | 1280x360 | 3 | dual-wide (640x360 per channel) | 120 | 30 |
-| 1280x720 | 1 | single left | 30 | 30 |
-| 1280x720 | 2 | single right | 30 | 30 |
+| 1280x720 | 1 | single left | 60 | 30 |
+| 1280x720 | 2 | single right | 60 | 30 |
 | 1920x1080 | 1 | single left | 30 | 30 |
 | 1920x1080 | 2 | single right | 30 | 30 |
 | 640x360 | 1 | single left | 120 | 30 |
@@ -53,6 +53,14 @@ at least 1 and must not exceed the selected tuple's ordinary limit:
 The media-bus format is always the driver's UYVY format and is not an input.
 Extra fields, signed values, unsupported dimensions/masks, generation zero,
 and out-of-range FPS are rejected.
+
+`ordinary max FPS` is what the driver negotiates, not a delivered rate. The
+720p ceiling is 60 because `docs/fps-limit-analysis.md` measured 54.0-55.5 FPS
+at a 60 FPS request on a single 1280x720 channel with no firmware, driver, or
+DTS change, which showed the previous 30 was a driver-imposed limit rather than
+a hardware one; the driver raised it in 2.12. Read the rate back rather than
+assuming the request is delivered. This table was written before that change
+and said 30 until it was corrected.
 
 The 640x360 default `KEEP` policy changes each AP1302 preview/CSI output to
 640x360 but does not claim that AR0234 sensor readout also became 640x360.
