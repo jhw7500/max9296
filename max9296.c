@@ -599,6 +599,15 @@ struct max9296_dev {
   struct v4l2_mbus_framefmt fmt;
   bool pending_fmt_change;
 
+  /* Never NULL once probe has run, which is why several readers dereference it
+   * without checking -- max9296_calc_pixel_rate() and the crop/zoom seeds among
+   * them.  The invariant, enumerated rather than assumed: probe stores a static
+   * mode before max9296_init_controls() (its first consumer) and long before
+   * v4l2_async_register_subdev_sensor_common() makes any V4L2 entry point
+   * reachable, and the only other two writers -- max9296_set_fmt() and
+   * max9296_apply_prepare_fingerprint_locked() -- store a value they have
+   * already error-checked.  No write stores NULL.  A source check pins all
+   * three facts so this comment cannot quietly stop being true. */
   const struct max9296_mode_info *current_mode;
   const struct max9296_mode_info *last_mode;
   struct v4l2_fract frame_interval;
@@ -4459,6 +4468,9 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
     goto out;
   }
 
+  /* The NULL term is unreachable given the invariant at the field's
+   * declaration; it stays as a cheap assertion, not because a caller can get
+   * here before probe stored a mode. */
   if (!sensor->current_mode || fps > sensor->current_mode->max_fps) {
     printk(KERN_WARNING
            "[%s:%d][%s:%d] %s mode=%ux%u fps=%u max_fps=%u rejected",

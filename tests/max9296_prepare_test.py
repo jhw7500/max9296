@@ -1947,6 +1947,40 @@ def check_source(source: str, failures: list[str]) -> None:
                     "a post-bind STREAMON exit releases while holding the power lock"
                 )
 
+    # sensor->current_mode is dereferenced without a NULL check in several
+    # readers, so the comment at its declaration states the invariant that makes
+    # that safe. Pin the three facts it rests on, or the comment rots silently.
+    mode_writes = [
+        match.start()
+        for match in re.finditer(r"sensor->current_mode\s*=", code)
+    ]
+    probe_body = function(code, "max9296_probe")
+    if not probe_body:
+        failures.append("max9296_probe is no longer locatable")
+    elif len(mode_writes) != 3:
+        # Enumerated at the time of writing: probe, set_fmt, and the prepare
+        # fingerprint. A fourth writer has to be checked against the invariant.
+        failures.append(
+            f"current_mode now has {len(mode_writes)} writers, not the three enumerated"
+        )
+    else:
+        # (a) No writer stores NULL.
+        for at in mode_writes:
+            assignment = code[at : code.find(";", at)]
+            if re.search(r"=\s*NULL\b", assignment):
+                failures.append("current_mode is assigned NULL somewhere")
+        # (b) probe stores it before its first consumer, and (c) before any V4L2
+        #     entry point can run.
+        probe_store = probe_body.find("sensor->current_mode =")
+        first_consumer = probe_body.find("max9296_init_controls(sensor)")
+        registration = probe_body.find("v4l2_async_register_subdev_sensor_common")
+        if probe_store < 0:
+            failures.append("probe no longer stores an initial current_mode")
+        elif not 0 <= probe_store < first_consumer:
+            failures.append("probe builds controls before storing current_mode")
+        elif not probe_store < registration:
+            failures.append("probe publishes the subdev before storing current_mode")
+
     remove_power_lock = remove.find("mutex_lock(&max9296_power_lock)")
     remove_dying = remove.find("WRITE_ONCE(sensor->dying, true)")
     remove_power_unlock = remove.find("mutex_unlock(&max9296_power_lock)")
