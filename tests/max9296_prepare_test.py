@@ -1006,7 +1006,7 @@ def _statement_end(text: str, at: int) -> int:
 
 def function(source: str, name: str) -> str:
     start = -1
-    for return_type in ("int", "void", "bool", "ssize_t"):
+    for return_type in ("int", "void", "bool", "ssize_t", "u64"):
         for annotation in ("", "__maybe_unused "):
             start = source.find(f"static {return_type} {annotation}{name}(")
             if start >= 0:
@@ -1953,19 +1953,52 @@ def check_source(source: str, failures: list[str]) -> None:
     # stored value any more -- a leftover write would read as "this is how it
     # stays current", which is the one-way update #85 is about.
     volatile_ctrl = function(code, "max9296_g_volatile_ctrl")
+    # Only the pixel_rate arm: another volatile control added later must not be
+    # able to satisfy these checks on this one's behalf.
+    rate_case = ""
+    if volatile_ctrl:
+        at = volatile_ctrl.find("V4L2_CID_PIXEL_RATE")
+        if at >= 0:
+            end = volatile_ctrl.find("case ", at)
+            rate_case = volatile_ctrl[at:] if end < 0 else volatile_ctrl[at:end]
+
+    sink = None
     if not volatile_ctrl:
         failures.append("the volatile control handler is no longer locatable")
-    elif "V4L2_CID_PIXEL_RATE" not in volatile_ctrl:
+    elif not rate_case:
         failures.append("pixel_rate is not derived on read")
-    elif "max9296_calc_pixel_rate" not in volatile_ctrl:
-        failures.append("the pixel_rate read does not derive from the current rate")
-    elif not re.search(
-        r"\*\s*ctrl->p_new\.p_s64\s*=\s*max9296_calc_pixel_rate", volatile_ctrl
-    ):
+    elif not re.search(r"\*\s*ctrl->p_new\.p_s64\s*=", rate_case):
         # ctrl->val is the wrong sink for an INTEGER64: get_ctrl() copies p_cur
         # into p_new, calls this handler, then returns p_new, so a write to
         # ctrl->val leaves the read returning the stale stored value.
         failures.append("the pixel_rate read does not answer through p_new.p_s64")
+    else:
+        # Name the callee from the sink rather than pinning one spelling: a
+        # rename is semantics-preserving and must stay covered, while the facts
+        # below -- what it reads, and that it stays silent -- are what matter.
+        sink = re.search(
+            r"\*\s*ctrl->p_new\.p_s64\s*=\s*([A-Za-z_]\w*)\s*\(", rate_case
+        )
+        if not sink:
+            failures.append("the pixel_rate read does not derive from the current rate")
+
+    if sink:
+        derivation = function(code, sink.group(1))
+        if not derivation:
+            failures.append(f"the pixel_rate read calls {sink.group(1)}, which is not locatable")
+        else:
+            if "->fps" not in derivation:
+                failures.append("the pixel_rate read does not derive from the current rate")
+            if not ("current_mode->width" in derivation
+                    and "current_mode->height" in derivation):
+                failures.append("the pixel_rate read does not derive from the current mode")
+            # The volatile read runs with the ctrl handler's lock held, and this
+            # driver aliases that lock to sensor->lock, the mutex that also
+            # serializes s_stream and the prepare transaction. Userspace can spin
+            # VIDIOC_G_EXT_CTRLS, so logging here is unbounded kernel output
+            # inside that critical section.
+            if "printk" in derivation:
+                failures.append("the pixel_rate read logs while holding the control handler lock")
 
     # Both flags, however they are spelled -- one |= or two set the same bits.
     flags_writes = " ".join(

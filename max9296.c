@@ -1832,7 +1832,12 @@ static u64 max9296_calc_pixel_rate(struct max9296_dev *sensor) {
 
   rate = sensor->current_mode->width * sensor->current_mode->height;
   rate *= READ_ONCE(sensor->fps);
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s (rate:%llu)", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, rate);
+  /* Deliberately silent.  max9296_g_volatile_ctrl() runs this on every
+   * VIDIOC_G_EXT_CTRLS read of V4L2_CID_PIXEL_RATE while the ctrl handler's
+   * lock -- which is sensor->lock -- is held, so a printk here would let
+   * userspace spin unbounded kernel output inside the mutex that also
+   * serializes s_stream and the prepare transaction.  The probe-time value is
+   * still logged once, by max9296_init_controls(). */
   return rate;
 }
 
