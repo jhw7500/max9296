@@ -5698,8 +5698,17 @@ static void max9296_prepare_lease_timeout(struct work_struct *work) {
     sensor->prepare_releasing = true;
     /* Same rule as cancel, and same reason: return only the reservation this
      * lease created.  Inside max9296_prepare_lease_can_arm_locked() above, so
-     * only a lease this timeout actually ends is touched at all. */
-    if (sensor->prepare_lease_reserved)
+     * only a lease this timeout actually ends is touched at all.
+     *
+     * !streaming as well, which the can-arm predicate does not test.  On this
+     * BSP the state cannot occur -- mxc_isi_cap_streamon() runs
+     * mxc_isi_config_parm() -> s_power(1), which consumes the lease, before
+     * mxc_isi_pipeline_enable() reaches s_stream(1) -- but that argument lives
+     * in another repository's call order, so it is not an invariant this file
+     * can keep.  Gate locally: a streaming instance's reservation belongs to
+     * the stream, and STREAMOFF returns it under its own rule.  Clearing the
+     * flag regardless is right either way, because the lease is ending. */
+    if (sensor->prepare_lease_reserved && !sensor->streaming)
       max9296_drop_fsync_contract_locked(sensor);
     sensor->prepare_lease_reserved = false;
     sensor->prepare_lease_held = false;
@@ -5984,8 +5993,14 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * consumed prepare lease, for one, leaves prepare_lease_held false while the
      * prepared instance still intends to use the rate.  #88 removed the need to
      * ask: cancel, lease expiry and the remove-time survivor stop each release
-     * their own reservation now, so there is no orphan left for this path to
-     * sweep and no ownership to infer.
+     * their own reservation now, so none of them leaves this path an orphan to
+     * sweep.  That is about the paths that end something, not a claim that no
+     * reservation outlives its user.  A lease consumed by max9296_s_power(1) is
+     * governed by this rule afterwards, and invalidation is on the way in --
+     * max9296_set_power() advances max9296_hw_epoch and resets the hardware at
+     * the 0->1 crossing, not on the way out -- so on a board whose capture
+     * driver never calls s_power(0) the count does not return to zero by itself
+     * and an external reset is what clears such a reservation.
      * Called after the power lock is dropped: the helper takes the fsync-config
      * lock and then the power lock itself. */
     if (was_streaming && !ret) {
@@ -7760,6 +7775,9 @@ static int max9296_remove(struct i2c_client *client) {
   WARN_ON(sensor->prepare_lease_held && sensor->power_count > 0);
   accounted = sensor->prepare_lease_held || sensor->power_count > 0;
   sensor->prepare_lease_held = false;
+  /* The lease guards all rest on "reserved implies held"; this was the one
+   * clear that left the flag set behind it. */
+  sensor->prepare_lease_reserved = false;
   sensor->prepare_lease_generation = 0;
   sensor->power_count = 0;
   if (accounted) {

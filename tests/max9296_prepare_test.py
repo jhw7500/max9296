@@ -277,10 +277,19 @@ class Camera:
                 self.arm_timeout()
             return "estale"
 
+        held = self.lease
+        prior = (self.fsync_contract_epoch, self.fsync_contract_fps)
         if not self.board.configure_fsync(self, fingerprint[2], bind=True):
             if self.lease:
                 self.arm_timeout()
             return "estale"
+        took = (self.fsync_contract_epoch, self.fsync_contract_fps) != prior
+        # Mirrors the driver's two binds: a fresh lease assigns, a lease already
+        # held merges, so an idempotent re-bind cannot drop ownership it has.
+        if held:
+            self.lease_reserved |= took
+        else:
+            self.lease_reserved = took
 
         if not self.lease:
             self.adopt_or_acquire()
@@ -296,7 +305,9 @@ class Camera:
             self.hardware_fingerprint = fingerprint
         self.state = "ready"
         if not arm_succeeds:
-            self.drop_fsync_contract()
+            if self.lease_reserved:
+                self.drop_fsync_contract()
+            self.lease_reserved = False
             self.lease = False
             self.state = "failed"
             self.board.put()
@@ -680,6 +691,21 @@ def check_model(failures: list[str]) -> None:
     expired.finish_timeout()
     if expired.fsync_contract_epoch == bound:
         failures.append("an expired lease kept the reservation it took")
+
+    # An identical re-request under a lease already held re-binds the same pair
+    # and therefore changes nothing. Ownership must survive that: with `=` the
+    # no-op bind would record "took nothing", and the cancel after it would
+    # leave the reservation stranded exactly as before #88.
+    board = Board()
+    keeper, renewed = Camera(board), Camera(board)
+    keeper.power_on()
+    renewed.prepare(fingerprint=(2560, 720, 60, 3))
+    bound = renewed.fsync_contract_epoch
+    if renewed.request_prepare(91, (2560, 720, 60, 3)) != "ready":
+        failures.append("an identical re-request under a held lease must be accepted")
+    renewed.release_lease("idle")
+    if renewed.fsync_contract_epoch == bound:
+        failures.append("an idempotent re-request erased the reservation it owned")
 
     # The converse is what makes those releases safe: a reservation the lease
     # did not create is not the lease's to return. This stands in for a
@@ -1985,8 +2011,10 @@ def check_source(source: str, failures: list[str]) -> None:
         failures.append("the idle-release helper is no longer locatable")
     if helper_end < 0:
         helper_end = len(code)
+    # The expiry site adds a local not-streaming term, so the lease guard may
+    # carry extra conjuncts; what it may not do is drop the ownership test.
     approved = re.compile(
-        r"(?:if\(sensor->prepare_lease_reserved\)"
+        r"(?:if\(sensor->prepare_lease_reserved(?:&&[^()]*)?\)"
         r"|if\(was_streaming&&!\w+\))\{?$"
     )
     inspected = 0
@@ -2002,23 +2030,66 @@ def check_source(source: str, failures: list[str]) -> None:
     # Ownership has to be derived from the bind, not asserted. A bind that just
     # sets the flag true would satisfy every guard above while restoring exactly
     # the defect they exist for.
-    derived = 0
-    for assign in re.findall(
-        r"prepare_lease_reserved\s*\|?=[^;]*;", re.sub(r"\s+", " ", code)
+    fresh_binds = merged_binds = 0
+    for assign in re.finditer(
+        r"prepare_lease_reserved\s*(\|?)=([^;]*);", re.sub(r"\s+", " ", code)
     ):
-        rhs = assign.split("=", 1)[1].strip().rstrip(";").strip()
+        merges = assign.group(1) == "|"
+        rhs = assign.group(2).strip()
         if rhs == "false":
             continue
         if "fsync_contract_epoch" not in rhs or "fsync_contract_fps" not in rhs:
             failures.append(
                 "a prepare bind claims reservation ownership without comparing the bind"
             )
+        elif merges:
+            merged_binds += 1
         else:
-            derived += 1
-    if derived < 2:
+            fresh_binds += 1
+    # = and |= are not interchangeable. The bind that takes a fresh lease states
+    # what it found; the bind under a lease already held must merge, because an
+    # idempotent re-bind of the same rate changes nothing and would otherwise
+    # erase ownership the lease already had -- re-orphaning the reservation.
+    if fresh_binds < 1:
+        failures.append("no prepare bind records taking the reservation fresh")
+    if merged_binds < 1:
+        failures.append("the existing-lease bind overwrites ownership instead of merging it")
+
+    # The expiry site is the only release whose predicate does not already
+    # exclude a streaming instance, so it carries the term itself. Pin it: the
+    # reason it is safe to omit lives in another repository's call order.
+    if timeout_body:
+        head = re.sub(r"\s+", "", timeout_body[: timeout_body.find(
+            "max9296_drop_fsync_contract_locked")])
+        if "prepare_lease_reserved&&!sensor->streaming" not in head:
+            failures.append(
+                "the lease-timeout release does not exclude a streaming instance"
+            )
+
+    # reserved implies held. Every one of the five lease guards reads the flag
+    # only under that test, so a clear of the lease that leaves the flag set is
+    # the one place the invariant breaks -- and the next reader that is not
+    # nested under it would release a reservation this instance no longer owns.
+    squeezed_code = re.sub(r"\s+", "", code)
+    lease_clears = [
+        match.start()
+        for match in re.finditer(r"prepare_lease_held=false;", squeezed_code)
+    ]
+    if len(lease_clears) < 7:
         failures.append(
-            f"only {derived} prepare binds derive whether they took the reservation"
+            f"the lease-clear enumeration only reached {len(lease_clears)} sites"
         )
+    for at in lease_clears:
+        if "prepare_lease_reserved=false;" not in squeezed_code[at - 90 : at + 110]:
+            failures.append("a lease clear leaves reservation ownership set")
+
+    # A consumed lease hands the reservation to the stream side; leaving the
+    # flag set would let a later cancel or expiry release what it no longer owns.
+    power_body = function(code, "max9296_s_power")
+    if not power_body:
+        failures.append("max9296_s_power is no longer locatable")
+    elif "prepare_lease_reserved = false" not in power_body:
+        failures.append("a consumed lease keeps its reservation ownership")
 
     # A matcher that stops matching would pass this check in silence.
     if inspected < 7:
