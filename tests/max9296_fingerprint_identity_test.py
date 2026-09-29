@@ -107,6 +107,16 @@ static const struct max9296_mode_info dual_hd = {{
     .id = MAX9296_MODE_2560x720,
     .exposure_safe_max_fps = MAX9296_EXPOSURE_SAFE_MAX_FPS,
 }};
+/* The production table holds a pair no derived axis can separate:
+ * max9296_mode_data_360_R and max9296_mode_data[MAX9296_MODE_640x360] agree on
+ * id, dimensions, ceiling and exposure_safe_max_fps, so the pointer comparison
+ * in max9296_fingerprint_equal() is the only thing between them. A mode-axis
+ * check that changes dual-ness instead tests a derived axis and passes with
+ * that comparison deleted. */
+static const struct max9296_mode_info single_360p_right = {{
+    .id = MAX9296_MODE_640x360,
+    .exposure_safe_max_fps = MAX9296_EXPOSURE_SAFE_MAX_FPS,
+}};
 
 static struct max9296_hw_fingerprint make(const struct max9296_mode_info *mode,
                                           u32 width, u32 height, u32 fps) {{
@@ -155,9 +165,19 @@ int main(void) {{
         max9296_fingerprint_exposure_seed_route(&hd_30));
   CHECK(!max9296_fingerprint_equal(&hd_30, &hd_40));
 
-  /* Every non-derived axis still separates. */
+  /* The mode axis, isolated: two distinct table entries that agree on every
+   * field the derived axes read. Only the pointer separates them. */
+  struct max9296_hw_fingerprint single_30 = make(&single_360p, 640U, 360U, 30U);
+  struct max9296_hw_fingerprint twin = single_30;
+  twin.mode = &single_360p_right;
+  CHECK(max9296_fingerprint_preview_max_fps(&single_30) ==
+        max9296_fingerprint_preview_max_fps(&twin));
+  CHECK(max9296_fingerprint_exposure_seed_route(&single_30) ==
+        max9296_fingerprint_exposure_seed_route(&twin));
+  CHECK(!max9296_fingerprint_equal(&single_30, &twin));
+
+  /* Every other non-derived axis still separates. */
   struct max9296_hw_fingerprint other;
-  other = hd_30; other.mode = &single_360p;   CHECK(!max9296_fingerprint_equal(&hd_30, &other));
   other = hd_30; other.width = 1280U;         CHECK(!max9296_fingerprint_equal(&hd_30, &other));
   other = hd_30; other.height = 1080U;        CHECK(!max9296_fingerprint_equal(&hd_30, &other));
   other = hd_30; other.code = 0x2007U;        CHECK(!max9296_fingerprint_equal(&hd_30, &other));

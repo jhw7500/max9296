@@ -155,7 +155,57 @@ class Board:
             self.reset_direction_output_calls += 1
 
 
-def hardware_identity(fingerprint: tuple[int, int, int, int]) -> tuple:
+def _preview_window() -> tuple[int, int, int, int]:
+    """The high-fps window and the output size it applies to, from the header.
+
+    Retyping them is the stand-in this suite exists to remove. The identity test
+    drives production but never compares it against this re-derivation, so a
+    moved threshold would part the two in silence. Read them instead, and fail
+    loudly if the predicate no longer has the shape this reads.
+    """
+    header = (ROOT / "max9296_360p_policy.h").read_text(encoding="utf-8")
+    window = re.search(
+        r"max9296_preview_uses_high_fps\(unsigned int fps\)\s*\{\s*"
+        r"return fps > (\d+)U && fps <= (\d+)U;",
+        header,
+    )
+    output = re.search(
+        r"max9296_preview_output_uses_high_fps\([^)]*\)\s*\{\s*"
+        r"return width == (\d+)U && height == (\d+)U",
+        header,
+    )
+    if not (window and output):
+        raise ValueError(
+            "the high-fps window or its output size no longer has the shape this "
+            "model reads out of max9296_360p_policy.h"
+        )
+    return (
+        int(window.group(1)),
+        int(window.group(2)),
+        int(output.group(1)),
+        int(output.group(2)),
+    )
+
+
+def _exposure_safe_max() -> int:
+    """MAX9296_EXPOSURE_SAFE_MAX_FPS lives in max9296.c, not in a header."""
+    match = re.search(
+        r"^#define MAX9296_EXPOSURE_SAFE_MAX_FPS (\d+)$",
+        SOURCE.read_text(encoding="utf-8"),
+        re.M,
+    )
+    if not match:
+        raise ValueError(
+            "MAX9296_EXPOSURE_SAFE_MAX_FPS is no longer a plain #define in max9296.c"
+        )
+    return int(match.group(1))
+
+
+WINDOW_LOW, WINDOW_HIGH, WINDOW_WIDTH, WINDOW_HEIGHT = _preview_window()
+EXPOSURE_SAFE_MAX = _exposure_safe_max()
+
+
+def hardware_identity(fingerprint: tuple[int, int, int, int] | None) -> tuple | None:
     """The axes max9296_fingerprint_equal() compares -- raw fps is not one.
 
     Two rates that program the same registers are the same hardware, which is
@@ -163,19 +213,28 @@ def hardware_identity(fingerprint: tuple[int, int, int, int]) -> tuple:
     the programmed preview ceiling and the exposure seed route in place of the
     rate; this mirrors both from the tuple the model carries.
 
-    This is a re-derivation, like the rest of the model. What binds those two
-    derivations to production is tests/max9296_fingerprint_identity_test.py,
-    which compiles the real max9296_fingerprint_equal().
+    The thresholds come from production. The SHAPE of the two derivations does
+    not: this is a re-derivation like the rest of the model, and nothing
+    compares it against max9296_fingerprint_equal(). What
+    tests/max9296_fingerprint_identity_test.py binds is production to its own
+    behaviour, not production to this function.
+
+    None means "no fingerprint yet", which is every axis unknown and therefore
+    equal to nothing -- the `!=` this replaced treated it the same way.
     """
+    if fingerprint is None:
+        return None
     width, height, fps, enable = fingerprint
     dual = enable == 3
     output_width = width // 2 if dual else width
     programmed_ceiling = (
         fps << 8
-        if output_width == 640 and height == 360 and 30 < fps <= 120
+        if output_width == WINDOW_WIDTH
+        and height == WINDOW_HEIGHT
+        and WINDOW_LOW < fps <= WINDOW_HIGH
         else 0
     )
-    seed_route_skips = fps > 30
+    seed_route_skips = fps > EXPOSURE_SAFE_MAX
     return (width, height, enable, programmed_ceiling, seed_route_skips)
 
 
@@ -916,6 +975,24 @@ def check_model(failures: list[str]) -> None:
         failures.append("a cadence switch inside one hardware class must be accepted")
     if switcher.firmware_loads != 1:
         failures.append("a switch inside one hardware class must not reload firmware")
+
+    # Each derived axis, isolated. At 640x360 the window edge and the exposure
+    # safe max are the same number, so a pair that crosses both at once proves
+    # neither: drop either axis from hardware_identity() and such a scenario
+    # still refuses. These two hold one axis fixed while the other moves.
+    board = Board()
+    ceiling_only = Camera(board)
+    ceiling_only.prepare(fingerprint=(640, 360, 60, 1))
+    ceiling_only.drop_fsync_contract()
+    if ceiling_only.request_prepare(95, (640, 360, 120, 1)) != "estale":
+        failures.append("a switch moving only the preview ceiling must be refused")
+
+    board = Board()
+    route_only = Camera(board)
+    route_only.prepare(fingerprint=(2560, 720, 30, 3))
+    route_only.drop_fsync_contract()
+    if route_only.request_prepare(96, (2560, 720, 40, 3)) != "estale":
+        failures.append("a switch moving only the exposure seed route must be refused")
 
     # Across classes it is still refused: at 640x360 the 30 and 60 rates program
     # different preview ceilings, so they are different hardware.

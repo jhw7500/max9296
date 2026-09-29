@@ -93,8 +93,11 @@ static void test_programmed_max_fps_models_the_preview_ceiling(void) {
    * This does NOT trap that blocker, despite what this comment used to claim.
    * The halving lives in max9296_fingerprint_preview_max_fps(), static in
    * max9296.c and unreachable from a standalone C test, so deleting it leaves
-   * every check in this file green.  Verified by extracting the offending
-   * commit and compiling it against this test: 55 checks, 0 failures.
+   * every check in this file green.  Verified by deleting it and running this
+   * file: the summary line below still reports 0 failures, in both the default
+   * and the restricted build, while the identity test fails.  (The count on
+   * that line is a runtime total, not the number of CHECK statements here --
+   * the one inside the fps loop accounts for most of it.)
    * tests/max9296_fingerprint_identity_test.py compiles that function and is
    * what actually holds it (#84). */
   CHECK(max9296_preview_programmed_max_fps(1280U, 360U, 60U) == 0U);
