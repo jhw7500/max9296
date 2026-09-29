@@ -56,6 +56,11 @@ def main() -> int:
         "Makefile",
         "tests/max9296_exposure_replay_binding_test.py",
         "tools/max9296_health_export.py",
+        # The health suite reads this document as a test input -- the status
+        # line check compares it against the driver -- so a docs-only edit has
+        # to run the suite. Without this entry the filter can go stale and
+        # nothing fails.
+        "docs/parallel-prepare-v1.md",
     )
     for event in ("push", "pull_request"):
         patterns = event_paths(workflow, event)
