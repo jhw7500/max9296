@@ -765,6 +765,31 @@ int main(void) {
   CHECK(sensor.fsync_contract_epoch == 0);
   max9296_hw_epoch = 7;
 
+  /*          A stale qualifier must not make a plain stop look like a retry.
+   *          After the reset a fresh prepare installs a new reservation and the
+   *          first v4l2 power-on consumes its lease, so prepare_lease_held no
+   *          longer protects it; a defensive STREAMOFF before STREAMON would
+   *          otherwise hand that reservation away and let a peer take another
+   *          rate out from under the prepared instance. */
+  sensor = fixture(ctrls);
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(sensor.fsync_output_unproven_epoch == 7);
+  disable_error = 0;
+  max9296_hw_epoch = 8;               /* last-user power cycle */
+  sensor.initialized_epoch = 8;
+  sensor.fsync_contract_epoch = 8;    /* a fresh prepare reserved again */
+  sensor.fsync_contract_fps = 30;
+  sensor.prepare_lease_held = false;  /* and s_power(1) consumed its lease */
+  fsync_release_count = 0;
+  CHECK(max9296_s_stream(&sd, 0) == 0);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.fsync_contract_epoch == 8 && sensor.fsync_contract_fps == 30);
+  max9296_hw_epoch = 7;
+
   /*          Releasing the reservation drops the qualifier with it.  Reached
    *          through a board-power epoch advance: the retained reservation goes
    *          stale, the next start's bind creates a new one, and a failure then

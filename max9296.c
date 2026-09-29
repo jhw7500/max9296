@@ -2238,6 +2238,36 @@ static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
   mutex_unlock(&max9296_fsync_config_lock);
 }
 
+static bool max9296_fsync_output_unproven_locked(
+    struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+
+  return sensor->fsync_output_unproven_epoch != 0 &&
+         sensor->fsync_output_unproven_epoch == READ_ONCE(max9296_hw_epoch);
+}
+
+/*
+ * Whether a reservation this start did not take is held by nobody.  Equality of
+ * the epoch/fps pair across the bind says only that the bind re-confirmed an
+ * existing reservation; it cannot say who owns it.  Three owners are possible
+ * and only the third may be swept up by a failed start:
+ *
+ *   - a prepare lease, which holds it until the lease is consumed or cancelled;
+ *   - this instance itself, when a STREAMOFF ended a stream but could not prove
+ *     the output off, which is the fail-closed retention that branch documents;
+ *   - nobody, after max9296_cancel_prepare() or the lease timeout cleared the
+ *     lease without touching the reservation.
+ *
+ * The caller has already established that this start did not take it.
+ */
+static bool max9296_fsync_contract_unowned_locked(
+    struct max9296_dev *sensor) {
+  lockdep_assert_held(&sensor->lock);
+
+  return !sensor->prepare_lease_held &&
+         !max9296_fsync_output_unproven_locked(sensor);
+}
+
 /*
  * Release the reservation after a failed start, unless this instance is already
  * streaming.  A repeat STREAMON on a streaming instance re-binds the reservation
@@ -2260,36 +2290,6 @@ static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
  * What this helper does hold is narrower: no STREAMON failure exit releases a
  * reservation while the pulse train is still driven for its own instance.
  */
-/*
- * Whether a reservation this start did not take is held by nobody.  Equality of
- * the epoch/fps pair across the bind says only that the bind re-confirmed an
- * existing reservation; it cannot say who owns it.  Three owners are possible
- * and only the third may be swept up by a failed start:
- *
- *   - a prepare lease, which holds it until the lease is consumed or cancelled;
- *   - this instance itself, when a STREAMOFF ended a stream but could not prove
- *     the output off, which is the fail-closed retention that branch documents;
- *   - nobody, after max9296_cancel_prepare() or the lease timeout cleared the
- *     lease without touching the reservation.
- *
- * The caller has already established that this start did not take it.
- */
-static bool max9296_fsync_output_unproven_locked(
-    struct max9296_dev *sensor) {
-  lockdep_assert_held(&sensor->lock);
-
-  return sensor->fsync_output_unproven_epoch != 0 &&
-         sensor->fsync_output_unproven_epoch == READ_ONCE(max9296_hw_epoch);
-}
-
-static bool max9296_fsync_contract_unowned_locked(
-    struct max9296_dev *sensor) {
-  lockdep_assert_held(&sensor->lock);
-
-  return !sensor->prepare_lease_held &&
-         !max9296_fsync_output_unproven_locked(sensor);
-}
-
 static void max9296_drop_fsync_contract_if_idle_locked(
     struct max9296_dev *sensor) {
   lockdep_assert_held(&sensor->lock);
@@ -5904,11 +5904,17 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
       max9296_drop_fsync_contract_locked(sensor);
     } else if (was_streaming) {
       sensor->fsync_output_unproven_epoch = READ_ONCE(max9296_hw_epoch);
-    } else if (!ret && sensor->fsync_output_unproven_epoch) {
+    } else if (!ret && max9296_fsync_output_unproven_locked(sensor)) {
       /* A retry of a stop that had failed.  The first attempt already cleared
        * sensor->streaming, so this one ends nothing -- but it does what the
        * qualifier was waiting for: it proves the output off.  The retention is
-       * over, so give the reservation back unless something took it meanwhile. */
+       * over, so give the reservation back unless something took it meanwhile.
+       *
+       * The qualifier must be the current epoch's, not merely non-zero.  A
+       * board-power transition leaves an old value behind, and treating that as
+       * a retry would release a reservation a fresh prepare installed after the
+       * reset -- whose lease a v4l2 power-on may already have consumed, so
+       * prepare_lease_held no longer protects it. */
       sensor->fsync_output_unproven_epoch = 0;
       if (max9296_fsync_contract_unowned_locked(sensor))
         max9296_drop_fsync_contract_locked(sensor);
