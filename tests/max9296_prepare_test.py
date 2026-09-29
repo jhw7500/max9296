@@ -945,6 +945,47 @@ def check_model(failures: list[str]) -> None:
         failures.append("a real shared reset must invalidate the peer hardware fast path")
 
 
+def _same_block(text: str) -> bool:
+    """Whether a release and the errno after it belong to the same failure branch.
+
+    Measured as the net brace depth of the text between them. Zero is the plain
+    form. Minus one is a braced guard body: the release sits one level deeper
+    and the errno is back in the branch, which is the same branch. Plus one
+    means the errno is inside a block the release is not -- the release was
+    hoisted onto the path a successful start also takes, which is the defect
+    this check exists for. Below minus one leaves the branch entirely.
+    """
+    depth = 0
+    for char in text:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth < -1:
+                return False
+    return depth in (0, -1)
+
+
+_OWNERSHIP_GUARD = "if(bind_reserved||max9296_fsync_contract_unowned_locked(sensor))"
+
+
+def _ownership_guarded(prefix: str, trailing: str = "") -> bool:
+    """Whether `prefix` ends with the post-bind release's ownership guard.
+
+    Whitespace is squeezed and an opening brace tolerated, so a reflow or a
+    braced body reads the same; the operands and the operator are not, because
+    either one alone is a different rule.
+    """
+    squeezed = re.sub(r"\s+", "", prefix)
+    if trailing:
+        if not squeezed.endswith(trailing):
+            return False
+        squeezed = squeezed[: -len(trailing)]
+    if squeezed.endswith("{"):
+        squeezed = squeezed[:-1]
+    return squeezed.endswith(_OWNERSHIP_GUARD)
+
+
 def _statement_end(text: str, at: int) -> int:
     """Index of the `;` ending the statement that starts at `at`.
 
@@ -1770,11 +1811,9 @@ def check_source(source: str, failures: list[str]) -> None:
         release = stream.rfind("drop_fsync_contract", bind_at, at)
         if release < 0:
             failures.append(f"{label} does not release the FSYNC reservation")
-        elif "{" in stream[release:at] or "}" in stream[release:at]:
+        elif not _same_block(stream[release:at]):
             failures.append(f"{label} releases outside its own failure branch")
-        elif not re.search(
-            r"if\s*\(\s*bind_reserved\s*\)\s*max9296_$", stream[:release]
-        ):
+        elif not _ownership_guarded(stream[:release], "max9296_"):
             # A failed start gives back only what it reserved. The bind succeeds
             # when the requested rate equals one already reserved, rewriting the
             # same two fields, so an unconditional release here would take a
@@ -1788,6 +1827,16 @@ def check_source(source: str, failures: list[str]) -> None:
     # the reservation. Pin it: a release appearing there would make the comment
     # false, and a reader who believed it could drop a release elsewhere as
     # redundant.
+    # fsync_output_unproven qualifies the reservation, so the release that clears
+    # the reservation must clear it too -- otherwise a stale qualifier would make
+    # the next orphan look owned. The executed harness stubs this helper, so the
+    # correspondence between the stub and the real body is pinned here.
+    drop_body = function(code, "max9296_drop_fsync_contract_locked")
+    if not drop_body:
+        failures.append("the FSYNC release helper is no longer locatable")
+    elif "fsync_output_unproven" not in drop_body:
+        failures.append("releasing the reservation leaves its output qualifier set")
+
     for name in ("max9296_cancel_prepare", "max9296_prepare_lease_timeout"):
         body = function(code, name)
         if not body:
@@ -1862,6 +1911,17 @@ def check_source(source: str, failures: list[str]) -> None:
             bind_failed + len("goto out;") if bind_checked and bind_failed >= 0 else bind_at
         )
         span = stream[span_at:commit_at]
+        # Every release in the span carries the same guard. The two-token loop
+        # above reaches only the exits it names; an inverted guard at any of the
+        # others both strands what the start took and frees what it only
+        # re-confirmed, which is the pair this rule exists to prevent.
+        for match in re.finditer(
+            r"max9296_drop_fsync_contract_if_idle_locked\(", span
+        ):
+            if not _ownership_guarded(span[: match.start()]):
+                failures.append(
+                    "a post-bind STREAMON exit releases without the ownership guard"
+                )
         if "max9296_drop_fsync_contract_locked(" in span:
             failures.append(
                 "a post-bind STREAMON exit releases without exempting a streaming instance"
@@ -1875,7 +1935,7 @@ def check_source(source: str, failures: list[str]) -> None:
                 # nothing, and the check 20 lines up forbids releasing there.
                 continue
             release = span.rfind("max9296_drop_fsync_contract_if_idle_locked", 0, at)
-            if release < 0 or "{" in span[release:at] or "}" in span[release:at]:
+            if release < 0 or not _same_block(span[release:at]):
                 line = code.count("\n", 0, stream_at + span_at + at) + 1
                 failures.append(
                     f"the post-bind exit at max9296.c:{line} does not release the FSYNC reservation"

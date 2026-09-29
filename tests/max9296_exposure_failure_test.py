@@ -20,6 +20,7 @@ def build_harness(source: str) -> str:
         "max9296_zoom_seed_factor",
         "max9296_zoom_seed_center",
         "max9296_zoom_seed_from_mode",
+        "max9296_fsync_contract_unowned_locked",
         "max9296_drop_fsync_contract_if_idle_locked",
         "max9296_apply_cached_crop",
         "max9296_set_exposure_cluster",
@@ -70,6 +71,7 @@ struct max9296_dev {
   bool dying, prepare_releasing, streaming;
   u64 initialized_epoch, stream_commit_epoch, fsync_contract_epoch;
   u32 fsync_contract_fps;
+  bool fsync_output_unproven, prepare_lease_held;
   int stream_on, restart;
   struct { int fsync; } state;
   struct { struct max9296_dev *sensor; } shared;
@@ -217,6 +219,7 @@ static unsigned int fsync_release_count;
 static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
   sensor->fsync_contract_epoch = 0;
   sensor->fsync_contract_fps = 0;
+  sensor->fsync_output_unproven = false;
   fsync_release_count++;
 }
 static int max9296_write_zoom_channel(
@@ -641,21 +644,78 @@ int main(void) {
   CHECK(sensor.fsync_contract_epoch == 0 && sensor.fsync_contract_fps == 0);
 
   /* (b) The request asks for the rate already reserved, so the bind only
-   *     re-confirms a prepare lease's reservation.  Releasing it here would
-   *     take the cadence from an instance whose hardware is programmed for it
-   *     and hand a stopped peer the freedom to move the pulse train. */
+   *     re-confirms it.  Who holds it then decides, and the three owners must
+   *     be told apart -- equality of the pair cannot say which it is.
+   *
+   *     (b1) A prepare lease holds it.  Releasing would take the cadence from
+   *          an instance whose hardware is programmed for it and hand a stopped
+   *          peer the freedom to move the pulse train. */
   sensor = fixture(ctrls);
   sensor.streaming = false;
   sensor.fsync_contract_epoch = 7;
   sensor.fsync_contract_fps = 30;
+  sensor.prepare_lease_held = true;
   requested_enable = 1;                       /* topology mismatch, same rate */
   active_sensor = &sensor;
   CHECK(max9296_s_stream(&sd, 1) == -ESTALE);
   CHECK(fsync_release_count == 0);
   CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
 
-  /* The same rule at a later exit: a replay failure must not take a lease's
-   * reservation either. */
+  /*     (b2) A STREAMOFF that could not prove the output off holds it.  Drive
+   *          the real transition rather than setting the flag by hand: the
+   *          failed stop is what must record it, and a later failed start must
+   *          then leave the retention alone. */
+  sensor = fixture(ctrls);
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.fsync_output_unproven);
+  disable_error = 0;
+  replay_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 1) == -EIO);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+
+  /*          A start that commits turns the output on deliberately, so the
+   *          qualifier stops applying and the next failed start may sweep an
+   *          orphan again. */
+  sensor = fixture(ctrls);
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(sensor.fsync_output_unproven);
+  disable_error = 0;
+  CHECK(max9296_s_stream(&sd, 1) == 0);
+  CHECK(!sensor.fsync_output_unproven);
+
+  /*          Releasing the reservation drops the qualifier with it.  Reached
+   *          through a board-power epoch advance: the retained reservation goes
+   *          stale, the next start's bind creates a new one, and a failure then
+   *          gives back what that start took -- with the qualifier. */
+  sensor = fixture(ctrls);
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(sensor.fsync_output_unproven);
+  disable_error = 0;
+  max9296_hw_epoch = 8;
+  sensor.initialized_epoch = 8;
+  replay_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 1) == -EIO);
+  CHECK(fsync_release_count == 1);
+  CHECK(!sensor.fsync_output_unproven && sensor.fsync_contract_epoch == 0);
+  max9296_hw_epoch = 7;
+
+  /*     (b3) Nobody holds it -- max9296_cancel_prepare() or the lease timeout
+   *          cleared the lease without touching the reservation.  A failed
+   *          start sweeps that up; leaving it would pin the shared cadence. */
   sensor = fixture(ctrls);
   sensor.streaming = false;
   sensor.fsync_contract_epoch = 7;
@@ -663,8 +723,18 @@ int main(void) {
   active_sensor = &sensor;
   replay_error = -EIO;
   CHECK(max9296_s_stream(&sd, 1) == -EIO);
-  CHECK(fsync_release_count == 0);
-  CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+  CHECK(fsync_release_count == 1);
+  CHECK(sensor.fsync_contract_epoch == 0 && sensor.fsync_contract_fps == 0);
+
+  /*     and the same orphan at the identity-mismatch exit. */
+  sensor = fixture(ctrls);
+  sensor.streaming = false;
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  requested_enable = 1;
+  active_sensor = &sensor;
+  CHECK(max9296_s_stream(&sd, 1) == -ESTALE);
+  CHECK(fsync_release_count == 1);
 
   /* A cold start -- the fixture above is always warm, so this is the only case
    * that runs max9296_prepare_hardware_locked() to success.  A release anywhere
