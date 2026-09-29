@@ -599,6 +599,15 @@ struct max9296_dev {
   struct v4l2_mbus_framefmt fmt;
   bool pending_fmt_change;
 
+  /* Never NULL once probe has run, which is why several readers dereference it
+   * without checking -- max9296_calc_pixel_rate() and the crop/zoom seeds among
+   * them.  The invariant, enumerated rather than assumed: probe stores a static
+   * mode before max9296_init_controls() (its first consumer) and long before
+   * v4l2_async_register_subdev_sensor_common() makes any V4L2 entry point
+   * reachable, and the only other two writers -- max9296_set_fmt() and
+   * max9296_apply_prepare_fingerprint_locked() -- store a value they have
+   * already error-checked.  No write stores NULL.  A source check pins all
+   * three facts so this comment cannot quietly stop being true. */
   const struct max9296_mode_info *current_mode;
   const struct max9296_mode_info *last_mode;
   struct v4l2_fract frame_interval;
@@ -1823,7 +1832,12 @@ static u64 max9296_calc_pixel_rate(struct max9296_dev *sensor) {
 
   rate = sensor->current_mode->width * sensor->current_mode->height;
   rate *= READ_ONCE(sensor->fps);
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s (rate:%llu)", KEYWORD, sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__, rate);
+  /* Deliberately silent.  max9296_g_volatile_ctrl() runs this on every
+   * VIDIOC_G_EXT_CTRLS read of V4L2_CID_PIXEL_RATE while the ctrl handler's
+   * lock -- which is sensor->lock -- is held, so a printk here would let
+   * userspace spin unbounded kernel output inside the mutex that also
+   * serializes s_stream and the prepare transaction.  The probe-time value is
+   * still logged once, by max9296_init_controls(). */
   return rate;
 }
 
@@ -2526,8 +2540,6 @@ static int max9296_set_fmt(struct v4l2_subdev *sd,
       !max9296_fingerprint_equal(&old_fingerprint, &new_fingerprint))
     max9296_mark_prepare_stale_locked(sensor);
 
-  __v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
-                           max9296_calc_pixel_rate(sensor));
 out:
 
   mutex_unlock(&sensor->lock);
@@ -3097,6 +3109,18 @@ static int max9296_g_volatile_ctrl(struct v4l2_ctrl *ctrl) {
     ctrl->val = (reg_addr << 16) | read_val;
     break;
   }
+  case V4L2_CID_PIXEL_RATE:
+    /* Derived, not stored.  The rate follows sensor->fps, and
+     * max9296_configure_shared_fsync_locked() writes the PEER's fps under a
+     * contract that forbids taking the peer's sensor lock -- which is the ctrl
+     * handler's lock, so it cannot refresh the peer's control there.  Deriving
+     * on read removes the propagation entirely: there is nothing left to keep
+     * in sync, for the peer or for this instance's own STREAMON path. */
+    /* INTEGER64 has no ctrl->val on this kernel; the framework reads the new
+     * value back through p_new, as drivers/media/i2c/mt9v032.c does for the
+     * same control. */
+    *ctrl->p_new.p_s64 = max9296_calc_pixel_rate(sensor);
+    break;
   default:
     break;
   }
@@ -4294,9 +4318,10 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
     }
   }
 
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s (pixel_rate:%d exp_time:%d)", KEYWORD,
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s (pixel_rate:%lld exp_time:%d)", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
-         ctrls->pixel_rate->val, ctrls->exp_time ? ctrls->exp_time->val : 0);
+         (long long)max9296_calc_pixel_rate(sensor),
+         ctrls->exp_time ? ctrls->exp_time->val : 0);
   printk(KERN_NOTICE
          "[%s:%d][%s:%d] %s (gain_ch0:%d awb_ch0:%d sat_ch0:%d hue:%d "
          "con_ch0:%d hflip_ch0:%d vflip_ch0:%d light_freq:%d)",
@@ -4315,7 +4340,23 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
     goto free_ctrls;
   }
 
-  ctrls->pixel_rate->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+  /* VOLATILE so the value userspace reads is re-derived; see
+   * V4L2_CID_PIXEL_RATE in max9296_g_volatile_ctrl().  Without it a peer whose
+   * fps was rewritten by the shared-FSYNC transaction would report a new
+   * frame_interval beside a pixel_rate computed from the old rate.
+   *
+   * VOLATILE redirects the two readers that consult it -- get_ctrl() and
+   * v4l2_g_ext_ctrls_common() -- and no others.  VIDIOC_LOG_STATUS and
+   * V4L2_EVENT_CTRL, both reachable through the subdev ops this driver
+   * registers, read ctrl->p_cur instead, and nothing writes p_cur for this
+   * control any more: __v4l2_ctrl_handler_setup() skips it because it is
+   * READ_ONLY.  Those two therefore keep reporting the probe-time value.  That
+   * is a diagnostic and a notification, not an input to any decision, and
+   * restoring a write would only refresh this instance's copy -- the peer's,
+   * which is the case that motivated the change, would still be stale because
+   * the transaction cannot take the peer's lock. */
+  ctrls->pixel_rate->flags |= V4L2_CTRL_FLAG_READ_ONLY |
+                              V4L2_CTRL_FLAG_VOLATILE;
   /* Remove VOLATILE flags to allow userspace writes */
   /* ctrls->exp_time->flags |= V4L2_CTRL_FLAG_VOLATILE; */
 
@@ -4459,6 +4500,9 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
     goto out;
   }
 
+  /* The NULL term is unreachable given the invariant at the field's
+   * declaration; it stays as a cheap assertion, not because a caller can get
+   * here before probe stored a mode. */
   if (!sensor->current_mode || fps > sensor->current_mode->max_fps) {
     printk(KERN_WARNING
            "[%s:%d][%s:%d] %s mode=%ux%u fps=%u max_fps=%u rejected",
@@ -4481,9 +4525,6 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
     printk(KERN_INFO "[%s:%d][%s:%d] %s (numerator:%u denominator:%u)", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            fi->interval.numerator, fi->interval.denominator);
-
-  __v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
-                           max9296_calc_pixel_rate(sensor));
 
 out:
   mutex_unlock(&sensor->lock);
@@ -4917,6 +4958,30 @@ static int max9296_program_preview_context_channel(
                                               sensor_mode));
   }
 
+  /*
+   * Both registers are written only while the predicate holds, and nothing
+   * writes a default back when it stops holding.  Two separate questions, with
+   * two separate answers:
+   *
+   * Inside one board-power epoch the crossing cannot reach the hardware.
+   * max9296_fingerprint_preview_max_fps() compares the programmed ceiling, and
+   * that ceiling is zero exactly when this predicate is false and non-zero
+   * exactly when it is true -- max9296_preview_max_fps_fixed8() is fps << 8,
+   * which no rate in the 31..120 window can make zero.  So two fingerprints
+   * that compare equal always agree on the predicate, and a request that would
+   * cross the window fails max9296_prepare_matches_locked() with -ESTALE before
+   * any register is touched.  tests/max9296_360p_policy_test.c asserts that
+   * correspondence over every mode's output geometry and every rate it allows.
+   *
+   * Across an epoch this function runs again after a firmware reload, and if
+   * the predicate is false it writes neither register -- so the values are
+   * whatever the reload left behind.  Whether the reload restores
+   * TRIGGER_MAX_MISMATCH to its 20us default is NOT established:
+   * docs/fps-limit-analysis.md records 20us as the datasheet default and the
+   * driver write as taking effect, but no readback of 0x6112 exists in this
+   * repository.  Adding a revert write would be guessing at hardware this
+   * change cannot verify; #85 keeps the measurement open.
+   */
   if (max9296_preview_output_uses_high_fps(width, height, fps)) {
     PREVIEW_WRITE(AP1302_REG_PREVIEW_MAX_FPS,
                   max9296_preview_max_fps_fixed8(fps));
@@ -5181,9 +5246,6 @@ static void max9296_apply_prepare_fingerprint_locked(
   sensor->ctrl_cache.crop_enable = fingerprint->crop_enable;
   sensor->pending_mode_change = false;
   sensor->pending_fmt_change = false;
-
-  __v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
-                           max9296_calc_pixel_rate(sensor));
 }
 
 /*

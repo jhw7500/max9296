@@ -1006,7 +1006,7 @@ def _statement_end(text: str, at: int) -> int:
 
 def function(source: str, name: str) -> str:
     start = -1
-    for return_type in ("int", "void", "bool", "ssize_t"):
+    for return_type in ("int", "void", "bool", "ssize_t", "u64"):
         for annotation in ("", "__maybe_unused "):
             start = source.find(f"static {return_type} {annotation}{name}(")
             if start >= 0:
@@ -1946,6 +1946,111 @@ def check_source(source: str, failures: list[str]) -> None:
                 failures.append(
                     "a post-bind STREAMON exit releases while holding the power lock"
                 )
+
+    # pixel_rate is derived on read, not propagated. Three things make that
+    # true and all three have to hold together: the control is VOLATILE so the
+    # framework asks, g_volatile_ctrl answers for it, and nothing writes the
+    # stored value any more -- a leftover write would read as "this is how it
+    # stays current", which is the one-way update #85 is about.
+    volatile_ctrl = function(code, "max9296_g_volatile_ctrl")
+    # Only the pixel_rate arm: another volatile control added later must not be
+    # able to satisfy these checks on this one's behalf.
+    rate_case = ""
+    if volatile_ctrl:
+        at = volatile_ctrl.find("V4L2_CID_PIXEL_RATE")
+        if at >= 0:
+            end = volatile_ctrl.find("case ", at)
+            rate_case = volatile_ctrl[at:] if end < 0 else volatile_ctrl[at:end]
+
+    sink = None
+    if not volatile_ctrl:
+        failures.append("the volatile control handler is no longer locatable")
+    elif not rate_case:
+        failures.append("pixel_rate is not derived on read")
+    elif not re.search(r"\*\s*ctrl->p_new\.p_s64\s*=", rate_case):
+        # ctrl->val is the wrong sink for an INTEGER64: get_ctrl() copies p_cur
+        # into p_new, calls this handler, then returns p_new, so a write to
+        # ctrl->val leaves the read returning the stale stored value.
+        failures.append("the pixel_rate read does not answer through p_new.p_s64")
+    else:
+        # Name the callee from the sink rather than pinning one spelling: a
+        # rename is semantics-preserving and must stay covered, while the facts
+        # below -- what it reads, and that it stays silent -- are what matter.
+        sink = re.search(
+            r"\*\s*ctrl->p_new\.p_s64\s*=\s*([A-Za-z_]\w*)\s*\(", rate_case
+        )
+        if not sink:
+            failures.append("the pixel_rate read does not derive from the current rate")
+
+    if sink:
+        derivation = function(code, sink.group(1))
+        if not derivation:
+            failures.append(f"the pixel_rate read calls {sink.group(1)}, which is not locatable")
+        else:
+            if "->fps" not in derivation:
+                failures.append("the pixel_rate read does not derive from the current rate")
+            if not ("current_mode->width" in derivation
+                    and "current_mode->height" in derivation):
+                failures.append("the pixel_rate read does not derive from the current mode")
+            # The volatile read runs with the ctrl handler's lock held, and this
+            # driver aliases that lock to sensor->lock, the mutex that also
+            # serializes s_stream and the prepare transaction. Userspace can spin
+            # VIDIOC_G_EXT_CTRLS, so logging here is unbounded kernel output
+            # inside that critical section.
+            if "printk" in derivation:
+                failures.append("the pixel_rate read logs while holding the control handler lock")
+
+    # Both flags, however they are spelled -- one |= or two set the same bits.
+    flags_writes = " ".join(
+        re.findall(r"pixel_rate->flags[^;]*;", re.sub(r"\s+", " ", code))
+    )
+    for flag in ("V4L2_CTRL_FLAG_READ_ONLY", "V4L2_CTRL_FLAG_VOLATILE"):
+        if flag not in flags_writes:
+            failures.append(f"pixel_rate does not carry {flag}")
+
+    # Any instance's control, not just this sensor's: propagating to the peer is
+    # the one-way update this change removed, and the peer is exactly where the
+    # shared-FSYNC transaction cannot take the lock it would need.
+    if re.search(r"s_ctrl_int64\s*\(\s*[A-Za-z_][\w>.\-]*ctrls\.pixel_rate", code):
+        failures.append("pixel_rate is still propagated as well as derived")
+
+    # sensor->current_mode is dereferenced without a NULL check in several
+    # readers, so the comment at its declaration states the invariant that makes
+    # that safe. Pin the three facts it rests on, or the comment rots silently.
+    # Any identifier's field, not just sensor->: a peer-> store is exactly what
+    # would make the new pixel_rate read dereference NULL on the other instance.
+    # `=(?!=)` so a `== NULL` comparison is not counted as a writer -- naming a
+    # writer that does not exist sends the next reader looking for nothing.
+    mode_writes = [
+        match.start()
+        for match in re.finditer(r"[A-Za-z_]\w*->current_mode\s*=(?!=)", code)
+    ]
+    probe_body = function(code, "max9296_probe")
+    if not probe_body:
+        failures.append("max9296_probe is no longer locatable")
+    elif len(mode_writes) != 3:
+        # Enumerated at the time of writing: probe, set_fmt, and the prepare
+        # fingerprint. A fourth writer has to be checked against the invariant.
+        failures.append(
+            f"current_mode now has {len(mode_writes)} writers, not the three enumerated"
+        )
+    else:
+        # (a) No writer stores NULL.
+        for at in mode_writes:
+            assignment = code[at : code.find(";", at)]
+            if re.search(r"=\s*NULL\b", assignment):
+                failures.append("current_mode is assigned NULL somewhere")
+        # (b) probe stores it before its first consumer, and (c) before any V4L2
+        #     entry point can run.
+        probe_store = probe_body.find("sensor->current_mode =")
+        first_consumer = probe_body.find("max9296_init_controls(sensor)")
+        registration = probe_body.find("v4l2_async_register_subdev_sensor_common")
+        if probe_store < 0:
+            failures.append("probe no longer stores an initial current_mode")
+        elif not 0 <= probe_store < first_consumer:
+            failures.append("probe builds controls before storing current_mode")
+        elif not probe_store < registration:
+            failures.append("probe publishes the subdev before storing current_mode")
 
     remove_power_lock = remove.find("mutex_lock(&max9296_power_lock)")
     remove_dying = remove.find("WRITE_ONCE(sensor->dying, true)")

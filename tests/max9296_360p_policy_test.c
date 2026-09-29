@@ -158,7 +158,50 @@ static void test_full_fov_roi_is_normalized(void) {
   CHECK(MAX9296_PREVIEW_ASPECT == 0x1000U);
 }
 
+/*
+ * The 0x2020 / 0x6112 writes happen only while
+ * max9296_preview_output_uses_high_fps() holds, and nothing writes a default
+ * back when it stops holding.  That is safe inside one board-power epoch only
+ * because a transition across the window cannot reach the hardware: the
+ * programmed ceiling that max9296_fingerprint_preview_max_fps() compares is
+ * zero exactly when the predicate is false and non-zero exactly when it is
+ * true, so two fingerprints that compare equal always agree on the predicate
+ * and the crossing is refused with -ESTALE before any register is touched.
+ *
+ * Exhaustive over every mode's output geometry and every rate it allows, so the
+ * claim is not an argument about where the boundaries happen to sit.
+ */
+static void test_programmed_ceiling_carries_the_predicate(void) {
+  static const struct {
+    unsigned int width, height, max_fps;
+  } outputs[] = {
+      {1280U, 720U, MAX9296_HD_MAX_FPS},   /* 2560x720 dual, per channel */
+      {1280U, 720U, MAX9296_HD_MAX_FPS},   /* 1280x720 single */
+      {1920U, 1080U, 30U},                 /* 3840x1080 dual, per channel */
+      {1920U, 1080U, 30U},                 /* 1920x1080 single */
+      {640U, 360U, MAX9296_360P_MAX_FPS},  /* 1280x360 dual, per channel */
+      {640U, 360U, MAX9296_360P_MAX_FPS},  /* 640x360 single */
+  };
+  unsigned int index;
+
+  for (index = 0; index < sizeof(outputs) / sizeof(outputs[0]); index++) {
+    unsigned int fps;
+
+    for (fps = 1U; fps <= outputs[index].max_fps; fps++) {
+      unsigned int high = max9296_preview_output_uses_high_fps(
+          outputs[index].width, outputs[index].height, fps);
+      unsigned int programmed = max9296_preview_programmed_max_fps(
+          outputs[index].width, outputs[index].height, fps);
+
+      /* Both directions: a zero ceiling cannot hide a true predicate, and a
+       * non-zero one cannot hide a false predicate. */
+      CHECK(high ? programmed != 0U : programmed == 0U);
+    }
+  }
+}
+
 int main(void) {
+  test_programmed_ceiling_carries_the_predicate();
   test_sensor_mode_preserves_unowned_bits();
   test_high_fps_policy_uses_fixed8_values();
   test_programmed_max_fps_models_the_preview_ceiling();

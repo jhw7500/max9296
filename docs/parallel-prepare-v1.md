@@ -149,6 +149,21 @@ owner worker are available. A negative value is a durable output-path
 diagnostic; STREAMON fails with that error even though a prior `READY` still
 means its firmware/config preparation completed successfully.
 
+`V4L2_CID_PIXEL_RATE` is derived on every read, not stored. The two MAX9296
+instances share one FSYNC cadence, so accepting a rate on one rewrites the
+other's `fps`; the transaction that does so must not take the peer's V4L2 lock,
+which is also its control-handler lock, and therefore cannot refresh the peer's
+control. The control is `VOLATILE` instead, so `VIDIOC_G_EXT_CTRLS` re-derives
+it and reflects the current rate and mode. `VIDIOC_G_CTRL` cannot serve it at
+all, before or after this change: the control is `INTEGER64`, and
+`v4l2_g_ctrl()` rejects a control that is not `is_int` with `EINVAL` before the
+volatile path is reached. A caller that caches the value across a cadence change
+holds a stale one -- re-read it rather than remembering it.
+
+Two readers do not re-derive it: `VIDIOC_LOG_STATUS` and a `V4L2_EVENT_CTRL`
+subscription report the value stored at probe and never change it. Neither is an
+input to any driver decision; use `VIDIOC_G_EXT_CTRLS` if the value matters.
+
 ## Handoff, expiry, and cancel
 
 `gstApp` must open/configure the same width, height, FPS, channel mask, and UYVY
