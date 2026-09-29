@@ -4526,7 +4526,6 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            fi->interval.numerator, fi->interval.denominator);
 
-
 out:
   mutex_unlock(&sensor->lock);
   return ret;
@@ -5247,7 +5246,6 @@ static void max9296_apply_prepare_fingerprint_locked(
   sensor->ctrl_cache.crop_enable = fingerprint->crop_enable;
   sensor->pending_mode_change = false;
   sensor->pending_fmt_change = false;
-
 }
 
 /*
