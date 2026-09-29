@@ -4943,6 +4943,30 @@ static int max9296_program_preview_context_channel(
                                               sensor_mode));
   }
 
+  /*
+   * Both registers are written only while the predicate holds, and nothing
+   * writes a default back when it stops holding.  Two separate questions, with
+   * two separate answers:
+   *
+   * Inside one board-power epoch the crossing cannot reach the hardware.
+   * max9296_fingerprint_preview_max_fps() compares the programmed ceiling, and
+   * that ceiling is zero exactly when this predicate is false and non-zero
+   * exactly when it is true -- max9296_preview_max_fps_fixed8() is fps << 8,
+   * which no rate in the 31..120 window can make zero.  So two fingerprints
+   * that compare equal always agree on the predicate, and a request that would
+   * cross the window fails max9296_prepare_matches_locked() with -ESTALE before
+   * any register is touched.  tests/max9296_360p_policy_test.c asserts that
+   * correspondence over every mode's output geometry and every rate it allows.
+   *
+   * Across an epoch this function runs again after a firmware reload, and if
+   * the predicate is false it writes neither register -- so the values are
+   * whatever the reload left behind.  Whether the reload restores
+   * TRIGGER_MAX_MISMATCH to its 20us default is NOT established:
+   * docs/fps-limit-analysis.md records 20us as the datasheet default and the
+   * driver write as taking effect, but no readback of 0x6112 exists in this
+   * repository.  Adding a revert write would be guessing at hardware this
+   * change cannot verify; #85 keeps the measurement open.
+   */
   if (max9296_preview_output_uses_high_fps(width, height, fps)) {
     PREVIEW_WRITE(AP1302_REG_PREVIEW_MAX_FPS,
                   max9296_preview_max_fps_fixed8(fps));
