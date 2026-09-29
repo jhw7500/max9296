@@ -1959,27 +1959,38 @@ def check_source(source: str, failures: list[str]) -> None:
         failures.append("pixel_rate is not derived on read")
     elif "max9296_calc_pixel_rate" not in volatile_ctrl:
         failures.append("the pixel_rate read does not derive from the current rate")
-    squeezed_code = re.sub(r"\s+", "", code)
-    if "V4L2_CTRL_FLAG_VOLATILE" not in squeezed_code.replace(
-        "V4L2_CTRL_FLAG_VOLATILE;*/", ""
+    elif not re.search(
+        r"\*\s*ctrl->p_new\.p_s64\s*=\s*max9296_calc_pixel_rate", volatile_ctrl
     ):
-        # The file carries a commented-out VOLATILE for exp_time; the live one
-        # must be a real flag assignment, not that comment.
-        failures.append("pixel_rate is not marked volatile")
-    elif "pixel_rate->flags|=V4L2_CTRL_FLAG_READ_ONLY|V4L2_CTRL_FLAG_VOLATILE" \
-            not in squeezed_code:
-        failures.append("pixel_rate does not carry both READ_ONLY and VOLATILE")
-    if "__v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate" in squeezed_code.replace(
-        " ", ""
-    ) or "s_ctrl_int64(sensor->ctrls.pixel_rate" in squeezed_code:
+        # ctrl->val is the wrong sink for an INTEGER64: get_ctrl() copies p_cur
+        # into p_new, calls this handler, then returns p_new, so a write to
+        # ctrl->val leaves the read returning the stale stored value.
+        failures.append("the pixel_rate read does not answer through p_new.p_s64")
+
+    # Both flags, however they are spelled -- one |= or two set the same bits.
+    flags_writes = " ".join(
+        re.findall(r"pixel_rate->flags[^;]*;", re.sub(r"\s+", " ", code))
+    )
+    for flag in ("V4L2_CTRL_FLAG_READ_ONLY", "V4L2_CTRL_FLAG_VOLATILE"):
+        if flag not in flags_writes:
+            failures.append(f"pixel_rate does not carry {flag}")
+
+    # Any instance's control, not just this sensor's: propagating to the peer is
+    # the one-way update this change removed, and the peer is exactly where the
+    # shared-FSYNC transaction cannot take the lock it would need.
+    if re.search(r"s_ctrl_int64\s*\(\s*[A-Za-z_][\w>.\-]*ctrls\.pixel_rate", code):
         failures.append("pixel_rate is still propagated as well as derived")
 
     # sensor->current_mode is dereferenced without a NULL check in several
     # readers, so the comment at its declaration states the invariant that makes
     # that safe. Pin the three facts it rests on, or the comment rots silently.
+    # Any identifier's field, not just sensor->: a peer-> store is exactly what
+    # would make the new pixel_rate read dereference NULL on the other instance.
+    # `=(?!=)` so a `== NULL` comparison is not counted as a writer -- naming a
+    # writer that does not exist sends the next reader looking for nothing.
     mode_writes = [
         match.start()
-        for match in re.finditer(r"sensor->current_mode\s*=", code)
+        for match in re.finditer(r"[A-Za-z_]\w*->current_mode\s*=(?!=)", code)
     ]
     probe_body = function(code, "max9296_probe")
     if not probe_body:

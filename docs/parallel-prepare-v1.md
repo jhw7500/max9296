@@ -153,9 +153,14 @@ means its firmware/config preparation completed successfully.
 instances share one FSYNC cadence, so accepting a rate on one rewrites the
 other's `fps`; the transaction that does so must not take the peer's V4L2 lock,
 which is also its control-handler lock, and therefore cannot refresh the peer's
-control. The control is `VOLATILE` instead, so a read always reflects the
-current rate and mode. A caller that caches the value across a cadence change
-holds a stale one -- re-read it rather than remembering it.
+control. The control is `VOLATILE` instead, so `VIDIOC_G_CTRL` and
+`VIDIOC_G_EXT_CTRLS` re-derive it and reflect the current rate and mode. A
+caller that caches the value across a cadence change holds a stale one --
+re-read it rather than remembering it.
+
+Two readers do not re-derive it: `VIDIOC_LOG_STATUS` and a `V4L2_EVENT_CTRL`
+subscription report the value stored at probe and never change it. Neither is an
+input to any driver decision; use `VIDIOC_G_EXT_CTRLS` if the value matters.
 
 ## Handoff, expiry, and cancel
 

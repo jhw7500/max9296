@@ -4335,10 +4335,21 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
     goto free_ctrls;
   }
 
-  /* VOLATILE so every read re-derives it; see V4L2_CID_PIXEL_RATE in
-   * max9296_g_volatile_ctrl().  Without it a peer whose fps was rewritten by
-   * the shared-FSYNC transaction would report a new frame_interval beside a
-   * pixel_rate computed from the old rate. */
+  /* VOLATILE so the value userspace reads is re-derived; see
+   * V4L2_CID_PIXEL_RATE in max9296_g_volatile_ctrl().  Without it a peer whose
+   * fps was rewritten by the shared-FSYNC transaction would report a new
+   * frame_interval beside a pixel_rate computed from the old rate.
+   *
+   * VOLATILE redirects the two readers that consult it -- get_ctrl() and
+   * v4l2_g_ext_ctrls_common() -- and no others.  VIDIOC_LOG_STATUS and
+   * V4L2_EVENT_CTRL, both reachable through the subdev ops this driver
+   * registers, read ctrl->p_cur instead, and nothing writes p_cur for this
+   * control any more: __v4l2_ctrl_handler_setup() skips it because it is
+   * READ_ONLY.  Those two therefore keep reporting the probe-time value.  That
+   * is a diagnostic and a notification, not an input to any decision, and
+   * restoring a write would only refresh this instance's copy -- the peer's,
+   * which is the case that motivated the change, would still be stale because
+   * the transaction cannot take the peer's lock. */
   ctrls->pixel_rate->flags |= V4L2_CTRL_FLAG_READ_ONLY |
                               V4L2_CTRL_FLAG_VOLATILE;
   /* Remove VOLATILE flags to allow userspace writes */
