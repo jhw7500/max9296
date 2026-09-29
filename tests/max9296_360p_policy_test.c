@@ -86,11 +86,17 @@ static void test_programmed_max_fps_models_the_preview_ceiling(void) {
              640U, 360U, MAX9296_360P_EXPECTED_MAX_FPS - 1U)) ==
         (MAX9296_360P_EXPECTED_MAX_FPS >= 32U));
 
-  /* Trap (max9296 #82 round-1 blocker).  This helper takes an OUTPUT size, but
-   * the dual 640x360 mode stores the combined width 1280.  Handing it the raw
-   * stored width derives 0 at every rate, which makes two in-window rates
-   * compare equal, so callers must halve the width for dual modes exactly as
-   * the register writer does. */
+  /* What a raw stored width costs: the dual 640x360 mode stores the combined
+   * 1280, and every rate then derives 0, which is what made two in-window rates
+   * compare equal in the #82 round-1 blocker.
+   *
+   * This does NOT trap that blocker, despite what this comment used to claim.
+   * The halving lives in max9296_fingerprint_preview_max_fps(), static in
+   * max9296.c and unreachable from a standalone C test, so deleting it leaves
+   * every check in this file green.  Verified by extracting the offending
+   * commit and compiling it against this test: 55 checks, 0 failures.
+   * tests/max9296_fingerprint_identity_test.py compiles that function and is
+   * what actually holds it (#84). */
   CHECK(max9296_preview_programmed_max_fps(1280U, 360U, 60U) == 0U);
   CHECK(max9296_preview_programmed_max_fps(1280U, 360U, 120U) == 0U);
   CHECK(max9296_preview_programmed_max_fps(1280U, 360U,

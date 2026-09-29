@@ -155,6 +155,30 @@ class Board:
             self.reset_direction_output_calls += 1
 
 
+def hardware_identity(fingerprint: tuple[int, int, int, int]) -> tuple:
+    """The axes max9296_fingerprint_equal() compares -- raw fps is not one.
+
+    Two rates that program the same registers are the same hardware, which is
+    what lets a cadence change reuse an initialized epoch. The driver compares
+    the programmed preview ceiling and the exposure seed route in place of the
+    rate; this mirrors both from the tuple the model carries.
+
+    This is a re-derivation, like the rest of the model. What binds those two
+    derivations to production is tests/max9296_fingerprint_identity_test.py,
+    which compiles the real max9296_fingerprint_equal().
+    """
+    width, height, fps, enable = fingerprint
+    dual = enable == 3
+    output_width = width // 2 if dual else width
+    programmed_ceiling = (
+        fps << 8
+        if output_width == 640 and height == 360 and 30 < fps <= 120
+        else 0
+    )
+    seed_route_skips = fps > 30
+    return (width, height, enable, programmed_ceiling, seed_route_skips)
+
+
 @dataclass
 class Camera:
     board: Board
@@ -262,7 +286,9 @@ class Camera:
             if self.lease:
                 self.arm_timeout()
             return "estale"
-        if self.hardware_current() and self.hardware_fingerprint != fingerprint:
+        if self.hardware_current() and hardware_identity(
+            self.hardware_fingerprint
+        ) != hardware_identity(fingerprint):
             if self.lease:
                 self.arm_timeout()
             return "estale"
@@ -378,7 +404,8 @@ class Camera:
         return (
             self.hardware_current()
             and self.runtime_fingerprint == self.request_fingerprint
-            and self.hardware_fingerprint == self.runtime_fingerprint
+            and hardware_identity(self.hardware_fingerprint)
+            == hardware_identity(self.runtime_fingerprint)
         )
 
     def drop_fsync_contract(self) -> None:
@@ -871,14 +898,33 @@ def check_model(failures: list[str]) -> None:
     # driver takes one and never gives it back.
 
 
-    # What the released reservation then lets the next prepare do is NOT asserted
-    # here: this model compares hardware identity as an exact fingerprint tuple,
-    # including raw fps, which is the pre-decoupling rule.  The driver compares
-    # only what fps programs, so 2560x720 at 30 and at 20 are one equivalence
-    # class and the real max9296_prepare_matches_locked() accepts the switch this
-    # model would reject.  Asserting acceptance here would pin the stale rule.
-    # The reservation lifetime above is what this change is about; teaching the
-    # model equivalence classes is a separate change.
+    # What the released reservation then lets the next prepare do, asserted at
+    # last (#84). The model used to compare hardware identity as an exact
+    # fingerprint tuple including raw fps -- the pre-decoupling rule -- so it
+    # rejected a switch the driver accepts, and pinning either answer would have
+    # pinned the wrong one. It now compares what fps programs, as
+    # max9296_fingerprint_equal() does.
+    board = Board()
+    switcher = Camera(board)
+    switcher.prepare(fingerprint=(2560, 720, 30, 3))
+    # The reservation has to be gone first -- max9296_configure_shared_fsync_
+    # locked() refuses a different rate against the requester's OWN live
+    # reservation, not just the peer's. Whether it is released by the paths #88
+    # closes or by an epoch advance is not what this asserts; what follows is.
+    switcher.drop_fsync_contract()
+    if switcher.request_prepare(93, (2560, 720, 20, 3)) != "ready":
+        failures.append("a cadence switch inside one hardware class must be accepted")
+    if switcher.firmware_loads != 1:
+        failures.append("a switch inside one hardware class must not reload firmware")
+
+    # Across classes it is still refused: at 640x360 the 30 and 60 rates program
+    # different preview ceilings, so they are different hardware.
+    board = Board()
+    crosser = Camera(board)
+    crosser.prepare(fingerprint=(640, 360, 30, 1))
+    crosser.drop_fsync_contract()
+    if crosser.request_prepare(94, (640, 360, 60, 1)) != "estale":
+        failures.append("a cadence switch across hardware classes must be refused")
 
     # GPIO1_IO01 is one active-low board reset owned only by max9296_0.  A cold
     # probe may assert it, but rebinding that owner while the peer keeps the
