@@ -966,15 +966,15 @@ def _same_block(text: str) -> bool:
     return depth in (0, -1)
 
 
-_OWNERSHIP_GUARD = "if(bind_reserved||max9296_fsync_contract_unowned_locked(sensor))"
+_OWNERSHIP_GUARD = "if(bind_reserved)"
 
 
 def _ownership_guarded(prefix: str, trailing: str = "") -> bool:
-    """Whether `prefix` ends with the post-bind release's ownership guard.
+    """Whether `prefix` ends with the post-bind release's guard.
 
     Whitespace is squeezed and an opening brace tolerated, so a reflow or a
-    braced body reads the same; the operands and the operator are not, because
-    either one alone is a different rule.
+    braced body reads the same. The condition itself is not negotiable: a
+    failed start gives back only the reservation the bind created for it.
     """
     squeezed = re.sub(r"\s+", "", prefix)
     if trailing:
@@ -1827,16 +1827,6 @@ def check_source(source: str, failures: list[str]) -> None:
     # the reservation. Pin it: a release appearing there would make the comment
     # false, and a reader who believed it could drop a release elsewhere as
     # redundant.
-    # fsync_output_unproven qualifies the reservation, so the release that clears
-    # the reservation must clear it too -- otherwise a stale qualifier would make
-    # the next orphan look owned. The executed harness stubs this helper, so the
-    # correspondence between the stub and the real body is pinned here.
-    drop_body = function(code, "max9296_drop_fsync_contract_locked")
-    if not drop_body:
-        failures.append("the FSYNC release helper is no longer locatable")
-    elif "fsync_output_unproven" not in drop_body:
-        failures.append("releasing the reservation leaves its output qualifier set")
-
     for name in ("max9296_cancel_prepare", "max9296_prepare_lease_timeout"):
         body = function(code, name)
         if not body:
