@@ -2253,15 +2253,18 @@ static void max9296_drop_fsync_contract_locked(struct max9296_dev *sensor) {
  * with nothing reserving its rate, and a stopped peer -- which holds none either
  * -- could move the cadence under hardware still programmed for the old rate.
  *
- * Not an invariant over every transition, and the paths that break it are not
- * enumerated here -- a count in a comment is a claim that goes stale.  Known
- * ones: max9296_cancel_prepare(), the prepare lease timeout,
- * max9296_remove()'s survivor forced stop, and STREAMOFF itself when
- * max9296_disable_stream_mipi() fails, which is deliberate and asserted (see
- * max9296_s_stream).  Each clears or ends something while leaving
- * fsync_contract_fps bound in the live epoch.  #82 tracks them.  (A power-down
- * through max9296_set_power_off() is not one: it runs after max9296_hw_epoch++
- * in the same if (run) block, so a surviving reservation is already stale.)
+ * Not an invariant over every transition.  The three paths that used to break it
+ * -- max9296_cancel_prepare(), the prepare lease timeout, and
+ * max9296_remove()'s survivor forced stop -- now release their own reservation
+ * at the point they end the thing that held it (#88), so nothing else has to
+ * infer who owned it.  One break is left and it is deliberate: STREAMOFF when
+ * max9296_disable_stream_mipi() fails keeps the reservation, because output
+ * that may still be live must keep reserving its rate (see max9296_s_stream).
+ * This list is the enumeration as of #88 and can go stale -- the source checks
+ * in tests/max9296_prepare_test.py are what actually hold it.  (A power-down
+ * through max9296_set_power_off() is not a break: it runs after
+ * max9296_hw_epoch++ in the same if (run) block, so a surviving reservation is
+ * already stale.)
  *
  * What this helper does hold is narrower: no STREAMON failure exit releases a
  * reservation while the pulse train is still driven for its own instance.
@@ -5614,6 +5617,13 @@ static int max9296_cancel_prepare(struct max9296_dev *sensor) {
 
   if (sensor->prepare_lease_held) {
     sensor->prepare_releasing = true;
+    /* Give the cadence back here rather than leaving it for someone else to
+     * infer.  A lease this instance still holds is a reservation nobody else
+     * can own, so dropping it needs no ownership test -- which is the point:
+     * the sweep that tried to infer ownership was removed in #82 because the
+     * states could not be enumerated.  Order matches the release_unarmed_lease
+     * path: drop, then clear the lease, then put the power reference. */
+    max9296_drop_fsync_contract_locked(sensor);
     sensor->prepare_lease_held = false;
     sensor->prepare_lease_generation = 0;
     ret = max9296_set_power(sensor, false);
@@ -5640,6 +5650,10 @@ static void max9296_prepare_lease_timeout(struct work_struct *work) {
   if (max9296_prepare_lease_can_arm_locked(
           sensor, sensor->prepare_lease_generation)) {
     sensor->prepare_releasing = true;
+    /* Same as cancel: the expiring lease is this instance's, so the cadence it
+     * reserved goes back with it.  Guarded by max9296_prepare_lease_can_arm_
+     * locked() above, so only a lease this timeout actually ends is released. */
+    max9296_drop_fsync_contract_locked(sensor);
     sensor->prepare_lease_held = false;
     sensor->prepare_lease_generation = 0;
     sensor->prepare_state = MAX9296_PREP_EXPIRED;
@@ -5920,8 +5934,10 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * mean deciding that no one else has taken the reservation meanwhile, and
      * that question is not answerable from the state this driver keeps: a
      * consumed prepare lease, for one, leaves prepare_lease_held false while the
-     * prepared instance still intends to use the rate.  #88 removes the need to
-     * ask by making the paths that orphan a reservation release their own.
+     * prepared instance still intends to use the rate.  #88 removed the need to
+     * ask: cancel, lease expiry and the remove-time survivor stop each release
+     * their own reservation now, so there is no orphan left for this path to
+     * sweep and no ownership to infer.
      * Called after the power lock is dropped: the helper takes the fsync-config
      * lock and then the power lock itself. */
     if (was_streaming && !ret) {
@@ -7768,6 +7784,7 @@ static int max9296_remove(struct i2c_client *client) {
 
     if (worker_errno) {
       bool was_streaming;
+      int disable_ret = 0;
 
       /* A missing GPIO owner or failed worker restart must not leave status
        * claiming output is live.  Serialize with the enable worker and use the
@@ -7784,8 +7801,15 @@ static int max9296_remove(struct i2c_client *client) {
        * the previous one's and can log a transition nobody caused. */
       max9296_health_forget_pair(peer);
       if (was_streaming)
-        max9296_disable_stream_mipi(peer);
+        disable_ret = max9296_disable_stream_mipi(peer);
       mutex_unlock(&max9296_power_lock);
+      /* Return the reservation this stop ended, on the rule STREAMOFF already
+       * uses: only a stop that reached the hardware releases, because a failed
+       * disable may still be driving FSYNC.  The placement is forced -- drop
+       * takes the board power lock itself, so it cannot run above this unlock,
+       * and it asserts peer->lock, so it cannot run below the next one. */
+      if (was_streaming && !disable_ret)
+        max9296_drop_fsync_contract_locked(peer);
       mutex_unlock(&peer->lock);
       printk(KERN_CRIT
              "[%s:%d][%s:%d] survivor worker/FSYNC unavailable(%d)", KEYWORD,

@@ -369,6 +369,10 @@ class Camera:
             self.timeout_pending = False
             self.lease = False
             self.state = state
+            # Cancel and expiry both land here, and both now give the cadence
+            # back with the lease (#88) instead of leaving it for a later call
+            # to sweep.
+            self.drop_fsync_contract()
             self.board.put()
 
     def hardware_current(self) -> bool:
@@ -858,13 +862,14 @@ def check_model(failures: list[str]) -> None:
     if other.set_frame_interval(20) != "estale":
         failures.append("a prepared instance must still refuse a conflicting cadence")
 
-    # An explicit prepare 0 and an expired lease do NOT release the reservation:
-    # max9296_cancel_prepare() and max9296_prepare_lease_timeout() drop the power
-    # reference and move prepare_state, and neither names fsync_contract_epoch,
-    # fsync_contract_fps or the release helper. Those legs of #82 are open, and
-    # the source check below pins exactly that -- absence of those three names,
-    # which is narrower than "touches" but is what a text scan can honestly
-    # assert -- so this comment cannot drift back into a claim. What the
+    # An explicit prepare 0 and an expired lease DO release the reservation now:
+    # max9296_cancel_prepare() and max9296_prepare_lease_timeout() call the
+    # release helper where they clear the lease, and max9296_remove()'s survivor
+    # stop does the same when its disable reached the hardware (#88). Those legs
+    # of #82 are closed, and the source check below pins the release rather than
+    # its absence. One leg stays open on purpose: STREAMOFF keeps the
+    # reservation when the disable write fails, because output that may still be
+    # live must keep reserving its rate. What the
     # STREAMOFF release fixes is the streaming leg: keying it to the board-power
     # epoch left a rate bound for the life of the module, because that epoch does
     # not advance while any global power reference is held and the vendor capture
@@ -1823,24 +1828,48 @@ def check_source(source: str, failures: list[str]) -> None:
 
 
 
-    # The contract comment beside the model says prepare 0 and lease expiry leave
-    # the reservation. Pin it: a release appearing there would make the comment
-    # false, and a reader who believed it could drop a release elsewhere as
-    # redundant.
-    for name in ("max9296_cancel_prepare", "max9296_prepare_lease_timeout"):
+    # Cancel, lease expiry and the remove-time survivor stop each end the thing
+    # that held the reservation, so each gives it back at that point (#88).
+    # Before that, all three left it bound in a live epoch and the shared-FSYNC
+    # conflict check kept rejecting the peer's other rate with ESTALE, with
+    # cleanup depending on some later call happening to sweep it.
+    # Require the helper, not a spelling of the fields: zeroing fsync_contract_*
+    # in place would release too, but skips the fsync-config -> power lock order
+    # the helper exists to take. The unguarded name is the right one here --
+    # _if_idle_locked is the failed-STREAMON variant and does not contain this
+    # substring, so it cannot satisfy the check by accident.
+    for name in (
+        "max9296_cancel_prepare",
+        "max9296_prepare_lease_timeout",
+        "max9296_remove",
+    ):
         body = function(code, name)
         if not body:
             # function() returns "" for a name it cannot find, which would make
             # this loop pass vacuously after a rename or a return-type change.
             failures.append(f"{name} is no longer locatable")
             continue
-        # The comment claims neither touches the reservation, not merely that
-        # neither calls the helper: zeroing the two fields in place would
-        # falsify it just as silently.
-        for token in ("drop_fsync_contract", "fsync_contract_epoch", "fsync_contract_fps"):
-            if token in body:
-                failures.append(f"{name} now releases the FSYNC reservation")
-                break
+        if "max9296_drop_fsync_contract_locked" not in body:
+            failures.append(f"{name} leaves an orphaned FSYNC reservation")
+
+    # remove is the one of the three that stops a live stream, so its release
+    # carries STREAMOFF's rule: only a stop that reached the hardware releases,
+    # because a failed disable may still be driving FSYNC for the peer. Follow
+    # the guard variable to its assignment rather than trusting the name -- the
+    # defect this replaces was the disable result being discarded entirely.
+    remove_body = function(code, "max9296_remove")
+    if remove_body and "max9296_drop_fsync_contract_locked" in remove_body:
+        guard = re.search(
+            r"if\s*\(\s*was_streaming\s*&&\s*!\s*(\w+)\s*\)\s*"
+            r"max9296_drop_fsync_contract_locked",
+            re.sub(r"\s+", " ", remove_body),
+        )
+        if not guard:
+            failures.append("the remove-time release is not gated on a stop that reached the hardware")
+        elif not re.search(
+            guard.group(1) + r"\s*=\s*max9296_disable_stream_mipi", remove_body
+        ):
+            failures.append("the remove-time release is gated on something other than the disable result")
 
     # Every release between the bind and the stream commit must go through the
     # guarded helper. `rfind("drop_fsync_contract")` above matches both names, so
