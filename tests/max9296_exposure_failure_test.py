@@ -693,6 +693,50 @@ int main(void) {
   CHECK(max9296_s_stream(&sd, 1) == 0);
   CHECK(!sensor.fsync_output_unproven);
 
+  /*          A retry of the failed stop proves the output off.  The first
+   *          attempt already cleared streaming, so this one ends nothing -- but
+   *          the retention it was waiting on is over, so the reservation goes
+   *          back rather than surviving until the next stream cycle. */
+  sensor = fixture(ctrls);
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(fsync_release_count == 0 && sensor.fsync_output_unproven);
+  disable_error = 0;
+  CHECK(max9296_s_stream(&sd, 0) == 0);
+  CHECK(fsync_release_count == 1);
+  CHECK(!sensor.fsync_output_unproven && sensor.fsync_contract_epoch == 0);
+
+  /*          A retry that fails again proves nothing, so the retention holds. */
+  sensor = fixture(ctrls);
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(sensor.fsync_output_unproven);
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  CHECK(fsync_release_count == 0);
+  CHECK(sensor.fsync_output_unproven);
+  CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+
+  /*          Unless a prepare took it while the stop was failing: the lease
+   *          owns it now, and the retry only clears the qualifier. */
+  sensor = fixture(ctrls);
+  sensor.fsync_contract_epoch = 7;
+  sensor.fsync_contract_fps = 30;
+  active_sensor = &sensor;
+  disable_error = -EIO;
+  CHECK(max9296_s_stream(&sd, 0) == -EIO);
+  sensor.prepare_lease_held = true;
+  disable_error = 0;
+  CHECK(max9296_s_stream(&sd, 0) == 0);
+  CHECK(fsync_release_count == 0);
+  CHECK(!sensor.fsync_output_unproven);
+  CHECK(sensor.fsync_contract_epoch == 7 && sensor.fsync_contract_fps == 30);
+
   /*          Releasing the reservation drops the qualifier with it.  Reached
    *          through a board-power epoch advance: the retained reservation goes
    *          stale, the next start's bind creates a new one, and a failure then

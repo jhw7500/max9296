@@ -5886,10 +5886,19 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
      * again -- a successful stop, or a stream that deliberately turns it on.
      * Called after the power lock is dropped: the helper takes the fsync-config
      * lock and then the power lock itself. */
-    if (was_streaming && !ret)
+    if (was_streaming && !ret) {
       max9296_drop_fsync_contract_locked(sensor);
-    else if (was_streaming)
+    } else if (was_streaming) {
       sensor->fsync_output_unproven = true;
+    } else if (!ret && sensor->fsync_output_unproven) {
+      /* A retry of a stop that had failed.  The first attempt already cleared
+       * sensor->streaming, so this one ends nothing -- but it does what the
+       * qualifier was waiting for: it proves the output off.  The retention is
+       * over, so give the reservation back unless something took it meanwhile. */
+      sensor->fsync_output_unproven = false;
+      if (max9296_fsync_contract_unowned_locked(sensor))
+        max9296_drop_fsync_contract_locked(sensor);
+    }
 
     sensor->restart = 1;
   }
