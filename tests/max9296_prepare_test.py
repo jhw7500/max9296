@@ -1947,6 +1947,33 @@ def check_source(source: str, failures: list[str]) -> None:
                     "a post-bind STREAMON exit releases while holding the power lock"
                 )
 
+    # pixel_rate is derived on read, not propagated. Three things make that
+    # true and all three have to hold together: the control is VOLATILE so the
+    # framework asks, g_volatile_ctrl answers for it, and nothing writes the
+    # stored value any more -- a leftover write would read as "this is how it
+    # stays current", which is the one-way update #85 is about.
+    volatile_ctrl = function(code, "max9296_g_volatile_ctrl")
+    if not volatile_ctrl:
+        failures.append("the volatile control handler is no longer locatable")
+    elif "V4L2_CID_PIXEL_RATE" not in volatile_ctrl:
+        failures.append("pixel_rate is not derived on read")
+    elif "max9296_calc_pixel_rate" not in volatile_ctrl:
+        failures.append("the pixel_rate read does not derive from the current rate")
+    squeezed_code = re.sub(r"\s+", "", code)
+    if "V4L2_CTRL_FLAG_VOLATILE" not in squeezed_code.replace(
+        "V4L2_CTRL_FLAG_VOLATILE;*/", ""
+    ):
+        # The file carries a commented-out VOLATILE for exp_time; the live one
+        # must be a real flag assignment, not that comment.
+        failures.append("pixel_rate is not marked volatile")
+    elif "pixel_rate->flags|=V4L2_CTRL_FLAG_READ_ONLY|V4L2_CTRL_FLAG_VOLATILE" \
+            not in squeezed_code:
+        failures.append("pixel_rate does not carry both READ_ONLY and VOLATILE")
+    if "__v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate" in squeezed_code.replace(
+        " ", ""
+    ) or "s_ctrl_int64(sensor->ctrls.pixel_rate" in squeezed_code:
+        failures.append("pixel_rate is still propagated as well as derived")
+
     # sensor->current_mode is dereferenced without a NULL check in several
     # readers, so the comment at its declaration states the invariant that makes
     # that safe. Pin the three facts it rests on, or the comment rots silently.

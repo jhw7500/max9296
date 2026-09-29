@@ -2535,8 +2535,6 @@ static int max9296_set_fmt(struct v4l2_subdev *sd,
       !max9296_fingerprint_equal(&old_fingerprint, &new_fingerprint))
     max9296_mark_prepare_stale_locked(sensor);
 
-  __v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
-                           max9296_calc_pixel_rate(sensor));
 out:
 
   mutex_unlock(&sensor->lock);
@@ -3106,6 +3104,18 @@ static int max9296_g_volatile_ctrl(struct v4l2_ctrl *ctrl) {
     ctrl->val = (reg_addr << 16) | read_val;
     break;
   }
+  case V4L2_CID_PIXEL_RATE:
+    /* Derived, not stored.  The rate follows sensor->fps, and
+     * max9296_configure_shared_fsync_locked() writes the PEER's fps under a
+     * contract that forbids taking the peer's sensor lock -- which is the ctrl
+     * handler's lock, so it cannot refresh the peer's control there.  Deriving
+     * on read removes the propagation entirely: there is nothing left to keep
+     * in sync, for the peer or for this instance's own STREAMON path. */
+    /* INTEGER64 has no ctrl->val on this kernel; the framework reads the new
+     * value back through p_new, as drivers/media/i2c/mt9v032.c does for the
+     * same control. */
+    *ctrl->p_new.p_s64 = max9296_calc_pixel_rate(sensor);
+    break;
   default:
     break;
   }
@@ -4303,9 +4313,10 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
     }
   }
 
-  printk(KERN_NOTICE "[%s:%d][%s:%d] %s (pixel_rate:%d exp_time:%d)", KEYWORD,
+  printk(KERN_NOTICE "[%s:%d][%s:%d] %s (pixel_rate:%lld exp_time:%d)", KEYWORD,
          sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
-         ctrls->pixel_rate->val, ctrls->exp_time ? ctrls->exp_time->val : 0);
+         (long long)max9296_calc_pixel_rate(sensor),
+         ctrls->exp_time ? ctrls->exp_time->val : 0);
   printk(KERN_NOTICE
          "[%s:%d][%s:%d] %s (gain_ch0:%d awb_ch0:%d sat_ch0:%d hue:%d "
          "con_ch0:%d hflip_ch0:%d vflip_ch0:%d light_freq:%d)",
@@ -4324,7 +4335,12 @@ static int max9296_init_controls(struct max9296_dev *sensor) {
     goto free_ctrls;
   }
 
-  ctrls->pixel_rate->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+  /* VOLATILE so every read re-derives it; see V4L2_CID_PIXEL_RATE in
+   * max9296_g_volatile_ctrl().  Without it a peer whose fps was rewritten by
+   * the shared-FSYNC transaction would report a new frame_interval beside a
+   * pixel_rate computed from the old rate. */
+  ctrls->pixel_rate->flags |= V4L2_CTRL_FLAG_READ_ONLY |
+                              V4L2_CTRL_FLAG_VOLATILE;
   /* Remove VOLATILE flags to allow userspace writes */
   /* ctrls->exp_time->flags |= V4L2_CTRL_FLAG_VOLATILE; */
 
@@ -4494,8 +4510,6 @@ static int max9296_s_frame_interval(struct v4l2_subdev *sd,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            fi->interval.numerator, fi->interval.denominator);
 
-  __v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
-                           max9296_calc_pixel_rate(sensor));
 
 out:
   mutex_unlock(&sensor->lock);
@@ -5194,8 +5208,6 @@ static void max9296_apply_prepare_fingerprint_locked(
   sensor->pending_mode_change = false;
   sensor->pending_fmt_change = false;
 
-  __v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
-                           max9296_calc_pixel_rate(sensor));
 }
 
 /*
