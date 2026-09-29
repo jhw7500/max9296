@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "max9296.c"
 DTS = ROOT / "docs" / "imx8mp-evk.dts"
+PREPARE_DOC = ROOT / "docs" / "parallel-prepare-v1.md"
 
 
 def parse_prepare_command(text: str) -> tuple[int, ...]:
@@ -2222,13 +2223,34 @@ def check_source(source: str, failures: list[str]) -> None:
     ):
         failures.append("DTS shared-reset ownership is no longer max9296_0-only")
 
-    status_fields = (
-        "state=%s generation=%llu epoch=%llu",
-        "mode=%s table=%s width=%u height=%u fps=%u code=0x%x enable=%u ",
-        "errno=%d worker_errno=%d lease=%u match=%u\\n",
-    )
-    if any(field not in source for field in status_fields):
+    # The document calls this line the v1 machine-readable contract, so a
+    # consumer may parse it by position. Take both sides from their real sources
+    # and compare the whole key order. The check this replaces looked for three
+    # fragments and split exactly where a field was missing, so it accepted a
+    # documented line the driver has never emitted: crop_enable sits between
+    # enable and errno in the driver and was absent from the example, which puts
+    # a positional parser one field off from errno onward.
+    status_format = re.search(r'"(state=%s generation=[^"]*?)\\n"', source)
+    if not status_format:
         failures.append("prepare read ABI has no stable key=value status line")
+    else:
+        driver_keys = [
+            token.split("=", 1)[0] for token in status_format.group(1).split()
+        ]
+        documented = [
+            line
+            for line in PREPARE_DOC.read_text(encoding="utf-8").splitlines()
+            if line.startswith("state=READY ")
+        ]
+        if len(documented) != 1:
+            failures.append(
+                "the ABI document no longer shows exactly one status-line example"
+            )
+        elif [token.split("=", 1)[0] for token in documented[0].split()] != driver_keys:
+            failures.append(
+                "the documented status line and the driver disagree on the "
+                "field order the document declares to be the v1 contract"
+            )
 
 
 def main() -> int:
