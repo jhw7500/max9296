@@ -726,13 +726,19 @@ cp -a ${F}.orig $F && /root/camtest/cam_hard_reset.sh -s -S
 | `R0x1184` | ATOMIC | — | `[0]` RECORD, `[1]` FINISH, `[2]` MODE |
 | `R0x1186` | TRIGGER_CTRL | `0x008a` | MODE=2, SYNC_MODE=2(노출 중심), GPIO=8 |
 | `R0x201C` | PREVIEW_LINE_TIME | `0` (자동) | u16.16 µs. 쓰면 센서가 따라옴 |
-| `R0x2020` | PREVIEW_MAX_FPS | `0x1E00` (30.0) | u8.8. 단독으로는 효과 없음 |
+| `R0x2020` | PREVIEW_MAX_FPS | `0x1E00` (30.0) | u8.8. 단독으로는 효과 없음. 기본값은 리드백으로 확인됨 |
 | `R0x2030` | PREVIEW_HINF_CTRL | `0x0034` | 4 lane, spoof, 연속클럭 |
 | `R0x2064` | PREVIEW_DIV_HINF_MIPI | `0x0001001C` | 분주비 15. 런타임 변경 무효 |
 | `R0x5440` | FLICK_CTRL | `0x0000` | 플리커 보정 **비활성** |
 | `R0x6034` | (데이터시트: PLL_0_LOCK_CNT) | `0x012c0000` | 드라이버가 4바이트로 씀. blob 이 덮어씀 |
-| `R0x6112` | TRIGGER_MAX_MISMATCH | `20` µs | 0 으로 두면 프레임 스킵 억제 |
+| `R0x6112` | TRIGGER_MAX_MISMATCH | `20` µs (`0x0014`, 리드백 확인) | 0 으로 두면 프레임 스킵 억제 |
 | `R0x6132` | THROUGHPUT_LIMIT | `0x9600` | 600 MB/s (제약 아님) |
+
+`R0x2020` 와 `R0x6112` 의 기본값은 2026-09-30 에 호스트 i2c 로 읽어 확인했다 — 4개
+AP1302 전부 `0x1e00` / `0x0014`. 드라이버가 고fps 경로에서 두 값을 `0x7800` / `0x0000`
+으로 바꾼 뒤 다음 board-power epoch 에서 펌웨어가 다시 로드되면 **둘 다 위 기본값으로
+복원된다.** 그래서 드라이버에 되돌리기 쓰기가 없다. 절차·대조·한계는
+[artifacts/board-20260930-trigger-max-mismatch/README.md](../artifacts/board-20260930-trigger-max-mismatch/README.md) 에 있다.
 
 ### MAX9296 (I2C 0x48)
 

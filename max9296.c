@@ -4994,12 +4994,15 @@ static int max9296_program_preview_context_channel(
    *
    * Across an epoch this function runs again after a firmware reload, and if
    * the predicate is false it writes neither register -- so the values are
-   * whatever the reload left behind.  Whether the reload restores
-   * TRIGGER_MAX_MISMATCH to its 20us default is NOT established:
-   * docs/fps-limit-analysis.md records 20us as the datasheet default and the
-   * driver write as taking effect, but no readback of 0x6112 exists in this
-   * repository.  Adding a revert write would be guessing at hardware this
-   * change cannot verify; #85 keeps the measurement open.
+   * whatever the reload left behind.  The reload restores both defaults, so no
+   * revert write is needed.  Measured on the board 2026-09-30: a 640x360@120
+   * epoch read back 0x6112=0x0000 and 0x2020=0x7800, and the next epoch, after
+   * v4l-ap1302-ar0234.fw loaded again at 1280x720@30, read back 0x6112=0x0014
+   * (the 20us default) and 0x2020=0x1e00 on all four AP1302s.  The driver still
+   * has no readback of either register; that measurement came from the host i2c
+   * adapters.  artifacts/board-20260930-trigger-max-mismatch/ records the exact
+   * commands, the controls that make those two readings distinguishable, and
+   * what the measurement does not cover.
    */
   if (max9296_preview_output_uses_high_fps(width, height, fps)) {
     PREVIEW_WRITE(AP1302_REG_PREVIEW_MAX_FPS,
