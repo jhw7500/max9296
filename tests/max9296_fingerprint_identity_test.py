@@ -118,11 +118,20 @@ static const struct max9296_mode_info single_360p_right = {{
     .exposure_safe_max_fps = MAX9296_EXPOSURE_SAFE_MAX_FPS,
 }};
 
+/* enable is not free: sysfs_prepare_store() rejects anything but 3 for a dual
+ * tuple and 1 or 2 for a single one, so a fingerprint carrying the wrong mask is
+ * a state production never admits -- and a check built on one proves nothing
+ * about the reachable ones. */
+#define ENABLE_DUAL 3U
+#define ENABLE_LEFT 1U
+#define ENABLE_RIGHT 2U
+
 static struct max9296_hw_fingerprint make(const struct max9296_mode_info *mode,
-                                          u32 width, u32 height, u32 fps) {{
+                                          u32 width, u32 height, u32 fps,
+                                          u32 enable) {{
   struct max9296_hw_fingerprint fingerprint = {{
       .mode = mode, .width = width, .height = height,
-      .code = 0x2006U, .fps = fps, .enable = 3U, .crop_enable = false,
+      .code = 0x2006U, .fps = fps, .enable = enable, .crop_enable = false,
   }};
   return fingerprint;
 }}
@@ -132,9 +141,9 @@ int main(void) {{
    * before asking the register model, so a dual 1280x360 derives what the
    * writer programs for each 640x360 output. Without the halving every rate
    * derives 0, which is what let two in-window rates compare equal. */
-  struct max9296_hw_fingerprint dual_120 = make(&dual_360p, 1280U, 360U, 120U);
-  struct max9296_hw_fingerprint dual_60 = make(&dual_360p, 1280U, 360U, 60U);
-  struct max9296_hw_fingerprint single_120 = make(&single_360p, 640U, 360U, 120U);
+  struct max9296_hw_fingerprint dual_120 = make(&dual_360p, 1280U, 360U, 120U, ENABLE_DUAL);
+  struct max9296_hw_fingerprint dual_60 = make(&dual_360p, 1280U, 360U, 60U, ENABLE_DUAL);
+  struct max9296_hw_fingerprint single_120 = make(&single_360p, 640U, 360U, 120U, ENABLE_LEFT);
 
   CHECK(max9296_fingerprint_preview_max_fps(&dual_120) != 0U);
   CHECK(max9296_fingerprint_preview_max_fps(&dual_120) ==
@@ -150,8 +159,8 @@ int main(void) {{
 
   /* Equivalence, the other direction: rates that program neither register are
    * the same hardware. A comparison that fell back to raw fps fails here. */
-  struct max9296_hw_fingerprint hd_30 = make(&dual_hd, 2560U, 720U, 30U);
-  struct max9296_hw_fingerprint hd_20 = make(&dual_hd, 2560U, 720U, 20U);
+  struct max9296_hw_fingerprint hd_30 = make(&dual_hd, 2560U, 720U, 30U, ENABLE_DUAL);
+  struct max9296_hw_fingerprint hd_20 = make(&dual_hd, 2560U, 720U, 20U, ENABLE_DUAL);
   CHECK(max9296_fingerprint_preview_max_fps(&hd_30) == 0U);
   CHECK(max9296_fingerprint_preview_max_fps(&hd_20) == 0U);
   CHECK(max9296_fingerprint_equal(&hd_30, &hd_20));
@@ -159,24 +168,44 @@ int main(void) {{
   /* The seed route is the other derived axis, and 720p isolates it: the preview
    * ceiling is 0 at every 720p rate, so only the exposure route can differ. */
   struct max9296_hw_fingerprint hd_40 =
-      make(&dual_hd, 2560U, 720U, MAX9296_EXPOSURE_SAFE_MAX_FPS + 10U);
+      make(&dual_hd, 2560U, 720U, MAX9296_EXPOSURE_SAFE_MAX_FPS + 10U, ENABLE_DUAL);
   CHECK(max9296_fingerprint_preview_max_fps(&hd_40) == 0U);
   CHECK(max9296_fingerprint_exposure_seed_route(&hd_40) !=
         max9296_fingerprint_exposure_seed_route(&hd_30));
   CHECK(!max9296_fingerprint_equal(&hd_30, &hd_40));
 
-  /* The mode axis, isolated: two distinct table entries that agree on every
-   * field the derived axes read. Only the pointer separates them. */
-  struct max9296_hw_fingerprint single_30 = make(&single_360p, 640U, 360U, 30U);
-  struct max9296_hw_fingerprint twin = single_30;
-  twin.mode = &single_360p_right;
-  CHECK(max9296_fingerprint_preview_max_fps(&single_30) ==
-        max9296_fingerprint_preview_max_fps(&twin));
-  CHECK(max9296_fingerprint_exposure_seed_route(&single_30) ==
-        max9296_fingerprint_exposure_seed_route(&twin));
-  CHECK(!max9296_fingerprint_equal(&single_30, &twin));
+  /* The left and right single tables, which share an id and every field the
+   * derived axes read, so only the mode pointer tells the tables themselves
+   * apart.  That does NOT isolate the pointer comparison: among fingerprints
+   * production admits, enable already separates the pair, because
+   * max9296_resolve_prepare_mode_locked() selects the right-hand table FROM
+   * enable and sysfs_prepare_store() rejects any other mask.  So
+   * left->mode == right->mode is defensive rather than load-bearing here, and a
+   * check that forced the pair to share an enable would be asserting against a
+   * state that cannot occur -- it would fail and report a regression that is
+   * not one.  What is assertable is that the reachable pair is unequal.
+   *
+   * So this file does NOT pin left->mode == right->mode: deleting that term
+   * leaves every check here green, and deliberately so.  The driver documents
+   * why the term exists -- max9296_resolve_prepare_mode_locked() notes that the
+   * right-hand tables share their public mode ids -- and that is where the
+   * reason lives, not in a check built on a tuple sysfs rejects. */
+  struct max9296_hw_fingerprint left_30 =
+      make(&single_360p, 640U, 360U, 30U, ENABLE_LEFT);
+  struct max9296_hw_fingerprint right_30 =
+      make(&single_360p_right, 640U, 360U, 30U, ENABLE_RIGHT);
+  CHECK(max9296_fingerprint_preview_max_fps(&left_30) ==
+        max9296_fingerprint_preview_max_fps(&right_30));
+  CHECK(max9296_fingerprint_exposure_seed_route(&left_30) ==
+        max9296_fingerprint_exposure_seed_route(&right_30));
+  CHECK(!max9296_fingerprint_equal(&left_30, &right_30));
 
-  /* Every other non-derived axis still separates. */
+  /* Which fields the predicate compares at all, one synthetic single-field delta
+   * each.  These are deltas of a fingerprint, not requests production would
+   * admit -- enable in particular is correlated with the mode pointer for every
+   * reachable tuple -- so what they pin is the predicate's term list, not a
+   * reachable distinction. Both are worth pinning; only the second would be
+   * worth claiming. */
   struct max9296_hw_fingerprint other;
   other = hd_30; other.width = 1280U;         CHECK(!max9296_fingerprint_equal(&hd_30, &other));
   other = hd_30; other.height = 1080U;        CHECK(!max9296_fingerprint_equal(&hd_30, &other));
