@@ -4994,15 +4994,27 @@ static int max9296_program_preview_context_channel(
    *
    * Across an epoch this function runs again after a firmware reload, and if
    * the predicate is false it writes neither register -- so the values are
-   * whatever the reload left behind.  The reload restores both defaults, so no
-   * revert write is needed.  Measured on the board 2026-09-30: a 640x360@120
-   * epoch read back 0x6112=0x0000 and 0x2020=0x7800, and the next epoch, after
-   * v4l-ap1302-ar0234.fw loaded again at 1280x720@30, read back 0x6112=0x0014
-   * (the 20us default) and 0x2020=0x1e00 on all four AP1302s.  The driver still
-   * has no readback of either register; that measurement came from the host i2c
-   * adapters.  artifacts/board-20260930-trigger-max-mismatch/ records the exact
-   * commands, the controls that make those two readings distinguishable, and
-   * what the measurement does not cover.
+   * whatever the reload left behind.  A board-power epoch transition leaves both
+   * at their defaults, so no revert write is needed.  Measured on the board
+   * 2026-09-30: a 640x360@120 epoch read back 0x6112=0x0000 and 0x2020=0x7800,
+   * and the next epoch, after the rail cycled and v4l-ap1302-ar0234.fw loaded
+   * again at 1280x720@30, read back 0x6112=0x0014 (the 20us default) and
+   * 0x2020=0x1e00 on all four AP1302s.
+   *
+   * The credit goes to the whole transition, not to the firmware load alone.
+   * An epoch transition cycles the shared rail -- the AP1302s stopped answering
+   * on i2c entirely while the count sat at zero -- so a power-on reset default
+   * and a value the firmware writes are indistinguishable in that measurement.
+   * Scoping the claim to the transition is enough here, because this driver has
+   * no reload without a reset: max9296_set_power_on() calls max9296_reset(), and
+   * cold initialization runs at most once per epoch and only with the hardware
+   * powered, so every reload follows a reset in the same epoch.
+   *
+   * The driver still has no readback of either register; that measurement came
+   * from the host i2c adapters.
+   * artifacts/board-20260930-trigger-max-mismatch/ records the exact commands,
+   * the controls that make those two readings distinguishable, and what the
+   * measurement does not cover.
    */
   if (max9296_preview_output_uses_high_fps(width, height, fps)) {
     PREVIEW_WRITE(AP1302_REG_PREVIEW_MAX_FPS,

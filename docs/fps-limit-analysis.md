@@ -736,8 +736,10 @@ cp -a ${F}.orig $F && /root/camtest/cam_hard_reset.sh -s -S
 
 `R0x2020` 와 `R0x6112` 의 기본값은 2026-09-30 에 호스트 i2c 로 읽어 확인했다 — 4개
 AP1302 전부 `0x1e00` / `0x0014`. 드라이버가 고fps 경로에서 두 값을 `0x7800` / `0x0000`
-으로 바꾼 뒤 다음 board-power epoch 에서 펌웨어가 다시 로드되면 **둘 다 위 기본값으로
-복원된다.** 그래서 드라이버에 되돌리기 쓰기가 없다. 절차·대조·한계는
+으로 바꾼 뒤 **board-power epoch 전이를 거치면 둘 다 위 기본값으로 복원된다.** 그래서
+드라이버에 되돌리기 쓰기가 없다. 복원을 펌웨어 재로드 **단독**에 귀속시킬 근거는 없다 —
+epoch 전이는 공유 레일을 내렸다 올리므로 전원 투입 리셋 기본값과 펌웨어가 쓴 값이
+구별되지 않는다. 절차·대조·한계는
 [artifacts/board-20260930-trigger-max-mismatch/README.md](../artifacts/board-20260930-trigger-max-mismatch/README.md) 에 있다.
 
 ### MAX9296 (I2C 0x48)
