@@ -5012,9 +5012,12 @@ static int max9296_program_preview_context_channel(
    *
    * The driver still has no readback of either register; that measurement came
    * from the host i2c adapters.
-   * artifacts/board-20260930-trigger-max-mismatch/ records the exact commands,
-   * the controls that make those two readings distinguishable, and what the
-   * measurement does not cover.
+   * artifacts/board-20260930-trigger-max-mismatch/ summarises that measurement:
+   * the board and firmware it ran on, the tuple requested at each step, the
+   * readback command form, the controls that make those two readings
+   * distinguishable, and what the measurement does not cover.  It is a summary,
+   * not a command transcript -- this repository does not track the per-artifact
+   * raw/ directories.
    */
   if (max9296_preview_output_uses_high_fps(width, height, fps)) {
     PREVIEW_WRITE(AP1302_REG_PREVIEW_MAX_FPS,
