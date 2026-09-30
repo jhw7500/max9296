@@ -1,12 +1,12 @@
 # AP1302 `TRIGGER_MAX_MISMATCH` / `PREVIEW_MAX_FPS` — epoch 전이 뒤 복원 측정
 
-시험일: 2026-09-30
-대상 보드: `192.168.214.4` (i.MX8MP, MAX9296 4ch)
-커널: `5.10.35-lts-5.10.y+g2fce14defc04`
-패키지: `pim-mp 0.6.3+jhw.camera7`
+시험일: 2026-09-30  
+대상 보드: `192.168.214.4` (i.MX8MP, MAX9296 4ch)  
+커널: `5.10.35-lts-5.10.y+g2fce14defc04`  
+패키지: `pim-mp 0.6.3+jhw.camera7`  
 드라이버: MAX9296 `2.12`, srcversion `00FEDDF6CFD9B1C1F2F0E6B` (소스 `f6230c5`) — Phase 1·2 와 복구.
-기준선만 교체 전 빌드 `38670DF208FF25E7BC1C29F`(소스 `c25f7a68`)에서 읽었다
-펌웨어: `/lib/firmware/v4l-ap1302-ar0234.fw` (81,616 bytes)
+기준선만 교체 전 빌드 `38670DF208FF25E7BC1C29F`(소스 `c25f7a68`)에서 읽었다  
+펌웨어: `/lib/firmware/v4l-ap1302-ar0234.fw` (81,616 bytes)  
 관련: 이슈 #91 (#85 후속), PR #90
 
 ## 무엇을 물었나
@@ -19,9 +19,39 @@
 천장이 술어와 일대일로 대응하므로 교차 요청은 레지스터를 만지기 전에 `-ESTALE` 로
 거부된다 (`tests/max9296_360p_policy_test.c` 가 전 모드 × 전 rate 로 고정).
 
-**측정 대상은 epoch 을 건너는 경우다.** 고fps epoch 뒤 펌웨어가 다시 로드되면 두
-레지스터가 어떤 값을 갖는가. 복원되지 않으면 저fps 세션이 고fps 전용 튜닝을 물려받은
-채 돈다.
+**측정 대상은 epoch 을 건너는 경우다.** 고fps epoch 뒤 board-power epoch 전이(레일
+사이클 + 리셋 + 펌웨어 재로드)를 거치면 두 레지스터가 어떤 값을 갖는가. 복원되지 않으면
+저fps 세션이 고fps 전용 튜닝을 물려받은 채 돈다.
+
+## 측정 전 상태 전이
+
+기준선은 스트리밍 중이고 `max9296_prepare_request()` 는 `sensor->streaming` 이면
+`-EBUSY` 로 거부한다(`max9296.c:5485`). 그래서 Phase 1 전에 `cam-operate.service` 를
+정지하고 `imx8-media-dev`·`max9296` 를 내렸으며, 같은 기회에 드라이버를 `c25f7a68`
+빌드에서 `f6230c5` 빌드로 교체했다(양쪽 사본을 `*.bak-c25f7a68` 로 백업, `depmod -a`,
+설치 후 두 경로의 sha256 이 `4a002c3ecfff…` 로 일치). 다시 올린 뒤 srcversion 은
+`00FEDDF6CFD9B1C1F2F0E6B`, 두 인스턴스는 `state=IDLE … epoch=1 … match=0` 이었다.
+
+### epoch 회계
+
+`max9296_hw_epoch` 는 모듈 적재 시 정적 초기값 1 로 시작한다(`max9296.c:1885`).
+측정 구간의 이력은 `1`(적재) → `2`(Phase 1, first-on) → `3`(취소, last-off) →
+`4`(Phase 2, first-on) 이다.
+
+**Phase 1 과 Phase 2 사이에 물리적 전원 사이클이 정확히 한 번 일어났고, 그 한 사이클이
+epoch 을 두 번 올린다.** `max9296_hw_epoch++` 는 두 분기가 공유하는 단일 `if (run)`
+블록 안에 있어(`max9296.c:2317-2321`) 전력 카운트가 0 을 **어느 방향으로 교차해도**
+오르기 때문이다. 측정 구간 전체의 상승은 Phase 1 의 `1 → 2` 를 포함해 **세 번**이다.
+정지·교체는 Phase 1 이전에 끝났으므로 두 리드백 사이에 끼어들지 않는다.
+
+**복구는 epoch 을 다시 1 로 되돌린다.** Phase 2(epoch 4) 뒤 lease 를 취소하고
+`cam-operate.service` 를 기동했을 때 상태 줄은 `epoch=6` 이 아니라 `epoch=2` 를 보였다.
+원인은 모듈 재적재다 — dmesg 에 두 번째 probe(`max9296 version : 2.12` / `shared Init` /
+`Registered sensor subdevice`)가 커널 시각 `771165.5` 에 찍혔고, 이는 설치 probe
+`770986.8`·Phase 1 `771034`·Phase 2 `771093` 보다 뒤다. **서비스 체인의 어느 컴포넌트가
+재적재를 수행하는지는 확인하지 못했다** — `start_cam.sh` 에는 `rmmod`/`modprobe` 가 없다.
+재적재는 디스크의 새 빌드를 다시 읽으므로 적재본은 바뀌지 않는다: 복구 직후 srcversion 이
+`00FEDDF6CFD9B1C1F2F0E6B` 로 재확인됐다.
 
 ## 절차와 결과
 
@@ -37,6 +67,10 @@
 
 4개 AP1302 가 모든 단계에서 같은 값을 보였다.
 `0x7800` = u8.8 의 120.0, `0x1e00` = 30.0, `0x0014` = 20.
+
+기준선의 `epoch 2` 와 Phase 1 의 `epoch 2` 는 **같은 번호이지만 다른 모듈 수명**이다 —
+그 사이에 모듈을 내렸다 올렸고 `max9296_hw_epoch` 는 적재마다 1 에서 다시 시작한다.
+비교할 수 있는 것은 번호가 아니라 위 「epoch 회계」의 이력이다.
 
 ## 대조 — 왜 이 값들이 구별 가능한가
 
@@ -80,129 +114,9 @@ epoch 이 전력 카운트의 **어느 방향 0 교차에서도** 오른다는 �
   `0` 이 프레임 스킵을 억제한다는 기존 실측(`docs/fps-limit-analysis.md`)이다.
 - 전달 프레임레이트는 이 측정의 대상이 아니다.
 
-## 부록 — 실행한 명령과 출력
+## 원시 기록
 
-`artifacts/board-*/raw/` 는 이 저장소 관례상 추적하지 않으므로(`.gitignore:38`) 증거를
-여기에 둔다. 파일로 캡처한 로그가 아니라 **세션 출력을 전사한 것**이다. 모든 명령은
-호스트에서 `ssh root@192.168.214.4` 로 실행했다.
-
-읽기 함수:
-
-```sh
-rd() { i2ctransfer -f -y -a "$1" "w2@$2" "$3" "$4" r2; }
-```
-
-### 기준선 — 손대기 전, 라이브 스트림 (교체 전 빌드 `38670DF208FF25E7BC1C29F`)
-
-```
-state=CONSUMED generation=17747831707155854 epoch=2 mode=dual-wide table=dual width=2560 height=720 fps=15 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=0 match=1   (1-0048)
-state=CONSUMED generation=17747831707155854 epoch=2 mode=dual-wide table=dual width=2560 height=720 fps=15 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=0 match=1   (2-0048)
-
-bus1/bus2 × 0x11/0x12/0x3c:  0x0000 = 0x02 0x65    0x6112 = 0x00 0x14    0x2020 = 0x1e 0x00
-```
-
-`0x3c` 는 듀얼 모드에서 브로드캐스트이므로 이후 단계는 `0x11`·`0x12` 만 읽었다.
-
-### 스트림 정지와 드라이버 교체 — Phase 1 의 전제
-
-기준선은 스트리밍 중이고 `max9296_prepare_request()` 는 `sensor->streaming` 이면
-`-EBUSY` 로 거부한다(`max9296.c:5485`). 그래서 Phase 1 전에 스트림을 내려야 하며,
-같은 기회에 드라이버를 교체했다.
-
-```
-$ systemctl stop cam-operate.service        # rc=0 → gstApp 없음
-$ rmmod imx8-media-dev && rmmod max9296     # 둘 다 rc=0
-
-# c25f7a68 빌드(srcversion 38670DF208FF25E7BC1C29F)를 백업하고 f6230c5 빌드 설치
-$ cp -p $KDIR/max9296.ko $KDIR/max9296.ko.bak-c25f7a68
-$ cp -p /opt/pim/driver/max9296.ko /opt/pim/driver/max9296.ko.bak-c25f7a68
-$ install -m 0644 max9296-f6230c5.ko $KDIR/max9296.ko
-$ install -m 0644 max9296-f6230c5.ko /opt/pim/driver/max9296.ko
-$ depmod -a
-$ sha256sum $KDIR/max9296.ko /opt/pim/driver/max9296.ko
-4a002c3ecfff1b336717b3d1008527cc38d77fe70c93c3d37c3df8f1def832ff  (양쪽 동일)
-
-$ modprobe max9296 && modprobe imx8-media-dev
-$ cat /sys/module/max9296/srcversion
-00FEDDF6CFD9B1C1F2F0E6B
-
-state=IDLE generation=0 epoch=1 mode=none table=none width=0 height=0 fps=0 code=0x0 enable=0 crop_enable=0 errno=0 worker_errno=0 lease=0 match=0   (양쪽 동일)
-```
-
-`$KDIR` = `/lib/modules/5.10.35-lts-5.10.y+g2fce14defc04/kernel/drivers/media/i2c`.
-
-**epoch 번호는 모듈 적재에서 1 로 다시 시작한다**(`max9296_hw_epoch` 의 정적 초기값,
-`max9296.c:1885`). 이후 측정의 epoch 이력은 `1`(적재) → `2`(Phase 1, first-on) →
-`3`(취소, last-off) → `4`(Phase 2, first-on) 이다.
-
-**Phase 1 과 Phase 2 사이에 물리적 전원 사이클이 정확히 한 번 일어났고, 그 한 사이클이
-epoch 을 두 번 올린다.** `max9296_hw_epoch++` 는 두 분기가 공유하는 단일 `if (run)`
-블록 안에 있어(`max9296.c:2317-2321`) 전력 카운트가 0 을 **어느 방향으로 교차해도**
-오르기 때문이다 — 내려갈 때 `2 → 3`, 올라갈 때 `3 → 4`. 측정 구간 전체의 상승은
-Phase 1 의 `1 → 2` 를 포함해 **세 번**이다. 정지·교체는 Phase 1 이전에 끝났으므로
-두 리드백 사이에 끼어들지 않는다.
-
-### Phase 1 — 술어 참
-
-```
-$ gen=$(date +%s)
-$ printf "1 %s 1280 360 120 3\n" "$gen" > /sys/bus/i2c/devices/1-0048/prepare &
-$ printf "1 %s 1280 360 120 3\n" "$gen" > /sys/bus/i2c/devices/2-0048/prepare &
-$ wait                                     # rc: bus1=0 bus2=0
-
-state=READY generation=1790734620 epoch=2 mode=dual-wide table=dual width=1280 height=360 fps=120 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=1 match=1   (양쪽 동일)
-
-bus1/bus2 × 0x11/0x12:  0x6112 = 0x00 0x00    0x2020 = 0x78 0x00
-
-[771034.695681] [I2C:1][max9296.c:5131] preview addr=0x11 output=640x360 fps=120 sensor_mode=KEEP
-[771034.699669] [I2C:2][max9296.c:5131] preview addr=0x11 output=640x360 fps=120 sensor_mode=KEEP
-[771034.703253] [I2C:1][max9296.c:5131] preview addr=0x12 output=640x360 fps=120 sensor_mode=KEEP
-[771034.704234] [I2C:2][max9296.c:5131] preview addr=0x12 output=640x360 fps=120 sensor_mode=KEEP
-```
-
-### epoch 교차 — lease 취소로 전력 카운트를 0 으로
-
-```
-$ printf "0\n" > /sys/bus/i2c/devices/1-0048/prepare
-$ printf "0\n" > /sys/bus/i2c/devices/2-0048/prepare
-
-state=IDLE ... epoch=3 ... lease=0 match=0                (양쪽 동일)
-
-bus1/bus2 × 0x11/0x12:  Error: Sending messages failed: No such device or address
-```
-
-### Phase 2 — 새 epoch, 펌웨어 재로드, 술어 거짓
-
-```
-$ gen=$(date +%s)
-$ printf "1 %s 2560 720 30 3\n" "$gen" > /sys/bus/i2c/devices/1-0048/prepare &
-$ printf "1 %s 2560 720 30 3\n" "$gen" > /sys/bus/i2c/devices/2-0048/prepare &
-$ wait                                     # rc: bus1=0 bus2=0
-
-state=READY generation=1790734679 epoch=4 mode=dual-wide table=dual width=2560 height=720 fps=30 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=1 match=1   (양쪽 동일)
-
-bus1/bus2 × 0x11/0x12:  0x6112 = 0x00 0x14    0x2020 = 0x1e 0x00
-
-[771093.805582] [I2C:2][max9296.c:4736] loaded v4l-ap1302-ar0234.fw firmware (81616 bytes)
-[771093.817601] [I2C:1][max9296.c:4736] loaded v4l-ap1302-ar0234.fw firmware (81616 bytes)
-[771093.805593] [I2C:2][max9296.c:5131] preview addr=0x11 output=1280x720 fps=30 sensor_mode=KEEP
-[771093.815491] [I2C:2][max9296.c:5131] preview addr=0x12 output=1280x720 fps=30 sensor_mode=KEEP
-[771093.817608] [I2C:1][max9296.c:5131] preview addr=0x11 output=1280x720 fps=30 sensor_mode=KEEP
-[771093.821286] [I2C:1][max9296.c:5131] preview addr=0x12 output=1280x720 fps=30 sensor_mode=KEEP
-```
-
-### 복구
-
-```
-$ printf "0\n" > /sys/bus/i2c/devices/1-0048/prepare
-$ printf "0\n" > /sys/bus/i2c/devices/2-0048/prepare
-$ systemctl start cam-operate.service      # rc=0
-
-active
-/dev/video3:  root  3112365 F.... gstApp
-/dev/video4:  root  3112365 F.... gstApp
-state=CONSUMED ... epoch=2 ... width=2560 height=720 fps=15 ... lease=0 match=1   (양쪽 동일)
-```
-
-AP1302 HINF 프레임 카운터(`0x3c` `0x0002`)를 5초 간격으로 두 번 읽어 프레임 흐름을 확인했다:
-`bus1=0xc801 bus2=0xc901` → `bus1=0x1401 bus2=0x1401`.
+단계별 명령/출력 전사는 커밋하지 않는다 — 이 저장소는 `artifacts/board-*/raw/` 를
+추적하지 않는다(`.gitignore:38`). 재현에 필요한 것은 위 표에 있다: 읽기 명령, 대상 주소,
+각 단계의 prepare 튜플과 관측된 상태·레지스터 값, 그리고 판정을 지지하는 dmesg 문구.
+측정 당시의 상태 줄 원문은 이슈 #91 의 측정 코멘트에 남아 있다.
