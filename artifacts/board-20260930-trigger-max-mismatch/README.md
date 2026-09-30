@@ -4,7 +4,8 @@
 대상 보드: `192.168.214.4` (i.MX8MP, MAX9296 4ch)
 커널: `5.10.35-lts-5.10.y+g2fce14defc04`
 패키지: `pim-mp 0.6.3+jhw.camera7`
-드라이버: MAX9296 `2.12`, srcversion `00FEDDF6CFD9B1C1F2F0E6B` (소스 `f6230c5`)
+드라이버: MAX9296 `2.12`, srcversion `00FEDDF6CFD9B1C1F2F0E6B` (소스 `f6230c5`) — Phase 1·2 와 복구.
+기준선만 교체 전 빌드 `38670DF208FF25E7BC1C29F`(소스 `c25f7a68`)에서 읽었다
 펌웨어: `/lib/firmware/v4l-ap1302-ar0234.fw` (81,616 bytes)
 관련: 이슈 #91 (#85 후속), PR #90
 
@@ -29,7 +30,7 @@
 
 | 단계 | 상태 | 술어 | `0x6112` | `0x2020` |
 |---|---|---|---|---|
-| 기준선 (손대기 전, 라이브 스트림, epoch 2, `2560x720@15`) | `CONSUMED` | 거짓 | `0x0014` | `0x1e00` |
+| 기준선 (손대기 전, 라이브 스트림, epoch 2, `2560x720@15`, 교체 전 빌드) | `CONSUMED` | 거짓 | `0x0014` | `0x1e00` |
 | Phase 1 — 병렬 prepare `1280x360@120 enable=3` (출력 `640x360@120`) | `READY` epoch 2 | **참** | **`0x0000`** | `0x7800` |
 | epoch 교차 — 양쪽 lease 취소 (전력 카운트 → 0) | `IDLE` epoch 3 | — | **주소 응답 없음** | 주소 응답 없음 |
 | Phase 2 — 새 epoch, 펌웨어 재로드, 병렬 prepare `2560x720@30 enable=3` (출력 `1280x720@30`) | `READY` epoch 4 | 거짓 | **`0x0014`** | **`0x1e00`** |
@@ -83,7 +84,7 @@ epoch 이 전력 카운트의 **어느 방향 0 교차에서도** 오른다는 �
 rd() { i2ctransfer -f -y -a "$1" "w2@$2" "$3" "$4" r2; }
 ```
 
-### 기준선 — 손대기 전, 라이브 스트림
+### 기준선 — 손대기 전, 라이브 스트림 (교체 전 빌드 `38670DF208FF25E7BC1C29F`)
 
 ```
 state=CONSUMED generation=17747831707155854 epoch=2 mode=dual-wide table=dual width=2560 height=720 fps=15 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=0 match=1   (1-0048)
@@ -93,6 +94,39 @@ bus1/bus2 × 0x11/0x12/0x3c:  0x0000 = 0x02 0x65    0x6112 = 0x00 0x14    0x2020
 ```
 
 `0x3c` 는 듀얼 모드에서 브로드캐스트이므로 이후 단계는 `0x11`·`0x12` 만 읽었다.
+
+### 스트림 정지와 드라이버 교체 — Phase 1 의 전제
+
+기준선은 스트리밍 중이고 `max9296_prepare_request()` 는 `sensor->streaming` 이면
+`-EBUSY` 로 거부한다(`max9296.c:5485`). 그래서 Phase 1 전에 스트림을 내려야 하며,
+같은 기회에 드라이버를 교체했다.
+
+```
+$ systemctl stop cam-operate.service        # rc=0 → gstApp 없음
+$ rmmod imx8-media-dev && rmmod max9296     # 둘 다 rc=0
+
+# c25f7a68 빌드(srcversion 38670DF208FF25E7BC1C29F)를 백업하고 f6230c5 빌드 설치
+$ cp -p $KDIR/max9296.ko $KDIR/max9296.ko.bak-c25f7a68
+$ cp -p /opt/pim/driver/max9296.ko /opt/pim/driver/max9296.ko.bak-c25f7a68
+$ install -m 0644 max9296-f6230c5.ko $KDIR/max9296.ko
+$ install -m 0644 max9296-f6230c5.ko /opt/pim/driver/max9296.ko
+$ depmod -a
+$ sha256sum $KDIR/max9296.ko /opt/pim/driver/max9296.ko
+4a002c3ecfff1b336717b3d1008527cc38d77fe70c93c3d37c3df8f1def832ff  (양쪽 동일)
+
+$ modprobe max9296 && modprobe imx8-media-dev
+$ cat /sys/module/max9296/srcversion
+00FEDDF6CFD9B1C1F2F0E6B
+
+state=IDLE generation=0 epoch=1 mode=none table=none width=0 height=0 fps=0 code=0x0 enable=0 crop_enable=0 errno=0 worker_errno=0 lease=0 match=0   (양쪽 동일)
+```
+
+`$KDIR` = `/lib/modules/5.10.35-lts-5.10.y+g2fce14defc04/kernel/drivers/media/i2c`.
+
+**epoch 번호는 모듈 적재에서 1 로 다시 시작한다.** 이후 측정의 epoch 이력은
+`1`(적재) → `2`(Phase 1 전원 on) → `3`(취소, 전원 off) → `4`(Phase 2 전원 on) 이고,
+**측정 구간 안의 0 교차는 Phase 1 과 Phase 2 사이 한 번뿐이다** — 그 앞의 정지·교체는
+Phase 1 이전에 끝났다.
 
 ### Phase 1 — 술어 참
 
@@ -146,7 +180,8 @@ bus1/bus2 × 0x11/0x12:  0x6112 = 0x00 0x14    0x2020 = 0x1e 0x00
 ### 복구
 
 ```
-$ printf "0\n" > /sys/bus/i2c/devices/{1,2}-0048/prepare
+$ printf "0\n" > /sys/bus/i2c/devices/1-0048/prepare
+$ printf "0\n" > /sys/bus/i2c/devices/2-0048/prepare
 $ systemctl start cam-operate.service      # rc=0
 
 active
@@ -157,10 +192,3 @@ state=CONSUMED ... epoch=2 ... width=2560 height=720 fps=15 ... lease=0 match=1 
 
 AP1302 HINF 프레임 카운터(`0x3c` `0x0002`)를 5초 간격으로 두 번 읽어 프레임 흐름을 확인했다:
 `bus1=0xc801 bus2=0xc901` → `bus1=0x1401 bus2=0x1401`.
-
-### 드라이버 교체 기록
-
-이 측정 직전에 드라이버를 `c25f7a68` 빌드(srcversion `38670DF208FF25E7BC1C29F`)에서
-`f6230c5` 빌드로 교체했다. 되돌리기용 백업:
-`/lib/modules/5.10.35-lts-5.10.y+g2fce14defc04/kernel/drivers/media/i2c/max9296.ko.bak-c25f7a68`,
-`/opt/pim/driver/max9296.ko.bak-c25f7a68`.
