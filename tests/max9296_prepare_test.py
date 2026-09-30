@@ -19,6 +19,30 @@ SOURCE = ROOT / "max9296.c"
 DTS = ROOT / "docs" / "imx8mp-evk.dts"
 PREPARE_DOC = ROOT / "docs" / "parallel-prepare-v1.md"
 
+# The v1 status line, held explicitly. Comparing the driver against the document
+# catches one of them drifting, but both are artifacts a single commit can change
+# together, and agreement alone would then permit the positional break this
+# pins. A deliberate v1 extension edits this tuple too -- which is the review it
+# deserves, since the set has already grown twice without one (02c014a added
+# worker_errno, 1108e57 added crop_enable, both by insertion).
+V1_STATUS_KEYS = (
+    "state",
+    "generation",
+    "epoch",
+    "mode",
+    "table",
+    "width",
+    "height",
+    "fps",
+    "code",
+    "enable",
+    "crop_enable",
+    "errno",
+    "worker_errno",
+    "lease",
+    "match",
+)
+
 
 def _mode_ceilings() -> dict[tuple[int, int], int]:
     """The per-mode fps ceiling, read from the header that defines it.
@@ -2298,11 +2322,24 @@ def check_source(source: str, failures: list[str]) -> None:
             failures.append(
                 "the ABI document no longer shows exactly one status-line example"
             )
-        elif [token.split("=", 1)[0] for token in documented[0].split()] != driver_keys:
-            failures.append(
-                "the documented status line and the driver disagree on the "
-                "field order the document declares to be the v1 contract"
-            )
+        else:
+            doc_keys = [token.split("=", 1)[0] for token in documented[0].split()]
+            if doc_keys != driver_keys:
+                failures.append(
+                    "the documented status line and the driver disagree on the "
+                    "field order the document declares to be the v1 contract"
+                )
+            # Both sides against a fixed sequence as well, so a commit that
+            # changes the driver and the example together cannot slip a
+            # positional break past their agreement.
+            if driver_keys != list(V1_STATUS_KEYS):
+                failures.append(
+                    "the driver's status line no longer emits the v1 key sequence"
+                )
+            if doc_keys != list(V1_STATUS_KEYS):
+                failures.append(
+                    "the documented status line no longer shows the v1 key sequence"
+                )
 
 
 def main() -> int:
