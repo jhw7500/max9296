@@ -160,6 +160,9 @@ class Camera:
     board: Board
     state: str = "idle"
     lease: bool = False
+    # Mirrors sensor->prepare_lease_reserved: whether the bind that took
+    # this lease created the reservation or found one already bound.
+    lease_reserved: bool = False
     power_count: int = 0
     generation: int = 0
     lease_generation: int = 0
@@ -221,7 +224,12 @@ class Camera:
     ) -> None:
         self.drain_timeout_sync()
         assert not self.lease
+        prior = (self.fsync_contract_epoch, self.fsync_contract_fps)
         assert self.board.configure_fsync(self, fingerprint[2], bind=True)
+        self.lease_reserved = (
+            self.fsync_contract_epoch,
+            self.fsync_contract_fps,
+        ) != prior
         self.adopt_or_acquire()
         self.lease = True
         self.generation = generation
@@ -238,7 +246,9 @@ class Camera:
             self.arm_timeout()
         else:
             self.state = "failed"
-            self.drop_fsync_contract()
+            if self.lease_reserved:
+                self.drop_fsync_contract()
+            self.lease_reserved = False
             self.lease = False
             self.board.put()
 
@@ -267,10 +277,19 @@ class Camera:
                 self.arm_timeout()
             return "estale"
 
+        held = self.lease
+        prior = (self.fsync_contract_epoch, self.fsync_contract_fps)
         if not self.board.configure_fsync(self, fingerprint[2], bind=True):
             if self.lease:
                 self.arm_timeout()
             return "estale"
+        took = (self.fsync_contract_epoch, self.fsync_contract_fps) != prior
+        # Mirrors the driver's two binds: a fresh lease assigns, a lease already
+        # held merges, so an idempotent re-bind cannot drop ownership it has.
+        if held:
+            self.lease_reserved |= took
+        else:
+            self.lease_reserved = took
 
         if not self.lease:
             self.adopt_or_acquire()
@@ -286,7 +305,9 @@ class Camera:
             self.hardware_fingerprint = fingerprint
         self.state = "ready"
         if not arm_succeeds:
-            self.drop_fsync_contract()
+            if self.lease_reserved:
+                self.drop_fsync_contract()
+            self.lease_reserved = False
             self.lease = False
             self.state = "failed"
             self.board.put()
@@ -336,6 +357,7 @@ class Camera:
             if self.lease:
                 self.timeout_pending = False
                 self.lease = False
+                self.lease_reserved = False
                 if self.state != "stale":
                     self.state = "consumed"
             else:
@@ -369,6 +391,14 @@ class Camera:
             self.timeout_pending = False
             self.lease = False
             self.state = state
+            # Cancel and expiry both land here, and both give the cadence back
+            # with the lease (#88) -- but only the reservation this lease
+            # created. A reservation that predates it, such as one a failed
+            # STREAMOFF retained while its output may still be live, is not
+            # this lease's to return.
+            if self.lease_reserved:
+                self.drop_fsync_contract()
+            self.lease_reserved = False
             self.board.put()
 
     def hardware_current(self) -> bool:
@@ -638,6 +668,78 @@ def check_model(failures: list[str]) -> None:
     if board.users != 0:
         failures.append("prepare=0 must return an unused lease")
 
+    # The cadence goes back with the lease (#88). A keeper holds the epoch alive
+    # so that the release itself, not an epoch advance, is what frees it.
+    board = Board()
+    keeper, cancelled = Camera(board), Camera(board)
+    keeper.power_on()
+    cancelled.prepare(fingerprint=(2560, 720, 60, 3))
+    bound = cancelled.fsync_contract_epoch
+    cancelled.release_lease("idle")
+    if cancelled.fsync_contract_epoch == bound:
+        failures.append("a cancelled prepare kept the reservation it took")
+    if keeper.set_frame_interval(30) != "ok":
+        failures.append("a cancelled prepare must stop blocking peer cadence")
+
+    # An expired lease reaches the same release by its own path.
+    board = Board()
+    keeper, expired = Camera(board), Camera(board)
+    keeper.power_on()
+    expired.prepare(fingerprint=(2560, 720, 60, 3))
+    bound = expired.fsync_contract_epoch
+    expired.begin_timeout()
+    expired.finish_timeout()
+    if expired.fsync_contract_epoch == bound:
+        failures.append("an expired lease kept the reservation it took")
+
+    # An identical re-request under a lease already held re-binds the same pair
+    # and therefore changes nothing. Ownership must survive that: with `=` the
+    # no-op bind would record "took nothing", and the cancel after it would
+    # leave the reservation stranded exactly as before #88.
+    board = Board()
+    keeper, renewed = Camera(board), Camera(board)
+    keeper.power_on()
+    renewed.prepare(fingerprint=(2560, 720, 60, 3))
+    bound = renewed.fsync_contract_epoch
+    if renewed.request_prepare(91, (2560, 720, 60, 3)) != "ready":
+        failures.append("an identical re-request under a held lease must be accepted")
+    renewed.release_lease("idle")
+    if renewed.fsync_contract_epoch == bound:
+        failures.append("an idempotent re-request erased the reservation it owned")
+
+    # The unarmed-failure path carries the same rule: a prepare that could not
+    # publish its expiry owner returns only what its own bind took.
+    board = Board()
+    keeper, unowned = Camera(board), Camera(board)
+    keeper.power_on()
+    retained = board.target_epoch()
+    unowned.fsync_contract_epoch = retained
+    unowned.fsync_contract_fps = 60
+    if unowned.request_prepare(92, (2560, 720, 60, 3), arm_succeeds=False) != "ebusy":
+        failures.append("an unarmable prepare must report busy")
+    if unowned.fsync_contract_epoch != retained:
+        failures.append("an unarmable prepare returned a reservation it never took")
+
+    # The converse is what makes those releases safe: a reservation the lease
+    # did not create is not the lease's to return. This stands in for a
+    # STREAMOFF whose disable write failed -- it keeps its reservation on
+    # purpose, because output may still be live -- followed by a warm-reuse
+    # prepare at the same rate, which re-binds the identical pair and
+    # reprograms nothing. Releasing on the lease alone would hand the peer a
+    # cadence change under that output.
+    board = Board()
+    keeper, reuser = Camera(board), Camera(board)
+    keeper.power_on()
+    retained = board.target_epoch()
+    reuser.fsync_contract_epoch = retained
+    reuser.fsync_contract_fps = 60
+    reuser.prepare(fingerprint=(2560, 720, 60, 3))
+    reuser.release_lease("idle")
+    if reuser.fsync_contract_epoch != retained:
+        failures.append("cancel returned a reservation its lease never took")
+    if keeper.set_frame_interval(30) != "estale":
+        failures.append("a retained reservation must still refuse a peer cadence change")
+
     board = Board()
     leased = Camera(board)
     leased.prepare()
@@ -858,13 +960,14 @@ def check_model(failures: list[str]) -> None:
     if other.set_frame_interval(20) != "estale":
         failures.append("a prepared instance must still refuse a conflicting cadence")
 
-    # An explicit prepare 0 and an expired lease do NOT release the reservation:
-    # max9296_cancel_prepare() and max9296_prepare_lease_timeout() drop the power
-    # reference and move prepare_state, and neither names fsync_contract_epoch,
-    # fsync_contract_fps or the release helper. Those legs of #82 are open, and
-    # the source check below pins exactly that -- absence of those three names,
-    # which is narrower than "touches" but is what a text scan can honestly
-    # assert -- so this comment cannot drift back into a claim. What the
+    # An explicit prepare 0 and an expired lease DO release the reservation now:
+    # max9296_cancel_prepare() and max9296_prepare_lease_timeout() call the
+    # release helper where they clear the lease, and max9296_remove()'s survivor
+    # stop does the same when its disable reached the hardware (#88). Those legs
+    # of #82 are closed, and the source check below pins the release rather than
+    # its absence. One leg stays open on purpose: STREAMOFF keeps the
+    # reservation when the disable write fails, because output that may still be
+    # live must keep reserving its rate. What the
     # STREAMOFF release fixes is the streaming leg: keying it to the board-power
     # epoch left a rate bound for the life of the module, because that epoch does
     # not advance while any global power reference is held and the vendor capture
@@ -1823,24 +1926,214 @@ def check_source(source: str, failures: list[str]) -> None:
 
 
 
-    # The contract comment beside the model says prepare 0 and lease expiry leave
-    # the reservation. Pin it: a release appearing there would make the comment
-    # false, and a reader who believed it could drop a release elsewhere as
-    # redundant.
-    for name in ("max9296_cancel_prepare", "max9296_prepare_lease_timeout"):
+    # Cancel, lease expiry and the remove-time survivor stop each end the thing
+    # that held the reservation, so each gives it back at that point (#88).
+    # Before that, all three left it bound in a live epoch and the shared-FSYNC
+    # conflict check kept rejecting the peer's other rate with ESTALE, with
+    # cleanup depending on some later call happening to sweep it.
+    # Require the helper, not a spelling of the fields: zeroing fsync_contract_*
+    # in place would release too, but skips the fsync-config -> power lock order
+    # the helper exists to take. The unguarded name is the right one here --
+    # _if_idle_locked is the failed-STREAMON variant and does not contain this
+    # substring, so it cannot satisfy the check by accident.
+    for name in (
+        "max9296_cancel_prepare",
+        "max9296_prepare_lease_timeout",
+        "max9296_remove",
+    ):
         body = function(code, name)
         if not body:
             # function() returns "" for a name it cannot find, which would make
             # this loop pass vacuously after a rename or a return-type change.
             failures.append(f"{name} is no longer locatable")
             continue
-        # The comment claims neither touches the reservation, not merely that
-        # neither calls the helper: zeroing the two fields in place would
-        # falsify it just as silently.
-        for token in ("drop_fsync_contract", "fsync_contract_epoch", "fsync_contract_fps"):
-            if token in body:
-                failures.append(f"{name} now releases the FSYNC reservation")
-                break
+        if "max9296_drop_fsync_contract_locked" not in body:
+            failures.append(f"{name} leaves an orphaned FSYNC reservation")
+
+    # remove is the one of the three that stops a live stream, so its release
+    # carries STREAMOFF's rule: only a stop that reached the hardware releases,
+    # because a failed disable may still be driving FSYNC for the peer. Follow
+    # the guard variable to its assignment rather than trusting the name -- the
+    # defect this replaces was the disable result being discarded entirely.
+    remove_body = function(code, "max9296_remove")
+    if remove_body and "max9296_drop_fsync_contract_locked" in remove_body:
+        guard = re.search(
+            r"if\s*\(\s*was_streaming\s*&&\s*!\s*(\w+)\s*(?:&&[^()]*)?\)\s*"
+            r"max9296_drop_fsync_contract_locked",
+            re.sub(r"\s+", " ", remove_body),
+        )
+        if not guard:
+            failures.append("the remove-time release is not gated on a stop that reached the hardware")
+        elif not re.search(
+            guard.group(1) + r"\s*=\s*max9296_disable_stream_mipi", remove_body
+        ):
+            failures.append("the remove-time release is gated on something other than the disable result")
+
+    # Placement, not just presence. max9296_drop_fsync_contract_locked() takes
+    # the board power lock itself, so running it while that lock is held is a
+    # self-deadlock -- and a check that only looks for the call accepts exactly
+    # that. It also asserts peer->lock, so it cannot move past that unlock.
+    if remove_body:
+        drop_at = remove_body.find("max9296_drop_fsync_contract_locked(peer)")
+        if drop_at >= 0:
+            lock_at = remove_body.rfind("mutex_lock(&max9296_power_lock)", 0, drop_at)
+            unlock_at = remove_body.rfind("mutex_unlock(&max9296_power_lock)", 0, drop_at)
+            if not 0 <= lock_at < unlock_at:
+                failures.append(
+                    "the remove-time release runs while the board power lock is held"
+                )
+            if remove_body.find("mutex_unlock(&peer->lock)", drop_at) < 0:
+                failures.append(
+                    "the remove-time release runs after peer->lock is dropped"
+                )
+            # A client that streams without consuming its prepare lease keeps
+            # prepare_lease_reserved set, and this stop ends the stream, not the
+            # lease. Same shape as the timeout's not-streaming term, and for the
+            # same reason: the state is unreachable only by another
+            # repository's call order.
+            head = re.sub(r"\s+", "", remove_body[:drop_at])
+            if "!peer->prepare_lease_reserved" not in head:
+                failures.append(
+                    "the remove-time release does not preserve a lease-owned reservation"
+                )
+
+    # The lease timeout must release inside its can-arm branch: hoisted above
+    # it, an expiry that ends nothing would still wipe the reservation.
+    timeout_body = function(code, "max9296_prepare_lease_timeout")
+    if timeout_body:
+        guard_at = timeout_body.find("max9296_prepare_lease_can_arm_locked")
+        drop_at = timeout_body.find("max9296_drop_fsync_contract_locked")
+        if guard_at < 0:
+            failures.append("the lease timeout no longer checks whether it can arm")
+        elif not 0 <= guard_at < drop_at:
+            failures.append("the lease-timeout release runs outside the can-arm guard")
+        else:
+            brace = timeout_body.find("{", guard_at)
+            depth = 0
+            for char in timeout_body[brace + 1 : drop_at] if brace >= 0 else "}":
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth < 0:
+                        failures.append(
+                            "the lease-timeout release runs outside the can-arm guard"
+                        )
+                        break
+
+    # Every release of a reservation must name which one it owns. Enumerated
+    # rather than spot-checked: a new unguarded call site is the defect, and a
+    # list of approved guards fails closed on one. The helper's own call is the
+    # exception -- it is the guard, and it is the stream side's.
+    # By position, not by text: the helper body contains the same call string,
+    # so an `in helper_body` test would skip every other call site that spells
+    # it identically and leave this check inspecting almost nothing.
+    helper_at = code.find("static void max9296_drop_fsync_contract_if_idle_locked")
+    helper_end = code.find("\nstatic ", helper_at + 8) if helper_at >= 0 else -1
+    if helper_at < 0:
+        failures.append("the idle-release helper is no longer locatable")
+    if helper_end < 0:
+        helper_end = len(code)
+    # The expiry site adds a local not-streaming term, so the lease guard may
+    # carry extra conjuncts; what it may not do is drop the ownership test.
+    lease_guard = re.compile(r"if\(sensor->prepare_lease_reserved(?:&&[^()]*)?\)\{?$")
+    # was_streaming names a stop this call performed, so it only answers for a
+    # release inside the two functions that perform one. Adjacent text is not
+    # enough: the same guard sitting before a release in some other function
+    # would otherwise vouch for an owner it knows nothing about.
+    stream_guard = re.compile(r"if\(was_streaming&&!\w+(?:&&[^()]*)?\)\{?$")
+    stream_spans = []
+    for name in ("max9296_s_stream", "max9296_remove"):
+        at = code.find(f"static int {name}(")
+        if at < 0:
+            failures.append(f"{name} is no longer locatable")
+            continue
+        end = code.find("\nstatic ", at + 8)
+        stream_spans.append((at, end if end > 0 else len(code)))
+    inspected = 0
+    for match in re.finditer(r"max9296_drop_fsync_contract_locked\s*\(\s*\w+\s*\)", code):
+        if helper_at <= match.start() < helper_end:
+            continue
+        inspected += 1
+        prefix = re.sub(r"\s+", "", code[: match.start()])
+        stops_here = any(at <= match.start() < end for at, end in stream_spans)
+        if not (
+            lease_guard.search(prefix)
+            or (stops_here and stream_guard.search(prefix))
+        ):
+            line = code[: match.start()].count("\n") + 1
+            failures.append(
+                f"a FSYNC release at max9296.c:{line} names no reservation it owns"
+            )
+    # Ownership has to be derived from the bind, not asserted. A bind that just
+    # sets the flag true would satisfy every guard above while restoring exactly
+    # the defect they exist for.
+    fresh_binds = merged_binds = 0
+    for assign in re.finditer(
+        r"prepare_lease_reserved\s*(\|?)=([^;]*);", re.sub(r"\s+", " ", code)
+    ):
+        merges = assign.group(1) == "|"
+        rhs = assign.group(2).strip()
+        if rhs == "false":
+            continue
+        if "fsync_contract_epoch" not in rhs or "fsync_contract_fps" not in rhs:
+            failures.append(
+                "a prepare bind claims reservation ownership without comparing the bind"
+            )
+        elif merges:
+            merged_binds += 1
+        else:
+            fresh_binds += 1
+    # = and |= are not interchangeable. The bind that takes a fresh lease states
+    # what it found; the bind under a lease already held must merge, because an
+    # idempotent re-bind of the same rate changes nothing and would otherwise
+    # erase ownership the lease already had -- re-orphaning the reservation.
+    if fresh_binds < 1:
+        failures.append("no prepare bind records taking the reservation fresh")
+    if merged_binds < 1:
+        failures.append("the existing-lease bind overwrites ownership instead of merging it")
+
+    # The expiry site is the only release whose predicate does not already
+    # exclude a streaming instance, so it carries the term itself. Pin it: the
+    # reason it is safe to omit lives in another repository's call order.
+    if timeout_body:
+        head = re.sub(r"\s+", "", timeout_body[: timeout_body.find(
+            "max9296_drop_fsync_contract_locked")])
+        if "prepare_lease_reserved&&!sensor->streaming" not in head:
+            failures.append(
+                "the lease-timeout release does not exclude a streaming instance"
+            )
+
+    # reserved implies held. Every one of the five lease guards reads the flag
+    # only under that test, so a clear of the lease that leaves the flag set is
+    # the one place the invariant breaks -- and the next reader that is not
+    # nested under it would release a reservation this instance no longer owns.
+    squeezed_code = re.sub(r"\s+", "", code)
+    lease_clears = [
+        match.start()
+        for match in re.finditer(r"prepare_lease_held=false;", squeezed_code)
+    ]
+    if len(lease_clears) < 7:
+        failures.append(
+            f"the lease-clear enumeration only reached {len(lease_clears)} sites"
+        )
+    for at in lease_clears:
+        if "prepare_lease_reserved=false;" not in squeezed_code[at - 90 : at + 110]:
+            failures.append("a lease clear leaves reservation ownership set")
+
+    # A consumed lease hands the reservation to the stream side; leaving the
+    # flag set would let a later cancel or expiry release what it no longer owns.
+    power_body = function(code, "max9296_s_power")
+    if not power_body:
+        failures.append("max9296_s_power is no longer locatable")
+    elif "prepare_lease_reserved = false" not in power_body:
+        failures.append("a consumed lease keeps its reservation ownership")
+
+    # A matcher that stops matching would pass this check in silence.
+    if inspected < 7:
+        failures.append(
+            f"the FSYNC release enumeration only reached {inspected} call sites"
+        )
 
     # Every release between the bind and the stream commit must go through the
     # guarded helper. `rfind("drop_fsync_contract")` above matches both names, so

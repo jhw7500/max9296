@@ -61,6 +61,11 @@ struct max9296_dev {
   int lock, prepare_request_lock, prepare_lease_timeout, power_count;
   int prepare_state, prepare_errno;
   bool dying, prepare_releasing, streaming, prepare_lease_held, hardware_valid;
+  /* The prepare bind now records whether it created the FSYNC reservation or
+   * found one already bound (#88), so the extracted function reads these. */
+  bool prepare_lease_reserved;
+  u64 fsync_contract_epoch;
+  u32 fsync_contract_fps;
   u64 prepare_generation, prepare_lease_generation;
   u64 initialized_epoch, stream_commit_epoch, cold_init_epoch;
   unsigned enable;
