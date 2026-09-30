@@ -29,7 +29,7 @@ mtime `2026-09-18T00:08:45`) — 같은 디렉터리에 같은 크기의 변형�
 ## 측정 전 상태 전이
 
 기준선은 스트리밍 중이고 `max9296_prepare_request()` 는 `sensor->streaming` 이면
-`-EBUSY` 로 거부한다(`max9296.c:5485`). 그래서 Phase 1 전에 `cam-operate.service` 를
+`-EBUSY` 로 거부한다(`max9296_prepare_request()` 안의 `if (sensor->streaming)` 가드). 그래서 Phase 1 전에 `cam-operate.service` 를
 정지하고 `imx8-media-dev`·`max9296` 를 내렸으며, 같은 기회에 드라이버를 `c25f7a68`
 빌드에서 `f6230c5` 빌드로 교체했다(양쪽 사본을 `*.bak-c25f7a68` 로 백업, `depmod -a`,
 설치 후 두 경로의 sha256 이 `4a002c3ecfff…` 로 일치). 다시 올린 뒤 srcversion 은
@@ -37,13 +37,13 @@ mtime `2026-09-18T00:08:45`) — 같은 디렉터리에 같은 크기의 변형�
 
 ### epoch 회계
 
-`max9296_hw_epoch` 는 모듈 적재 시 정적 초기값 1 로 시작한다(`max9296.c:1885`).
+`max9296_hw_epoch` 는 모듈 적재 시 정적 초기값 1 로 시작한다(`static u64 max9296_hw_epoch = 1;`).
 측정 구간의 이력은 `1`(적재) → `2`(Phase 1, first-on) → `3`(취소, last-off) →
 `4`(Phase 2, first-on) 이다.
 
 **Phase 1 과 Phase 2 사이에 물리적 전원 사이클이 정확히 한 번 일어났고, 그 한 사이클이
 epoch 을 두 번 올린다.** `max9296_hw_epoch++` 는 두 분기가 공유하는 단일 `if (run)`
-블록 안에 있어(`max9296.c:2317-2321`) 전력 카운트가 0 을 **어느 방향으로 교차해도**
+블록 안에 있어(`max9296_set_power()` 의 `if (run) {` 블록) 전력 카운트가 0 을 **어느 방향으로 교차해도**
 오르기 때문이다. 측정 구간 전체의 상승은 Phase 1 의 `1 → 2` 를 포함해 **세 번**이다.
 정지·교체는 Phase 1 이전에 끝났으므로 두 리드백 사이에 끼어들지 않는다.
 
@@ -159,12 +159,12 @@ unbind 뒤에는 역직렬화기와 AP1302 가 모두 살아 있고 심은 값�
 
 | 단계 | 근거 |
 |---|---|
-| probe 가 pwdn 라인을 HIGH 로 구동하며 요청 | `max9296.c:7487` — `devm_gpiod_get_optional(dev, "powerdown", GPIOD_OUT_HIGH)` |
-| **논리 1 = 전원 off** | `max9296.c:2010` — `gpiod_set_value_cansleep(pwdn_gpio, enable ? 0 : 1)` |
+| probe 가 pwdn 라인을 HIGH 로 구동하며 요청 | `max9296_probe()` — `devm_gpiod_get_optional(dev, "powerdown", GPIOD_OUT_HIGH)` |
+| **논리 1 = 전원 off** | `max9296_power()` — `gpiod_set_value_cansleep(sensor->pwdn_gpio, enable ? 0 : 1)` |
 | 전원을 되돌리는 호출은 한 곳뿐 | `max9296_reset()` 안의 `max9296_power(sensor, true)`("camera power cycle") |
-| 그 함수는 `max9296_set_power_on()` 에서만 호출 | `max9296.c:2095` |
+| 그 함수는 `max9296_set_power_on()` 에서만 호출 | `max9296_set_power_on()` 의 `ret = max9296_reset(sensor);` |
 | resetless 경로는 `run=false` 로 그것을 건너뛴다 | 측정: `set_power (on users:N skip)` |
-| 이 보드에 pwdn GPIO 가 실제로 있다 | `docs/imx8mp-evk.dts:576`, `:662` — `powerdown-gpios … GPIO_ACTIVE_LOW` |
+| 이 보드에 pwdn GPIO 가 실제로 있다 | `docs/imx8mp-evk.dts` 의 두 max9296 노드 — `powerdown-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>` / `<&gpio1 8 GPIO_ACTIVE_LOW>` |
 
 **즉 `bind` 가 역직렬화기를 전원 차단하고, resetless 경로는 그것을 되살리는 유일한 호출을
 건너뛴다.** 위 도달성 표와 정확히 맞는다 — unbind 뒤에는 살아 있고 bind 직후 둘이 함께
@@ -172,9 +172,9 @@ unbind 뒤에는 역직렬화기와 AP1302 가 모두 살아 있고 심은 값�
 단일채널 테이블이 같은 방식으로 실패하는 이유도 이것으로 설명된다.
 
 재매핑 가설이 틀린 직접 근거도 남긴다: 실패에 `0x48` 이 포함되고, 단일채널 테이블은
-`0x40` 만 쓴다(`max9296_ser_addr()` 위 주석, `max9296.c:1092`). `reset` GPIO 가설 역시
+`0x40` 만 쓴다(`max9296_ser_addr()` 위 주석). `reset` GPIO 가설 역시
 코드가 반증한다 — `max9296_acquire_reset_gpio()` 는 `max9296_power_users > 0` 이면
-`GPIOD_ASIS` 로 요청하고(`max9296.c:1947`) 이미 보유한 descriptor 는 건드리지 않는다.
+`GPIOD_ASIS` 로 요청하고(`flags = max9296_power_users > 0 ? GPIOD_ASIS : GPIOD_OUT_HIGH;`) 이미 보유한 descriptor 는 건드리지 않는다.
 원인은 `reset` 이 아니라 같은 probe 함수의 **바로 위 줄**인 `powerdown` 이었다.
 
 ### 되돌리기 쓰기 질문에 대한 답
@@ -204,6 +204,12 @@ DT 에 없으면 `pwdn_gpio` 가 NULL 이고 설정이 무동작이다. 그런 �
   를 찍고 `rc=0` 을 반환하지만 서비스가 내려간 상태에서는 복구하지 않았다 — exit code 를
   복구의 증거로 쓰면 안 된다. 복구 후 매번 AP1302 4개 응답·프레임 흐름·원래 튜플을
   확인했다.
+
+## 인용 방식
+
+코드 인용에 **고정 줄번호를 쓰지 않는다.** 이 문서를 만든 PR 안에서 `max9296.c` 를
+편집했더니 앞서 적어 둔 줄번호 둘이 관계없는 코드를 가리키게 되었고(리뷰가 잡았다),
+그것을 잡아 줄 테스트는 없다. 대신 함수명과 인용문을 적어 `grep` 으로 찾을 수 있게 한다.
 
 ## 원시 기록
 
