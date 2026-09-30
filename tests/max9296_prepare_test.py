@@ -1958,7 +1958,7 @@ def check_source(source: str, failures: list[str]) -> None:
     remove_body = function(code, "max9296_remove")
     if remove_body and "max9296_drop_fsync_contract_locked" in remove_body:
         guard = re.search(
-            r"if\s*\(\s*was_streaming\s*&&\s*!\s*(\w+)\s*\)\s*"
+            r"if\s*\(\s*was_streaming\s*&&\s*!\s*(\w+)\s*(?:&&[^()]*)?\)\s*"
             r"max9296_drop_fsync_contract_locked",
             re.sub(r"\s+", " ", remove_body),
         )
@@ -1985,6 +1985,16 @@ def check_source(source: str, failures: list[str]) -> None:
             if remove_body.find("mutex_unlock(&peer->lock)", drop_at) < 0:
                 failures.append(
                     "the remove-time release runs after peer->lock is dropped"
+                )
+            # A client that streams without consuming its prepare lease keeps
+            # prepare_lease_reserved set, and this stop ends the stream, not the
+            # lease. Same shape as the timeout's not-streaming term, and for the
+            # same reason: the state is unreachable only by another
+            # repository's call order.
+            head = re.sub(r"\s+", "", remove_body[:drop_at])
+            if "!peer->prepare_lease_reserved" not in head:
+                failures.append(
+                    "the remove-time release does not preserve a lease-owned reservation"
                 )
 
     # The lease timeout must release inside its can-arm branch: hoisted above
@@ -2031,7 +2041,7 @@ def check_source(source: str, failures: list[str]) -> None:
     # release inside the two functions that perform one. Adjacent text is not
     # enough: the same guard sitting before a release in some other function
     # would otherwise vouch for an owner it knows nothing about.
-    stream_guard = re.compile(r"if\(was_streaming&&!\w+\)\{?$")
+    stream_guard = re.compile(r"if\(was_streaming&&!\w+(?:&&[^()]*)?\)\{?$")
     stream_spans = []
     for name in ("max9296_s_stream", "max9296_remove"):
         at = code.find(f"static int {name}(")

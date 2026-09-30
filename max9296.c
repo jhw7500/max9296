@@ -7873,10 +7873,23 @@ static int max9296_remove(struct i2c_client *client) {
       mutex_unlock(&max9296_power_lock);
       /* Return the reservation this stop ended, on the rule STREAMOFF already
        * uses: only a stop that reached the hardware releases, because a failed
-       * disable may still be driving FSYNC.  The placement is forced -- drop
-       * takes the board power lock itself, so it cannot run above this unlock,
-       * and it asserts peer->lock, so it cannot run below the next one. */
-      if (was_streaming && !disable_ret)
+       * disable may still be driving FSYNC.
+       *
+       * And only a reservation the stream owns.  A client that reaches
+       * s_stream(1) without first consuming its prepare lease through
+       * s_power(1) streams on the reservation the lease created, and
+       * prepare_lease_reserved is still set; this stop ends the stream but not
+       * the lease, which stays READY and expects its cadence to survive.  On
+       * this BSP that state does not arise -- mxc_isi_cap_streamon() consumes
+       * the lease in mxc_isi_config_parm() before mxc_isi_pipeline_enable()
+       * reaches s_stream(1) -- but that lives in another repository's call
+       * order, so gate locally, exactly as the lease timeout does.  The lease
+       * paths return it when the lease itself ends.
+       *
+       * The placement is forced -- drop takes the board power lock itself, so
+       * it cannot run above this unlock, and it asserts peer->lock, so it
+       * cannot run below the next one. */
+      if (was_streaming && !disable_ret && !peer->prepare_lease_reserved)
         max9296_drop_fsync_contract_locked(peer);
       mutex_unlock(&peer->lock);
       printk(KERN_CRIT
