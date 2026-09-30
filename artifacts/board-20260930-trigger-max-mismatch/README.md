@@ -123,10 +123,16 @@ state=IDLE generation=0 epoch=1 mode=none table=none width=0 height=0 fps=0 code
 
 `$KDIR` = `/lib/modules/5.10.35-lts-5.10.y+g2fce14defc04/kernel/drivers/media/i2c`.
 
-**epoch 번호는 모듈 적재에서 1 로 다시 시작한다.** 이후 측정의 epoch 이력은
-`1`(적재) → `2`(Phase 1 전원 on) → `3`(취소, 전원 off) → `4`(Phase 2 전원 on) 이고,
-**측정 구간 안의 0 교차는 Phase 1 과 Phase 2 사이 한 번뿐이다** — 그 앞의 정지·교체는
-Phase 1 이전에 끝났다.
+**epoch 번호는 모듈 적재에서 1 로 다시 시작한다**(`max9296_hw_epoch` 의 정적 초기값,
+`max9296.c:1885`). 이후 측정의 epoch 이력은 `1`(적재) → `2`(Phase 1, first-on) →
+`3`(취소, last-off) → `4`(Phase 2, first-on) 이다.
+
+**Phase 1 과 Phase 2 사이에 물리적 전원 사이클이 정확히 한 번 일어났고, 그 한 사이클이
+epoch 을 두 번 올린다.** `max9296_hw_epoch++` 는 두 분기가 공유하는 단일 `if (run)`
+블록 안에 있어(`max9296.c:2317-2321`) 전력 카운트가 0 을 **어느 방향으로 교차해도**
+오르기 때문이다 — 내려갈 때 `2 → 3`, 올라갈 때 `3 → 4`. 측정 구간 전체의 상승은
+Phase 1 의 `1 → 2` 를 포함해 **세 번**이다. 정지·교체는 Phase 1 이전에 끝났으므로
+두 리드백 사이에 끼어들지 않는다.
 
 ### Phase 1 — 술어 참
 
