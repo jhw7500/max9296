@@ -40,11 +40,11 @@ at least 1 and must not exceed the selected tuple's ordinary limit:
 
 | width x height | enable | table | ordinary max FPS | exposure-write max FPS |
 | --- | --- | --- | ---: | ---: |
-| 2560x720 | 3 | dual-wide (1280x720 per channel) | 30 | 30 |
+| 2560x720 | 3 | dual-wide (1280x720 per channel) | 60 | 30 |
 | 3840x1080 | 3 | dual-wide (1920x1080 per channel) | 30 | 30 |
 | 1280x360 | 3 | dual-wide (640x360 per channel) | 120 | 30 |
-| 1280x720 | 1 | single left | 30 | 30 |
-| 1280x720 | 2 | single right | 30 | 30 |
+| 1280x720 | 1 | single left | 60 | 30 |
+| 1280x720 | 2 | single right | 60 | 30 |
 | 1920x1080 | 1 | single left | 30 | 30 |
 | 1920x1080 | 2 | single right | 30 | 30 |
 | 640x360 | 1 | single left | 120 | 30 |
@@ -53,6 +53,19 @@ at least 1 and must not exceed the selected tuple's ordinary limit:
 The media-bus format is always the driver's UYVY format and is not an input.
 Extra fields, signed values, unsupported dimensions/masks, generation zero,
 and out-of-range FPS are rejected.
+
+`ordinary max FPS` is the rate the driver accepts, not a rate it delivers.
+Commit `eb3c54a` raised the 720p value to 60 in 2.12, citing a measurement this
+repository records: `docs/fps-limit-analysis.md` logs 54.0-55.5 FPS for a 60 FPS
+request on a single 1280x720 channel. That same file states the delivered rate
+under the raised ceiling was not measured, and draws the same distinction for
+360p, whose 120 ceiling has a recorded 113-115. This ABI cannot close that gap:
+the `fps` in the status line below is the requested value, and
+`V4L2_CID_PIXEL_RATE` is derived from that same value, so neither can disagree
+with what was asked for. Delivered rate is measured out of band --
+`docs/fps-limit-analysis.md` section 8.1 uses `cam_fps_stack.sh` and
+`cam_fps_watch.sh`. This table was written before the 2.12 change and said 30
+until it was corrected.
 
 The 640x360 default `KEEP` policy changes each AP1302 preview/CSI output to
 640x360 but does not claim that AR0234 sensor readout also became 640x360.
@@ -127,10 +140,16 @@ cat /sys/bus/i2c/devices/2-0048/prepare
 Status is one newline-terminated key/value line:
 
 ```text
-state=READY generation=123 epoch=7 mode=dual-wide table=dual width=2560 height=720 fps=30 code=0x2006 enable=3 errno=0 worker_errno=0 lease=1 match=1
+state=READY generation=123 epoch=7 mode=dual-wide table=dual width=2560 height=720 fps=30 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=1 match=1
 ```
 
-Treat field order and names as the v1 machine-readable contract. `lease=1`
+Treat field order and names as the v1 machine-readable contract. That promise
+has been broken twice inside v1, both times by insertion rather than append:
+`02c014a` put `worker_errno` between `errno` and `lease`, and `1108e57` put
+`crop_enable` between `enable` and `errno`, so every field after `enable` has
+moved twice. This example did not list `crop_enable` until that was corrected.
+Until that record improves, parse by key and tolerate a key this example does
+not show rather than reading by position. `lease=1`
 means the driver still owns the temporary power reference. `match=1` means two
 things hold in the current board-power epoch: the current runtime tuple equals
 the requested tuple including `fps`, and the initialized hardware fingerprint

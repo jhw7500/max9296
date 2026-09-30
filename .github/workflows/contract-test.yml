@@ -9,6 +9,7 @@ on:
       - 'Makefile'
       - 'tests/**'
       - 'tools/**'
+      - 'docs/parallel-prepare-v1.md'
       - '.github/workflows/contract-test.yml'
   pull_request:
     paths:
@@ -17,6 +18,7 @@ on:
       - 'Makefile'
       - 'tests/**'
       - 'tools/**'
+      - 'docs/parallel-prepare-v1.md'
       - '.github/workflows/contract-test.yml'
   workflow_dispatch:
 

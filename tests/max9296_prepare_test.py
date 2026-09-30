@@ -17,6 +17,77 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "max9296.c"
 DTS = ROOT / "docs" / "imx8mp-evk.dts"
+PREPARE_DOC = ROOT / "docs" / "parallel-prepare-v1.md"
+
+# The v1 status line, held explicitly. Comparing the driver against the document
+# catches one of them drifting, but both are artifacts a single commit can change
+# together, and agreement alone would then permit the positional break this
+# pins. A deliberate v1 extension edits this tuple too -- which is the review it
+# deserves, since the set has already grown twice without one (02c014a added
+# worker_errno, 1108e57 added crop_enable, both by insertion).
+V1_STATUS_KEYS = (
+    "state",
+    "generation",
+    "epoch",
+    "mode",
+    "table",
+    "width",
+    "height",
+    "fps",
+    "code",
+    "enable",
+    "crop_enable",
+    "errno",
+    "worker_errno",
+    "lease",
+    "match",
+)
+
+
+def _mode_ceilings() -> dict[tuple[int, int], int]:
+    """The per-mode fps ceiling, read from the header that defines it.
+
+    Hardcoding it here is how this model came to reject 720p above 30 FPS long
+    after the driver raised that ceiling to 60: the doc and the code moved and
+    the executable model did not. Read max9296_mode_max_fps() instead, and stop
+    loudly if it no longer has the shape this reads.
+    """
+    header = (ROOT / "max9296_360p_policy.h").read_text(encoding="utf-8")
+    body = re.search(r"max9296_mode_max_fps\([^)]*\)\s*\{(.*?)\n\}", header, re.S)
+    if not body:
+        raise ValueError("max9296_mode_max_fps is no longer locatable")
+    macros = {
+        name: int(value)
+        for name, value in re.findall(
+            r"^#define (MAX9296_\w+)\s+(\d+)U?$", header, re.M
+        )
+    }
+
+    def resolve(token: str) -> int:
+        if token in macros:
+            return macros[token]
+        bare = token[:-1] if token.endswith("U") else token
+        if bare.isdigit():
+            return int(bare)
+        raise ValueError(f"cannot resolve the fps ceiling {token!r}")
+
+    ceilings: dict[tuple[int, int], int] = {}
+    for height, widths, ceiling in re.findall(
+        r"if \(height == (\d+)U && \(width == (\d+U(?: \|\| width == \d+U)*)\)\)\s*"
+        r"return (\w+);",
+        body.group(1),
+    ):
+        for width in re.findall(r"(\d+)U", widths):
+            ceilings[(int(width), int(height))] = resolve(ceiling)
+    if len(ceilings) != 6:
+        raise ValueError(
+            f"expected six geometry/ceiling pairs in max9296_mode_max_fps, read "
+            f"{len(ceilings)}"
+        )
+    return ceilings
+
+
+MODE_CEILINGS = _mode_ceilings()
 
 
 def parse_prepare_command(text: str) -> tuple[int, ...]:
@@ -43,7 +114,7 @@ def parse_prepare_command(text: str) -> tuple[int, ...]:
             raise ValueError("single mask")
     else:
         raise ValueError("tuple")
-    if fps > (120 if height == 360 else 30):
+    if fps > MODE_CEILINGS.get((width, height), 0):
         raise ValueError("mode fps")
     return (1, generation, width, height, fps, enable)
 
@@ -506,6 +577,11 @@ def check_model(failures: list[str]) -> None:
         "1 7 1280 360 120 3",
         "1 8 640 360 120 1",
         "1 9 640 360 120 2",
+        # 720p above 30 is the range the ABI table used to deny and the driver
+        # has allowed since 2.12; the boundary is MAX9296_HD_MAX_FPS.
+        "1 10 1280 720 31 1",
+        "1 11 1280 720 60 1",
+        "1 12 2560 720 60 3",
         "1 18446744073709551615 2560 720 30 3",
     )
     for command in valid_commands:
@@ -530,7 +606,8 @@ def check_model(failures: list[str]) -> None:
         "1 1 2560 720 0 3",
         "1 1 2560 720 121 3",
         "1 1 3840 1080 31 3",
-        "1 1 1280 720 31 1",
+        "1 1 1280 720 61 1",
+        "1 1 2560 720 61 3",
         "1 1 1920 1080 120 2",
         "1 1 2560 720 30 1",
         "1 1 1280 720 30 3",
@@ -2515,13 +2592,47 @@ def check_source(source: str, failures: list[str]) -> None:
     ):
         failures.append("DTS shared-reset ownership is no longer max9296_0-only")
 
-    status_fields = (
-        "state=%s generation=%llu epoch=%llu",
-        "mode=%s table=%s width=%u height=%u fps=%u code=0x%x enable=%u ",
-        "errno=%d worker_errno=%d lease=%u match=%u\\n",
-    )
-    if any(field not in source for field in status_fields):
+    # The document calls this line the v1 machine-readable contract, so a
+    # consumer may parse it by position. Take both sides from their real sources
+    # and compare the whole key order. The check this replaces looked for three
+    # fragments and split exactly where a field was missing, so it accepted a
+    # documented line the driver has never emitted: crop_enable sits between
+    # enable and errno in the driver and was absent from the example, which puts
+    # a positional parser one field off from errno onward.
+    status_format = re.search(r'"(state=%s generation=[^"]*?)\\n"', source)
+    if not status_format:
         failures.append("prepare read ABI has no stable key=value status line")
+    else:
+        driver_keys = [
+            token.split("=", 1)[0] for token in status_format.group(1).split()
+        ]
+        documented = [
+            line
+            for line in PREPARE_DOC.read_text(encoding="utf-8").splitlines()
+            if line.startswith("state=READY ")
+        ]
+        if len(documented) != 1:
+            failures.append(
+                "the ABI document no longer shows exactly one status-line example"
+            )
+        else:
+            doc_keys = [token.split("=", 1)[0] for token in documented[0].split()]
+            if doc_keys != driver_keys:
+                failures.append(
+                    "the documented status line and the driver disagree on the "
+                    "field order the document declares to be the v1 contract"
+                )
+            # Both sides against a fixed sequence as well, so a commit that
+            # changes the driver and the example together cannot slip a
+            # positional break past their agreement.
+            if driver_keys != list(V1_STATUS_KEYS):
+                failures.append(
+                    "the driver's status line no longer emits the v1 key sequence"
+                )
+            if doc_keys != list(V1_STATUS_KEYS):
+                failures.append(
+                    "the documented status line no longer shows the v1 key sequence"
+                )
 
 
 def main() -> int:
