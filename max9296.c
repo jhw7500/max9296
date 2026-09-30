@@ -5008,21 +5008,28 @@ static int max9296_program_preview_context_channel(
    * Scoping the claim to the transition is enough here, but not because every
    * reload follows a reset -- it does not.  A rebind while the peer still holds
    * the global power reference takes a resetless path: max9296_set_power() logs
-   * "(on users:2 skip)" and never calls max9296_set_power_on().  Measured on the
-   * board 2026-09-30: that path then fails before any reload.  The mode table
-   * assumes power-on serializer addresses, so with the serializers still
-   * remapped every write to 0x40, 0x60 and 0x48 errors, the link reads back
-   * "disconnect bitmask=0xc", the request returns -ENXIO, and max9296_loadfw()
-   * is never reached.
+   * "(on users:N skip)" and never calls max9296_set_power_on().  Measured on the
+   * board 2026-09-30 in three configurations -- a dual 2560x720 rebind, a
+   * single-channel rebind inside a dual-initialized epoch, and a single-channel
+   * rebind in an epoch whose first tuple was single-channel -- that path failed
+   * before any reload every time: the mode-table writes errored, the link read
+   * back a "disconnect bitmask", the request returned -ENXIO, and
+   * max9296_loadfw() was never reached.  No resetless reload was observed to
+   * complete, so a stale value cannot survive one and then be used.
    *
-   * That closes the gap without a revert write, by reasoning from the same
-   * mechanism: a stale value on an instance requires that instance to have been
-   * programmed in this epoch, because a power-on crossing always resets, so an
-   * epoch entered with the rail up starts from the defaults.  Having been
-   * programmed is exactly the initialized state whose remapped serializers make
-   * the resetless retry fail above.  Inside one binding the window crossing is
-   * already refused by the fingerprint path described earlier.  Only the first
-   * sentence of this paragraph is measured; the rest is read off the code.
+   * What makes those writes fail is NOT established, and it is not the
+   * serializer remap: the failures include writes to this deserializer's own
+   * 0x48, and the single-channel tables never remap a serializer at all (see the
+   * comment above max9296_ser_addr()).  The measurement narrows it to bind
+   * rather than unbind -- after unbind 0x48 still answered 0xea and the AP1302
+   * still held a planted value, and both stopped answering only once bind ran --
+   * but why a fresh probe leaves them unreachable is open.  The obvious suspect
+   * is ruled out by the code: max9296_acquire_reset_gpio() requests the line
+   * GPIOD_ASIS while max9296_power_users is non-zero, and reuses an already held
+   * descriptor without touching it at all.
+   *
+   * Inside one binding the window crossing is already refused by the fingerprint
+   * path described earlier.
    *
    * The driver still has no readback of either register; that measurement came
    * from the host i2c adapters.
