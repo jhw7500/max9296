@@ -20,6 +20,52 @@ DTS = ROOT / "docs" / "imx8mp-evk.dts"
 PREPARE_DOC = ROOT / "docs" / "parallel-prepare-v1.md"
 
 
+def _mode_ceilings() -> dict[tuple[int, int], int]:
+    """The per-mode fps ceiling, read from the header that defines it.
+
+    Hardcoding it here is how this model came to reject 720p above 30 FPS long
+    after the driver raised that ceiling to 60: the doc and the code moved and
+    the executable model did not. Read max9296_mode_max_fps() instead, and stop
+    loudly if it no longer has the shape this reads.
+    """
+    header = (ROOT / "max9296_360p_policy.h").read_text(encoding="utf-8")
+    body = re.search(r"max9296_mode_max_fps\([^)]*\)\s*\{(.*?)\n\}", header, re.S)
+    if not body:
+        raise ValueError("max9296_mode_max_fps is no longer locatable")
+    macros = {
+        name: int(value)
+        for name, value in re.findall(
+            r"^#define (MAX9296_\w+)\s+(\d+)U?$", header, re.M
+        )
+    }
+
+    def resolve(token: str) -> int:
+        if token in macros:
+            return macros[token]
+        bare = token[:-1] if token.endswith("U") else token
+        if bare.isdigit():
+            return int(bare)
+        raise ValueError(f"cannot resolve the fps ceiling {token!r}")
+
+    ceilings: dict[tuple[int, int], int] = {}
+    for height, widths, ceiling in re.findall(
+        r"if \(height == (\d+)U && \(width == (\d+U(?: \|\| width == \d+U)*)\)\)\s*"
+        r"return (\w+);",
+        body.group(1),
+    ):
+        for width in re.findall(r"(\d+)U", widths):
+            ceilings[(int(width), int(height))] = resolve(ceiling)
+    if len(ceilings) != 6:
+        raise ValueError(
+            f"expected six geometry/ceiling pairs in max9296_mode_max_fps, read "
+            f"{len(ceilings)}"
+        )
+    return ceilings
+
+
+MODE_CEILINGS = _mode_ceilings()
+
+
 def parse_prepare_command(text: str) -> tuple[int, ...]:
     """Executable model of the strict, whitespace-delimited v1 grammar."""
     stripped = text.strip()
@@ -44,7 +90,7 @@ def parse_prepare_command(text: str) -> tuple[int, ...]:
             raise ValueError("single mask")
     else:
         raise ValueError("tuple")
-    if fps > (120 if height == 360 else 30):
+    if fps > MODE_CEILINGS.get((width, height), 0):
         raise ValueError("mode fps")
     return (1, generation, width, height, fps, enable)
 
@@ -477,6 +523,11 @@ def check_model(failures: list[str]) -> None:
         "1 7 1280 360 120 3",
         "1 8 640 360 120 1",
         "1 9 640 360 120 2",
+        # 720p above 30 is the range the ABI table used to deny and the driver
+        # has allowed since 2.12; the boundary is MAX9296_HD_MAX_FPS.
+        "1 10 1280 720 31 1",
+        "1 11 1280 720 60 1",
+        "1 12 2560 720 60 3",
         "1 18446744073709551615 2560 720 30 3",
     )
     for command in valid_commands:
@@ -501,7 +552,8 @@ def check_model(failures: list[str]) -> None:
         "1 1 2560 720 0 3",
         "1 1 2560 720 121 3",
         "1 1 3840 1080 31 3",
-        "1 1 1280 720 31 1",
+        "1 1 1280 720 61 1",
+        "1 1 2560 720 61 3",
         "1 1 1920 1080 120 2",
         "1 1 2560 720 30 1",
         "1 1 1280 720 30 3",
