@@ -4994,12 +4994,60 @@ static int max9296_program_preview_context_channel(
    *
    * Across an epoch this function runs again after a firmware reload, and if
    * the predicate is false it writes neither register -- so the values are
-   * whatever the reload left behind.  Whether the reload restores
-   * TRIGGER_MAX_MISMATCH to its 20us default is NOT established:
-   * docs/fps-limit-analysis.md records 20us as the datasheet default and the
-   * driver write as taking effect, but no readback of 0x6112 exists in this
-   * repository.  Adding a revert write would be guessing at hardware this
-   * change cannot verify; #85 keeps the measurement open.
+   * whatever the reload left behind.  A board-power epoch transition leaves both
+   * at their defaults, so no revert write is needed.  Measured on the board
+   * 2026-09-30: a 640x360@120 epoch read back 0x6112=0x0000 and 0x2020=0x7800,
+   * and the next epoch, after the rail cycled and v4l-ap1302-ar0234.fw loaded
+   * again at 1280x720@30, read back 0x6112=0x0014 (the 20us default) and
+   * 0x2020=0x1e00 on all four AP1302s.
+   *
+   * The credit goes to the whole transition, not to the firmware load alone.
+   * An epoch transition cycles the shared rail -- the AP1302s stopped answering
+   * on i2c entirely while the count sat at zero -- so a power-on reset default
+   * and a value the firmware writes are indistinguishable in that measurement.
+   * Scoping the claim to the transition is enough here, but not because every
+   * reload follows a reset -- it does not.  A rebind while the peer still holds
+   * the global power reference takes a resetless path: max9296_set_power() logs
+   * "(on users:N skip)" and never calls max9296_set_power_on().  Measured on the
+   * board 2026-09-30 in three configurations -- a dual 2560x720 rebind, a
+   * single-channel rebind inside a dual-initialized epoch, and a single-channel
+   * rebind in an epoch whose first tuple was single-channel -- that path failed
+   * before any reload every time: the mode-table writes errored, the link read
+   * back a "disconnect bitmask", the request returned -ENXIO, and
+   * max9296_loadfw() was never reached.  No resetless reload was observed to
+   * complete, so a stale value cannot survive one and then be used.
+   *
+   * What makes those writes fail is the probe-time power-down, not the serializer
+   * remap.  probe requests the pin already driving it high --
+   * devm_gpiod_get_optional(dev, "powerdown", GPIOD_OUT_HIGH) -- and
+   * max9296_power() writes logical 1 for the powered-down state, so bind leaves
+   * this deserializer powered off.  The only call that powers it back on is
+   * max9296_power(sensor, true) inside max9296_reset(), reached only from
+   * max9296_set_power_on(), which is exactly what the resetless path skips.
+   * That matches the measurement: after unbind 0x48 still answered 0xea and the
+   * AP1302 still held a planted value, and both stopped answering only once bind
+   * ran.  It also explains why the failures include 0x48 itself, and why the
+   * single-channel tables -- which never remap a serializer at all, see the
+   * comment above max9296_ser_addr() -- fail the same way.
+   *
+   * The conclusion is therefore scoped to a board that declares
+   * powerdown-gpios, as this one does.  The pin is optional: with it absent
+   * pwdn_gpio is NULL, the set is a no-op, bind would not power the part down,
+   * and a resetless rebind could get further than anything measured here.
+   * Nothing in this change depends on that case, but a driver-side decision
+   * about the resetless rebind path would.
+   *
+   * Inside one binding the window crossing is already refused by the fingerprint
+   * path described earlier.
+   *
+   * The driver still has no readback of either register; that measurement came
+   * from the host i2c adapters.
+   * artifacts/board-20260930-trigger-max-mismatch/ summarises that measurement:
+   * the board and firmware it ran on, the tuple requested at each step, the
+   * readback command form, the controls that make those two readings
+   * distinguishable, and what the measurement does not cover.  It is a summary,
+   * not a command transcript -- this repository does not track the per-artifact
+   * raw/ directories.
    */
   if (max9296_preview_output_uses_high_fps(width, height, fps)) {
     PREVIEW_WRITE(AP1302_REG_PREVIEW_MAX_FPS,
