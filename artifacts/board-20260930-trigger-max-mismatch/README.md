@@ -151,26 +151,43 @@ PR #95 리뷰에서 Codex 가 제기한 경로다: peer 가 전역 전력 참조
 unbind 뒤에는 역직렬화기와 AP1302 가 모두 살아 있고 심은 값도 그대로다. **둘이 함께
 응답을 멈추는 시점은 `bind`** 다.
 
-### 원인은 미확정이며, 직렬화기 재매핑이 아니다
+### 원인 — probe 시점의 전원 차단 (PWDN)
 
-이 저장소의 이전 판(커밋 `358f78d` 까지)은 실패를 *"프로그램된 인스턴스는 직렬화기가
-재매핑돼 있어 모드 테이블이 갈 곳이 없다"* 로 설명했다. **그 설명은 틀렸다**:
+이 저장소의 이전 판(커밋 `077d8cb` 까지)은 실패를 *"프로그램된 인스턴스는 직렬화기가
+재매핑돼 있어 모드 테이블이 갈 곳이 없다"* 로 설명했고, 그 뒤에는 *"원인 미확정"* 으로
+남겼다. **둘 다 틀렸다.** PR #95 리뷰에서 Codex 가 코드로 규명했고 확인했다:
 
-- 실패 쓰기에 **역직렬화기 자신의 `0x48`** 이 포함된다 — 재매핑과 무관한 주소다.
-- **단일채널 테이블은 직렬화기를 아예 재매핑하지 않는다**(`max9296_ser_addr()` 위 주석,
-  `max9296.c:1092`) — `0x40` 만 쓰며 구성 2·3 의 로그가 그대로 `0x40` 만 보여준다.
+| 단계 | 근거 |
+|---|---|
+| probe 가 pwdn 라인을 HIGH 로 구동하며 요청 | `max9296.c:7487` — `devm_gpiod_get_optional(dev, "powerdown", GPIOD_OUT_HIGH)` |
+| **논리 1 = 전원 off** | `max9296.c:2010` — `gpiod_set_value_cansleep(pwdn_gpio, enable ? 0 : 1)` |
+| 전원을 되돌리는 호출은 한 곳뿐 | `max9296_reset()` 안의 `max9296_power(sensor, true)`("camera power cycle") |
+| 그 함수는 `max9296_set_power_on()` 에서만 호출 | `max9296.c:2095` |
+| resetless 경로는 `run=false` 로 그것을 건너뛴다 | 측정: `set_power (on users:N skip)` |
+| 이 보드에 pwdn GPIO 가 실제로 있다 | `docs/imx8mp-evk.dts:576`, `:662` — `powerdown-gpios … GPIO_ACTIVE_LOW` |
 
-probe 가 reset GPIO 를 assert 한다는 가설도 **코드가 반증한다**:
-`max9296_acquire_reset_gpio()` 는 `max9296_power_users > 0` 이면 `GPIOD_ASIS` 로 요청하고
-(`max9296.c:1947`), 이미 보유한 descriptor 가 있으면 `gpiod_get_optional` 자체를 건너뛴다.
+**즉 `bind` 가 역직렬화기를 전원 차단하고, resetless 경로는 그것을 되살리는 유일한 호출을
+건너뛴다.** 위 도달성 표와 정확히 맞는다 — unbind 뒤에는 살아 있고 bind 직후 둘이 함께
+죽는다. 실패 쓰기에 `0x48` 자신이 포함되는 이유도, **직렬화기를 아예 재매핑하지 않는**
+단일채널 테이블이 같은 방식으로 실패하는 이유도 이것으로 설명된다.
 
-**그래서 "bind 가 왜 `0x48` 을 접근 불가로 만드는가" 는 열린 문제다.** 추측을 적지 않는다.
+재매핑 가설이 틀린 직접 근거도 남긴다: 실패에 `0x48` 이 포함되고, 단일채널 테이블은
+`0x40` 만 쓴다(`max9296_ser_addr()` 위 주석, `max9296.c:1092`). `reset` GPIO 가설 역시
+코드가 반증한다 — `max9296_acquire_reset_gpio()` 는 `max9296_power_users > 0` 이면
+`GPIOD_ASIS` 로 요청하고(`max9296.c:1947`) 이미 보유한 descriptor 는 건드리지 않는다.
+원인은 `reset` 이 아니라 같은 probe 함수의 **바로 위 줄**인 `powerdown` 이었다.
 
 ### 되돌리기 쓰기 질문에 대한 답
 
-**필요하지 않다.** 근거는 위 세 측정이다 — resetless rebind 가 재로드를 완료하지 못한다.
-같은 바인딩 안의 창 교차는 fingerprint 경로가 `-ESTALE` 로 이미 거부한다(#85 / PR #90,
-`tests/max9296_360p_policy_test.c` 전수).
+**필요하지 않다** — 단, **`powerdown-gpios` 를 선언한 보드로 한정한다.** 근거는 위 세
+측정과 PWDN 메커니즘이다: resetless rebind 는 역직렬화기가 전원 차단된 상태로 진행되므로
+재로드를 완료하지 못한다. 같은 바인딩 안의 창 교차는 fingerprint 경로가 `-ESTALE` 로 이미
+거부한다(#85 / PR #90, `tests/max9296_360p_policy_test.c` 전수).
+
+**범위 조건이 중요하다.** pwdn 핀은 optional API(`devm_gpiod_get_optional`)로 얻으므로
+DT 에 없으면 `pwdn_gpio` 가 NULL 이고 설정이 무동작이다. 그런 보드에서는 bind 가 전원을
+끄지 않아 resetless rebind 가 여기서 측정한 것보다 더 진행될 수 있고, `max9296_loadfw()`
+에 도달할 수도 있다. 이 문서의 어떤 측정도 그 경우를 덮지 않는다.
 
 ### 이 후속 측정의 한계
 
@@ -178,8 +195,10 @@ probe 가 reset GPIO 를 assert 한다는 가설도 **코드가 반증한다**:
   `640x360@31..120` 은 FSYNC 예약이 그 rate 로 묶이므로, 같은 epoch 에서 술어가 거짓인
   튜플로 재초기화할 수 없다. 그래서 stale 값은 손으로 심었다 — 레지스터는 누가 썼는지
   기억하지 않으므로 전제로는 동등하지만, 드라이버가 쓴 경우를 그대로 재현한 것은 아니다.
-- 실패의 메커니즘이 미확정이므로, "resetless 경로는 항상 fail-closed" 를 일반 명제로
-  주장하지 않는다. 주장하는 것은 **측정한 세 구성에서 그랬다**는 것이다.
+- "resetless 경로는 항상 fail-closed" 를 일반 명제로 주장하지 않는다. 주장하는 것은
+  **측정한 세 구성에서 그랬고, 그 원인이 probe 시점 PWDN 으로 규명됐다**는 것이다.
+  `powerdown-gpios` 가 없는 보드는 위 「되돌리기 쓰기 질문에 대한 답」의 범위 조건대로
+  다를 수 있으며 재지 않았다.
 - 세 실험 모두 보드를 고장 상태로 만들었고 매번 `systemctl start cam-operate.service`
   로 복구했다. `cam_hard_reset.sh -s -S` 는 `DEPRECATED: forwards one recovery request`
   를 찍고 `rc=0` 을 반환하지만 서비스가 내려간 상태에서는 복구하지 않았다 — exit code 를

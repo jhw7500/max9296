@@ -5017,16 +5017,25 @@ static int max9296_program_preview_context_channel(
    * max9296_loadfw() was never reached.  No resetless reload was observed to
    * complete, so a stale value cannot survive one and then be used.
    *
-   * What makes those writes fail is NOT established, and it is not the
-   * serializer remap: the failures include writes to this deserializer's own
-   * 0x48, and the single-channel tables never remap a serializer at all (see the
-   * comment above max9296_ser_addr()).  The measurement narrows it to bind
-   * rather than unbind -- after unbind 0x48 still answered 0xea and the AP1302
-   * still held a planted value, and both stopped answering only once bind ran --
-   * but why a fresh probe leaves them unreachable is open.  The obvious suspect
-   * is ruled out by the code: max9296_acquire_reset_gpio() requests the line
-   * GPIOD_ASIS while max9296_power_users is non-zero, and reuses an already held
-   * descriptor without touching it at all.
+   * What makes those writes fail is the probe-time power-down, not the serializer
+   * remap.  probe requests the pin already driving it high --
+   * devm_gpiod_get_optional(dev, "powerdown", GPIOD_OUT_HIGH) -- and
+   * max9296_power() writes logical 1 for the powered-down state, so bind leaves
+   * this deserializer powered off.  The only call that powers it back on is
+   * max9296_power(sensor, true) inside max9296_reset(), reached only from
+   * max9296_set_power_on(), which is exactly what the resetless path skips.
+   * That matches the measurement: after unbind 0x48 still answered 0xea and the
+   * AP1302 still held a planted value, and both stopped answering only once bind
+   * ran.  It also explains why the failures include 0x48 itself, and why the
+   * single-channel tables -- which never remap a serializer at all, see the
+   * comment above max9296_ser_addr() -- fail the same way.
+   *
+   * The conclusion is therefore scoped to a board that declares
+   * powerdown-gpios, as this one does.  The pin is optional: with it absent
+   * pwdn_gpio is NULL, the set is a no-op, bind would not power the part down,
+   * and a resetless rebind could get further than anything measured here.
+   * Nothing in this change depends on that case, but a driver-side decision
+   * about the resetless rebind path would.
    *
    * Inside one binding the window crossing is already refused by the fingerprint
    * path described earlier.
