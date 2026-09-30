@@ -5005,10 +5005,24 @@ static int max9296_program_preview_context_channel(
    * An epoch transition cycles the shared rail -- the AP1302s stopped answering
    * on i2c entirely while the count sat at zero -- so a power-on reset default
    * and a value the firmware writes are indistinguishable in that measurement.
-   * Scoping the claim to the transition is enough here, because this driver has
-   * no reload without a reset: max9296_set_power_on() calls max9296_reset(), and
-   * cold initialization runs at most once per epoch and only with the hardware
-   * powered, so every reload follows a reset in the same epoch.
+   * Scoping the claim to the transition is enough here, but not because every
+   * reload follows a reset -- it does not.  A rebind while the peer still holds
+   * the global power reference takes a resetless path: max9296_set_power() logs
+   * "(on users:2 skip)" and never calls max9296_set_power_on().  Measured on the
+   * board 2026-09-30: that path then fails before any reload.  The mode table
+   * assumes power-on serializer addresses, so with the serializers still
+   * remapped every write to 0x40, 0x60 and 0x48 errors, the link reads back
+   * "disconnect bitmask=0xc", the request returns -ENXIO, and max9296_loadfw()
+   * is never reached.
+   *
+   * That closes the gap without a revert write, by reasoning from the same
+   * mechanism: a stale value on an instance requires that instance to have been
+   * programmed in this epoch, because a power-on crossing always resets, so an
+   * epoch entered with the rail up starts from the defaults.  Having been
+   * programmed is exactly the initialized state whose remapped serializers make
+   * the resetless retry fail above.  Inside one binding the window crossing is
+   * already refused by the fingerprint path described earlier.  Only the first
+   * sentence of this paragraph is measured; the rest is read off the code.
    *
    * The driver still has no readback of either register; that measurement came
    * from the host i2c adapters.
