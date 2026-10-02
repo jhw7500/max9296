@@ -47,8 +47,14 @@ struct max9296_hw_fingerprint {
   unsigned enable, fps;
 };
 struct i2c_client { int unused; };
+struct gpio_desc { int unused; };
 struct max9296_dev {
   struct i2c_client *i2c_client;
+  /* #96: probe asserts the power-down line, and only max9296_power(.., true)
+   * releases it.  The extracted function refuses when the line exists and was
+   * never released, so the harness needs both members. */
+  struct gpio_desc *pwdn_gpio;
+  bool pwdn_released;
   struct { unsigned ch_shift; int disconnect; } link_status;
   struct { int init, firmware, enable; } state;
   struct {
@@ -193,10 +199,13 @@ static void reset_bus(void) {
 }
 static struct max9296_dev fixture(unsigned enable) {
   static struct i2c_client client;
+  static struct gpio_desc pwdn;
   reset_bus();
   return (struct max9296_dev) {
     .i2c_client = &client, .enable = enable, .shared.probe_ready = true,
     .prepare_lease_held = true, .ctrl_cache.exposure = 7000,
+    /* Ordinary state: the board declares the line and a power-on released it. */
+    .pwdn_gpio = &pwdn, .pwdn_released = true,
   };
 }
 
@@ -280,6 +289,27 @@ int main(void) {
   CHECK(writes == 0 && fw_loads == 0);
   preflight_error = 0;
   CHECK(max9296_prepare_hardware_locked(&s, &fp) == 0);
+
+  /* #96: a part that probe powered down and nothing powered back up is refused
+   * before the first write, and the refusal is scoped to boards that have the
+   * line.  Reverting the gate turns the first two checks red; dropping the
+   * pwdn_gpio condition turns the third red. */
+  s = fixture(3);
+  s.pwdn_released = false;
+  max9296_hw_epoch++;
+  CHECK(max9296_prepare_hardware_locked(&s, &fp) == -ENODEV);
+  CHECK(writes == 0 && fw_loads == 0);
+
+  s = fixture(3);
+  max9296_hw_epoch++;
+  CHECK(max9296_prepare_hardware_locked(&s, &fp) == 0);
+
+  s = fixture(3);
+  s.pwdn_gpio = NULL;
+  s.pwdn_released = false;
+  max9296_hw_epoch++;
+  CHECK(max9296_prepare_hardware_locked(&s, &fp) == 0);
+
   printf("max9296 cold init epoch binding: %u checks, %u failures\n", checks, failures);
   return failures ? 1 : 0;
 }
