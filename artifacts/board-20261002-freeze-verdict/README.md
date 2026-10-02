@@ -62,6 +62,36 @@ change-only 로 상태를 남기는 것)이 실기에서 동작하는지, 그리
 `BOTH_STALLED` 다섯 중 넷이 위 네 동결이고, 남은 하나는 회차 8 의 스트림 시작 과도
 상태다(아래).
 
+### 판정 줄 전문 — 런 구간 (uptime 15111.7–16558.7)
+
+`raw/` 가 추적되지 않으므로 판정 증거는 이 표가 전부다. HINF 는 8 비트라 랩한다
+(예: `44→11` 은 +223).
+
+| uptime | 장치 | 판정 (이전) | seq | held | HINF |
+|---|---|---|---:|---:|---|
+| 15150.683575 | i2c2 | `ALIGNED` ← `NOT_APPLICABLE` | 13 | 0 | ch0 45→65 ch1 45→61 |
+| 15153.727283 | i2c2 | `BOTH_STALLED` ← `ALIGNED` | 16 | 0 | ch0 17→17 ch1 202→202 |
+| 15267.012970 | i2c1 | `ALIGNED` ← `NOT_APPLICABLE` | 14 | 0 | ch2 44→11 ch3 44→16 |
+| 15269.043446 | i2c1 | `BOTH_STALLED` ← `ALIGNED` | 16 | 0 | ch2 38→38 ch3 44→44 |
+| 15384.422230 | i2c2 | `ALIGNED` ← `NOT_APPLICABLE` | 13 | 0 | ch0 44→79 ch1 45→82 |
+| 15501.715788 | i2c2 | `ALIGNED` ← `NOT_APPLICABLE` | 13 | 0 | ch0 44→94 ch1 43→41 |
+| 15513.866387 | i2c2 | `DIVERGENT` ← `ALIGNED` | 25 | 0 | ch0 67→174 ch1 122→122 |
+| 15518.926994 | i2c2 | `BOTH_STALLED` ← `DIVERGENT` | 30 | 0 | ch0 249→249 ch1 122→122 |
+| 15617.994085 | i2c1 | `ALIGNED` ← `NOT_APPLICABLE` | 14 | 0 | ch2 45→26 ch3 45→22 |
+| 15735.313514 | i2c2 | `ALIGNED` ← `NOT_APPLICABLE` | 15 | 0 | ch0 44→57 ch1 44→59 |
+| 15852.571946 | i2c2 | `ALIGNED` ← `NOT_APPLICABLE` | 13 | 0 | ch0 44→66 ch1 44→66 |
+| 15968.800070 | i2c1 | `BOTH_STALLED` ← `NOT_APPLICABLE` | 13 | 0 | ch2 44→44 ch3 44→44 |
+| 15969.813126 | i2c1 | `ALIGNED` ← `BOTH_STALLED` | 14 | 0 | ch2 44→107 ch3 44→107 |
+| 15972.848524 | i2c1 | `BOTH_STALLED` ← `ALIGNED` | 17 | 0 | ch2 25→25 ch3 23→23 |
+| 16086.085446 | i2c2 | `ALIGNED` ← `NOT_APPLICABLE` | 15 | 0 | ch0 44→57 ch1 45→59 |
+| 16203.353875 | i2c2 | `ALIGNED` ← `NOT_APPLICABLE` | 14 | 0 | ch0 44→55 ch1 44→55 |
+| 16320.590053 | i2c1 | `ALIGNED` ← `NOT_APPLICABLE` | 13 | 0 | ch2 45→85 ch3 45→78 |
+| 16436.824906 | i2c2 | `ALIGNED` ← `NOT_APPLICABLE` | 13 | 0 | ch0 45→22 ch1 45→27 |
+
+런 구간 밖의 판정 줄 넷은 이 표에 없다 — 앞의 둘(uptime 14764.5, 15026.2)은 측정 전
+양성 대조이고, 뒤의 넷(16589.3–16591.4, `seq=9`–`11`)은 측정 종료 후 `cam-operate` 가
+되살아날 때의 시작 과도다. 뒤쪽 둘이 위 "시작 과도" 표의 3/3 중 둘이다.
+
 ### `BOTH_STALLED` 를 동결로 읽으려면 지속을 봐야 한다
 
 `BOTH_STALLED` 는 **스트림 시작 직후 1 샘플짜리 과도 상태로도 나온다.** 이 측정에서
@@ -202,8 +232,13 @@ HINF 는 채널별 ISP 출력이므로 두 양상은 "한쪽 ISP 만 멈췄나"�
 
 ## 원시 기록
 
-`artifacts/board-*/raw/` 는 추적하지 않는다. 재현에 필요한 것은 위 표에 있다 — 프로브
-이름·해시·환경변수, 셀 구성, 회차별 결과, 판정 줄의 판정·seq·uptime·HINF 쌍, 그리고
-묶는 근거 셋. 보드의 원본은 `/root/fpsmeas/` 의 `freeze_<stamp>.{log,csv}`,
-`freeze_<stamp>_summary.csv`, `dmesgw_<stamp>.log` 이고 판정 줄 전문은 이슈 #65 의
-측정 코멘트에 남겼다.
+`artifacts/board-*/raw/` 는 추적하지 않으므로, 판정 증거는 위 "판정 줄 전문" 표가
+전부다 — 런 구간 18 줄의 uptime·장치·판정·이전 판정·`seq`·`held`·HINF 쌍이 그 표에
+있다. 그 밖에 재현에 필요한 것은 환경 표(프로브 이름·해시·환경변수, 시험/운영 config),
+셀 구성, 회차별 결과 표, 묶는 근거 셋이다.
+
+**이 저장소가 담지 않는 것**은 회차별 원시 시계열이다 — `csi_d`/`isi_d`/`a_dhinf`/`a_sfps`
+열을 가진 프로브 CSV 와 `dmesg -w` 전문은 보드의 `/root/fpsmeas/` 에만 있다
+(`freeze_<stamp>.{log,csv}`, `freeze_<stamp>_summary.csv`, `dmesgw_<stamp>.log`). 위
+표들은 그 시계열에서 판정과 요약만 뽑은 것이고, 시계열 자체로 다시 확인하려면 보드
+원본이나 이슈 #65 의 측정 코멘트를 봐야 한다.
