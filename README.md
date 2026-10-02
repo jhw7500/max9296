@@ -313,6 +313,15 @@ readout 비교(`run_360p_readout_compare.sh`), health 익스포트
   동반 PLL·분주비가 맞지 않아 ISP 출력이 0이 된다
   ([`docs/fps-limit-analysis.md`](docs/fps-limit-analysis.md)).
 - SoC 정지 이력이 있는 수동 WB(`0x510a`) 쓰기는 구현하지 않았다.
+- **한쪽 인스턴스만 `unbind`/`bind` 하는 것은 지원하지 않는다.** probe가 그 인스턴스의
+  power-down 라인을 다시 assert하는데, 그것을 해제하는 호출은 `max9296_set_power()`의
+  `run == true` 분기 뒤에 있고 peer가 전역 전력 참조를 쥐고 있으면 그 분기를 타지 않는다.
+  이 BSP의 캡처 드라이버는 `s_power(1)` 참조를 반납하지 않으므로 그 상태가 평상 상태다.
+  결과는 역직렬화기가 꺼진 채 남는 것이고, prepare는 `-ENODEV`와 함께 원인·복구를 알리고
+  첫 I2C 쓰기 전에 멈춘다. **복구는 모듈 재적재 또는 `cam-operate.service` 재기동이다** —
+  `cam_hard_reset.sh`는 요청만 전달하므로 서비스가 내려간 상태에서는 복구하지 못한다.
+  거부는 `powerdown-gpios`를 선언한 보드에만 적용된다(핀이 없으면 이렇게 꺼지지 않는다).
+  측정과 한계는 이슈 #96.
 - **보드 증적은 `artifacts/` 아래에 있지만 전부는 아니다.** `.gitignore`가
   `artifacts/board-*/raw/`, `**/backup/`, `**/edgeconf-*.json`을 제외한다 — 원시 로그와
   백업에 배포 경로·자격증명이 섞일 수 있어서다. 검토된 요약과 증적만 커밋한다.

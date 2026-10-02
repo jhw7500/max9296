@@ -509,6 +509,15 @@ struct max9296_dev {
 
   struct gpio_desc *reset_gpio;
   struct gpio_desc *pwdn_gpio;
+  /* Whether this instance's power-down line has been de-asserted since probe.
+   * probe requests the line with GPIOD_OUT_HIGH and max9296_power() writes
+   * logical 1 for the powered-down state, so a fresh probe leaves this part
+   * powered off.  The only call that clears it is max9296_power(.., true), and
+   * that sits inside max9296_reset(), reached solely from
+   * max9296_set_power_on() -- which max9296_set_power() skips while a peer
+   * still holds the global reference.  Per instance because each has its own
+   * line, and written for both whenever one call drives both.  Issue #96. */
+  bool pwdn_released;
   struct gpio_desc *fsync_gpio;
   struct task_struct *thread_fsync;
   struct task_struct *thread_en;
@@ -2008,6 +2017,10 @@ static void max9296_power(struct max9296_dev *sensor, bool enable) {
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
            enable ? "high" : "low");
   gpiod_set_value_cansleep(sensor->pwdn_gpio, enable ? 0 : 1);
+  /* Updated beside each write, under the same condition: this call drives both
+   * lines, so recording only the local one would leave a peer that never calls
+   * it stuck at false and refuse its ordinary prepares. */
+  sensor->pwdn_released = enable;
 
   if (sensor->shared.sensor != NULL) {
     if (debug)
@@ -2015,6 +2028,7 @@ static void max9296_power(struct max9296_dev *sensor, bool enable) {
              sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__,
              enable ? "high" : "low");
     gpiod_set_value_cansleep(sensor->shared.sensor->pwdn_gpio, enable ? 0 : 1);
+    sensor->shared.sensor->pwdn_released = enable;
   }
   usleep_range(10000, 11000);
 }
@@ -5225,6 +5239,28 @@ static int max9296_prepare_hardware_locked(
   ret = max9296_preflight_prepare_locked(sensor, fingerprint);
   if (ret)
     goto failed;
+
+  /* Refuse a part that probe powered down and nothing powered back up.  A
+   * rebind re-asserts this instance's power-down line, and the call that would
+   * clear it is behind max9296_set_power()'s run == true branch, which a peer
+   * holding the global reference makes false.  Measured 2026-09-30: every
+   * mode-table write then errors -- the deserializer's own address included --
+   * the link reads back a disconnect bitmask, and the request dies with -ENXIO
+   * after a screenful of i2c failures that name no cause.  Say the cause here
+   * instead, before the first write.  The caller owns power by this function's
+   * contract, so a false reading cannot come from merely not having acquired it
+   * yet; max9296_prepare_request_locked() runs its own preflight before that
+   * acquisition, which is why this check does not live there.  Gated on
+   * pwdn_gpio: a board that declares no powerdown-gpios is never powered down
+   * this way and must not be refused.  Issue #96. */
+  if (sensor->pwdn_gpio && !sensor->pwdn_released) {
+    dev_err(&sensor->i2c_client->dev,
+            "power-down asserted by probe and never released: a peer holds the "
+            "shared power reference, so the physical power-on was skipped; "
+            "reload the driver modules or restart the camera service\n");
+    ret = -ENODEV;
+    goto failed;
+  }
 
   /* The mode table assumes power-on serializer addresses; the firmware loader
    * also has no AP1302 reset sequence. Clearing hardware_valid does not restore
