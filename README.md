@@ -324,9 +324,12 @@ readout 비교(`run_360p_readout_compare.sh`), health 익스포트
   `run == true` 분기 뒤에 있고 peer가 전역 전력 참조를 쥐고 있으면 그 분기를 타지 않는다.
   이 BSP의 캡처 드라이버는 `s_power(1)` 참조를 반납하지 않으므로 그 상태가 평상 상태다.
   결과는 역직렬화기가 꺼진 채 남는 것이고, prepare는 `-ENODEV`와 함께 원인·복구를 알리고
-  첫 I2C 쓰기 전에 멈춘다. **복구는 모듈 재적재 또는 `cam-operate.service` 재기동이다** —
-  `cam_hard_reset.sh`는 deprecated 호환 경계이고 `-s`/`-S`가 더는 서비스를 제어하지
-  않으므로 복구 수단으로 쓰지 않는다.
+  첫 I2C 쓰기 전에 멈춘다. **복구는 모듈 재적재 또는 `cam-operate.service` 재기동이다.**
+  이 저장소의 `tools/cam_hard_reset.sh`가 그 재적재를 수행하므로(`rmmod` → `modprobe
+  max9296`) 유효한 복구 수단이다. 반면 pim-package가 배포하는
+  `/opt/pim/bin/cam_hard_reset.sh`는 같은 basename의 **다른 파일**이고 deprecated 호환
+  경계이므로 — 모듈을 직접 다루지 않고 `cam-recoveryctl`에 요청만 전달한다 — 그쪽을
+  복구 수단으로 가정하지 않는다. 위 `## 보드 도구` 절의 경고를 함께 본다.
   거부는 `powerdown-gpios`를 선언한 보드에만 적용된다(핀이 없으면 이렇게 꺼지지 않는다).
   측정과 한계는 이슈 #96.
 - **보드 증적은 `artifacts/` 아래에 있지만 전부는 아니다.** `.gitignore`가
