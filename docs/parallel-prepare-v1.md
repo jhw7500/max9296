@@ -202,13 +202,12 @@ subsequent configuration step fails: serializer addresses may already have
 changed. A later prepare/STREAMON that needs cold initialization in that same
 epoch returns `ESTALE` with `camera hard reset required`, before any table or
 firmware replay. A new process discarding channel exposure overrides can also
-require this reset; see `V4L2_CTRL_GUIDE.md`. Use `init_cam.sh` to perform the
-physical reset and reapply the JSON configuration. This section used to also
-recommend `cam_hard_reset.sh -s -S`; that form is stale. The script now describes
-itself as a deprecated compatibility boundary whose `-s`/`-S` no longer control
-services, so read its header in pim-package
-(`dist/pim/opt/pim/bin/cam_hard_reset.sh`) before calling it — this repository
-does not restate its behaviour.
+require this reset; see `V4L2_CTRL_GUIDE.md`. Use this repository's
+`tools/cam_hard_reset.sh -s -S` or `init_cam.sh` to perform the physical reset and
+reapply the JSON configuration. Note that pim-package deploys a **different**
+script under the same basename at `/opt/pim/bin/cam_hard_reset.sh`, which is a
+deprecated compatibility boundary whose `-s`/`-S` no longer control services;
+check which path you are invoking.
 The driver does not forcibly cycle the peer's shared power in this error path.
 An unchanged, valid configuration remains reusable without cold initialization.
 

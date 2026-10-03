@@ -280,14 +280,16 @@ readout 비교(`run_360p_readout_compare.sh`), health 익스포트
 (`max9296_health_export.py`), 프레임 검사(`uyvy_frame_check.py`,
 `rgb565_frame_check.py`).
 
-> ⚠️ `cam_hard_reset.sh`와 `cam_prepare_gate.sh`는 **파괴적이다.** 운영 중인 보드에서
-> 무심코 돌리지 말 것. `cam_prepare_gate.sh`는 스스로 헤더에 파괴적 시험임을 명시한다.
+> ⚠️ `cam_hard_reset.sh`와 `cam_prepare_gate.sh`는 **파괴적이다.**
+> `tools/cam_hard_reset.sh`는 `-s`로 `cam-operate.service`를 정지시키고 `-S`로 기동하며,
+> 종료 코드 2는 "복구 불가(모듈 refcnt 음수 — 재부팅 필요)"를 뜻한다. `cam_prepare_gate.sh`는
+> 스스로 헤더에 파괴적 시험임을 명시한다. 운영 중인 보드에서 무심코 돌리지 말 것.
 >
-> `cam_hard_reset.sh`의 동작 설명은 **이 저장소에 두지 않는다.** 정본은 pim-package의
-> `dist/pim/opt/pim/bin/cam_hard_reset.sh`이고, 그 머리말이 현재 스스로를 **deprecated
-> 호환 경계**로 규정하며 `-s`/`-S`가 더는 서비스를 제어하지 않는다고 적는다. 이 절에
-> 있던 "`cam-operate.service`를 정지시킨다"와 "종료 코드 2 = 복구 불가"는 그 변경 이전
-> 판의 서술이었고 현재 판으로 재확인하지 않았다. 호출 전 그 파일의 머리말을 읽는다.
+> ⚠️ **같은 이름의 다른 스크립트가 있다.** pim-package가 배포하는
+> `/opt/pim/bin/cam_hard_reset.sh`는 위 도구가 아니라 **deprecated 호환 경계**이고, 그
+> 머리말이 `-s`/`-S`가 더는 서비스를 제어하지 않는다고 적는다(`cam-recoveryctl`에 요청을
+> 전달한다). 보드에서 부를 때는 **어느 경로의 파일인지 확인한다** — 두 파일은 basename이
+> 같고 동작이 반대다.
 
 ---
 
