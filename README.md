@@ -145,8 +145,10 @@ bash tests/run_health_tests.sh
 - `run_360p_readout_compare_test.sh` 실행 중 나오는 `ERROR: production restore failed`는
   **실패 경로를 일부러 태우는 픽스처**다(문자열 출처는
   `tools/run_360p_readout_compare.sh`). 러너 자체는 `PASS`로 끝난다.
-- `build_360p_candidates_test.sh`가 실행 비트를 게이트하므로, `tools/*.sh`나
-  `tests/fixtures/*`의 `+x`가 빠진 채 커밋되면 이 테스트가 깨진다.
+- `build_360p_candidates_test.sh`가 추적 파일 14개의 git 실행 비트(100755)를 게이트한다.
+  목록의 정본은 그 파일 머리의 `for executable in` 블록이다 — `tools/`의 스크립트 4개와
+  `tests/fixtures/*` 10개. 목록에 있는 파일의 `+x`가 빠진 채 커밋되면 이 테스트가 깨진다.
+  `tools/`의 나머지 `.sh`는 100644로 추적되며 게이트 대상이 아니다 — `bash`로 부른다.
 
 ---
 
