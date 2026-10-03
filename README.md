@@ -281,9 +281,15 @@ readout 비교(`run_360p_readout_compare.sh`), health 익스포트
 `rgb565_frame_check.py`).
 
 > ⚠️ `cam_hard_reset.sh`와 `cam_prepare_gate.sh`는 **파괴적이다.**
-> `cam_hard_reset.sh`는 `cam-operate.service`를 정지시키고, 종료 코드 2는
-> "복구 불가(모듈 refcnt 음수 — 재부팅 필요)"를 뜻한다. `cam_prepare_gate.sh`는
+> `tools/cam_hard_reset.sh`는 `-s`로 `cam-operate.service`를 정지시키고 `-S`로 기동하며,
+> 종료 코드 2는 "복구 불가(모듈 refcnt 음수 — 재부팅 필요)"를 뜻한다. `cam_prepare_gate.sh`는
 > 스스로 헤더에 파괴적 시험임을 명시한다. 운영 중인 보드에서 무심코 돌리지 말 것.
+>
+> ⚠️ **같은 이름의 다른 스크립트가 있다.** pim-package가 배포하는
+> `/opt/pim/bin/cam_hard_reset.sh`는 위 도구가 아니라 **deprecated 호환 경계**이고, 그
+> 머리말이 `-s`/`-S`가 더는 서비스를 제어하지 않는다고 적는다(`cam-recoveryctl`에 요청을
+> 전달한다). 보드에서 부를 때는 **어느 경로의 파일인지 확인한다** — 두 파일은 basename이
+> 같고 동작이 반대다.
 
 ---
 
@@ -318,8 +324,12 @@ readout 비교(`run_360p_readout_compare.sh`), health 익스포트
   `run == true` 분기 뒤에 있고 peer가 전역 전력 참조를 쥐고 있으면 그 분기를 타지 않는다.
   이 BSP의 캡처 드라이버는 `s_power(1)` 참조를 반납하지 않으므로 그 상태가 평상 상태다.
   결과는 역직렬화기가 꺼진 채 남는 것이고, prepare는 `-ENODEV`와 함께 원인·복구를 알리고
-  첫 I2C 쓰기 전에 멈춘다. **복구는 모듈 재적재 또는 `cam-operate.service` 재기동이다** —
-  `cam_hard_reset.sh`는 요청만 전달하므로 서비스가 내려간 상태에서는 복구하지 못한다.
+  첫 I2C 쓰기 전에 멈춘다. **복구는 모듈 재적재 또는 `cam-operate.service` 재기동이다.**
+  이 저장소의 `tools/cam_hard_reset.sh`가 그 재적재를 수행하므로(`rmmod` → `modprobe
+  max9296`) 유효한 복구 수단이다. 반면 pim-package가 배포하는
+  `/opt/pim/bin/cam_hard_reset.sh`는 같은 basename의 **다른 파일**이고 deprecated 호환
+  경계이므로 — 모듈을 직접 다루지 않고 `cam-recoveryctl`에 요청만 전달한다 — 그쪽을
+  복구 수단으로 가정하지 않는다. 위 `## 문서 지도` 절의 ⚠️ 경고를 함께 본다.
   거부는 `powerdown-gpios`를 선언한 보드에만 적용된다(핀이 없으면 이렇게 꺼지지 않는다).
   측정과 한계는 이슈 #96.
 - **보드 증적은 `artifacts/` 아래에 있지만 전부는 아니다.** `.gitignore`가

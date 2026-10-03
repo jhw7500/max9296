@@ -200,10 +200,20 @@ DT 에 없으면 `pwdn_gpio` 가 NULL 이고 설정이 무동작이다. 그런 �
   `powerdown-gpios` 가 없는 보드는 위 「되돌리기 쓰기 질문에 대한 답」의 범위 조건대로
   다를 수 있으며 재지 않았다.
 - 세 실험 모두 보드를 고장 상태로 만들었고 매번 `systemctl start cam-operate.service`
-  로 복구했다. `cam_hard_reset.sh -s -S` 는 `DEPRECATED: forwards one recovery request`
-  를 찍고 `rc=0` 을 반환하지만 서비스가 내려간 상태에서는 복구하지 않았다 — exit code 를
-  복구의 증거로 쓰면 안 된다. 복구 후 매번 AP1302 4개 응답·프레임 흐름·원래 튜플을
-  확인했다.
+  로 복구했다. 그 전에 `cam_hard_reset.sh` 를 한 번 호출했고 보드는 복구되지 않았는데,
+  그 호출을 복구의 증거로 읽은 것이 틀렸다. **그 호출의 경로·플래그·종료코드는 재확인되지
+  않으므로 적지 않는다** — 당시 세션 전사가 요약으로 대체돼 1차 출력이 남지 않았고, 요약은
+  1차 증거가 아니다.
+
+  **경로가 중요한 이유**: `cam_hard_reset.sh` 라는 basename 의 서로 다른 두 파일이 있고
+  동작이 반대다. 이 저장소의 `tools/cam_hard_reset.sh` 는 `-s` 로 `cam-operate.service` 를
+  정지하고 `-S` 로 기동하며 CSI2 까지 리셋한다. pim-package 가 배포하는
+  `/opt/pim/bin/cam_hard_reset.sh` 는 **deprecated 호환 경계**로, 머리말이 `-s`/`-S` 가
+  더는 서비스를 제어하지 않는다고 적고 `cam-recoveryctl` 에 요청만 전달한다. 당시 어느
+  쪽을 불렀는지 모르므로 "왜 복구되지 않았는가" 는 이 기록으로 답하지 않는다 — 두 파일을
+  혼동한 것이 원인일 수 있다 (추정).
+
+  복구 후 매번 AP1302 4개 응답·프레임 흐름·원래 튜플을 확인했다.
 
 ## 인용 방식
 
