@@ -44,8 +44,9 @@ bash tests/run_health_tests.sh  # 테스트 전체. 보드 불필요. cc·python
 `tests/build_360p_candidates_test.sh` 가 추적 파일 14개의 git 실행 비트(100755)를 게이트한다.
 목록의 정본은 그 테스트 파일 머리의 `for executable in` 블록이다 — `tools/` 의 스크립트 4개
 (`build_360p_candidates.sh`, `cam_360p_resource.sh`, `uyvy_frame_check.py`, `rgb565_frame_check.py`)와
-`tests/fixtures/` 의 가짜 명령 10개다. `tools/` 의 나머지 `.sh` 여섯은 100644 로 추적되며
-`bash` 로 부른다. 어느 쪽이든 기존 mode 를 바꾸지 않고, 스크립트를 고친 뒤 `git diff --summary`
+`tests/fixtures/` 의 가짜 명령 10개다. `tools/` 의 나머지 파일은 게이트 밖이고 mode 가 섞여
+있다 — `run_360p_readout_compare.sh` 와 `max9296_health_export.py` 는 100755, `cam_fps_*.sh` 넷과
+`cam_hard_reset.sh`·`cam_prepare_gate.sh` 는 100644 이며 `bash` 로 부른다. 어느 쪽이든 기존 mode 를 바꾸지 않고, 스크립트를 고친 뒤 `git diff --summary`
 로 mode 변경이 없는지 본다. 새 스크립트를 게이트 목록에 넣을 때만 `chmod +x` 와 목록 추가를
 함께 한다.
 

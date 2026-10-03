@@ -148,7 +148,9 @@ bash tests/run_health_tests.sh
 - `build_360p_candidates_test.sh`가 추적 파일 14개의 git 실행 비트(100755)를 게이트한다.
   목록의 정본은 그 파일 머리의 `for executable in` 블록이다 — `tools/`의 스크립트 4개와
   `tests/fixtures/*` 10개. 목록에 있는 파일의 `+x`가 빠진 채 커밋되면 이 테스트가 깨진다.
-  `tools/`의 나머지 `.sh`는 100644로 추적되며 게이트 대상이 아니다 — `bash`로 부른다.
+  `tools/`의 나머지 파일은 게이트 대상이 아니고 mode가 섞여 있다 —
+  `run_360p_readout_compare.sh`·`max9296_health_export.py`는 100755이고, `cam_fps_*.sh` 넷과
+  `cam_hard_reset.sh`·`cam_prepare_gate.sh`는 100644라서 `bash`로 부른다.
 
 ---
 
