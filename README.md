@@ -329,7 +329,7 @@ readout 비교(`run_360p_readout_compare.sh`), health 익스포트
   max9296`) 유효한 복구 수단이다. 반면 pim-package가 배포하는
   `/opt/pim/bin/cam_hard_reset.sh`는 같은 basename의 **다른 파일**이고 deprecated 호환
   경계이므로 — 모듈을 직접 다루지 않고 `cam-recoveryctl`에 요청만 전달한다 — 그쪽을
-  복구 수단으로 가정하지 않는다. 위 `## 보드 도구` 절의 경고를 함께 본다.
+  복구 수단으로 가정하지 않는다. 위 `## 문서 지도` 절의 ⚠️ 경고를 함께 본다.
   거부는 `powerdown-gpios`를 선언한 보드에만 적용된다(핀이 없으면 이렇게 꺼지지 않는다).
   측정과 한계는 이슈 #96.
 - **보드 증적은 `artifacts/` 아래에 있지만 전부는 아니다.** `.gitignore`가
