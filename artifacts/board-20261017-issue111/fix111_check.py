@@ -45,7 +45,7 @@ def check_journal(ev):
     bad = []
     stale = 0
     f_on_start = f_on_stop = 0
-    starts = stops = start_fail = 0
+    starts = stops = start_fail = stop_fail = 0
     for t, kind, bus, en, x, f in ev:
         if kind == 'ret':
             ret = x
@@ -63,6 +63,9 @@ def check_journal(ev):
                 cycles[bus].append(cur[bus])
             else:
                 stops += 1
+                if ret != 0:
+                    stop_fail += 1
+                    bad.append(f'{t.time()} b{bus} s_stream(0) ret={ret} (정지 실패)')
                 if f != 0:
                     f_on_stop += 1
                     bad.append(f'{t.time()} b{bus} s_stream(0) 반환 시 f={f}')
@@ -85,6 +88,7 @@ def check_journal(ev):
         for c in cycles[bus]:
             if c['csi'] is None:
                 no_csi += 1
+                bad.append(f"{c['t'].time()} b{bus} s_stream(1) 사이클에 0x0313 기록 없음")
                 continue
             if c['run'] is None or c['run'] > c['csi']:
                 order_bad += 1
@@ -92,7 +96,7 @@ def check_journal(ev):
                 continue
             d_run.append((c['run'] - c['t']).total_seconds())
             d_csi.append((c['csi'] - c['t']).total_seconds())
-    print(f'starts(ret=0)={starts} start_fail={start_fail} stops={stops}')
+    print(f'starts(ret=0)={starts} start_fail={start_fail} stops={stops} stop_fail={stop_fail}')
     print(f'A1 정지 중 RUNNING 전환={sum("정지 중 RUNNING" in b for b in bad)} STALE={stale} '
           f'f!=0@start={f_on_start} f!=0@stop={f_on_stop}')
     print(f'A2 사이클={sum(len(v) for v in cycles.values())} 순서위반={order_bad} CSI없음={no_csi}')

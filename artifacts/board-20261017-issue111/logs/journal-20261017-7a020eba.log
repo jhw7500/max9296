@@ -1,0 +1,14 @@
+2026-10-17T11:35:28.807670+0000 pim-camera-v016 kernel: T111 #5 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-17T11:35:28.815280+0000 pim-camera-v016 kernel: T111 #6 fsync decide SIDE_SELF (was SIDE_IDLE) rc0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-17T11:35:28.815430+0000 pim-camera-v016 kernel: T111 #7 enable gate on|run|cur=5 (was 0) hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-17T11:35:29.491426+0000 pim-camera-v016 kernel: T111 #8 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-17T11:35:29.499266+0000 pim-camera-v016 kernel: T111 #9 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-17T11:35:29.815439+0000 pim-camera-v016 kernel: T111 #10 fsync->RUNNING tgt=b1 via=gate prev=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-17T11:35:29.819230+0000 pim-camera-v016 kernel: T111 #11 enable gate on|run|cur=7 (was 5) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-17T11:35:29.879339+0000 pim-camera-v016 kernel: T111 #12 fsync decide DUAL (was SIDE_SELF) rc0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-17T11:35:30.151264+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6523] CSI output enabled
+2026-10-17T11:35:30.151393+0000 pim-camera-v016 kernel: T111 #13 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-17T11:35:30.883225+0000 pim-camera-v016 kernel: T111 #14 fsync->RUNNING tgt=b2 via=gate prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-17T11:35:30.891517+0000 pim-camera-v016 kernel: T111 #15 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-17T11:35:31.239263+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6523] CSI output enabled
+2026-10-17T11:35:31.239415+0000 pim-camera-v016 kernel: T111 #16 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]

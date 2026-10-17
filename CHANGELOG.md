@@ -41,7 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   계측 빌드(srcversion `D8CFC4AB`)로 쟀고, 측정 뒤 원본으로 원복했다. 판정에 쓴 로그
   분석기는 수정 전 코드의 같은 계측 로그(2026-10-16)에서 결함 A 를 검출하는 것을 먼저
   확인했다. 측정 명령·판정 규칙·양성 대조·집계는 `artifacts/board-20261017-issue111/README.md`,
-  원시 로그는 같은 디렉터리의 `raw/`(미공개)에 있다.
+  판정에 쓴 줄만 걸러 낸 저널과 측정 출력은 같은 디렉터리의 `logs/`, 걸러 내기 전 원시 로그는
+  `raw/`(미공개)에 있다.
 
   | 항목 | 결과 |
   |---|---|
