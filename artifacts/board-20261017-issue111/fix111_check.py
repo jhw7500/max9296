@@ -96,6 +96,9 @@ def check_journal(ev):
                 continue
             d_run.append((c['run'] - c['t']).total_seconds())
             d_csi.append((c['csi'] - c['t']).total_seconds())
+    if not d_run:
+        # 빈 입력, T111 이 없는 캡처, 모든 이벤트를 뺀 시간 범위는 증거가 아니다.
+        bad.append('판정할 완결 시작 사이클(s_stream(1) ret=0 → RUNNING → 0x0313)이 없음')
     print(f'starts(ret=0)={starts} start_fail={start_fail} stops={stops} stop_fail={stop_fail}')
     print(f'A1 정지 중 RUNNING 전환={sum("정지 중 RUNNING" in b for b in bad)} STALE={stale} '
           f'f!=0@start={f_on_start} f!=0@stop={f_on_stop}')
@@ -115,6 +118,7 @@ def check_gap(outdir):
         if m:
             t = datetime.fromisoformat(m.group(1)).replace(tzinfo=timezone.utc).timestamp()
             marks.append((t, int(m.group(2)), m.group(3), int(m.group(4))))
+    windows = 0
     for node in (4, 3):
         col = 2 if node == 4 else 1  # irq 파일: epoch csi0 csi1, video3=CSI0, video4=CSI1
         rows = []
@@ -135,6 +139,10 @@ def check_gap(outdir):
             w = [t for t in inc if t0 <= t <= t0 + span]
             gaps = [b - a for a, b in zip([t0] + w, w + [t0 + span])]
             print(f'   video{other} {what:5s} 뒤 {span:.0f}s: 증가 {len(w)}회, 최대 공백 {max(gaps):.2f}s')
+            windows += 1
+    if windows == 0:
+        print('  ! 공백을 잴 구간(summary 의 G 표식과 irq-g*.txt)이 없음')
+    return windows > 0
 
 
 def main(argv):
@@ -146,8 +154,8 @@ def main(argv):
     since = datetime.fromisoformat(argv[2]) if len(argv) > 2 else None
     until = datetime.fromisoformat(argv[3]) if len(argv) > 3 else None
     ok = check_journal(journal(argv[1], since, until))
-    if gap:
-        check_gap(gap)
+    if gap and not check_gap(gap):
+        ok = False
     print('JOURNAL_VERDICT', 'PASS' if ok else 'FAIL')
     return 0 if ok else 1
 
