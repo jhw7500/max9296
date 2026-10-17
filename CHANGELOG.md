@@ -40,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **실기 검증 (2026-10-17, pim-camera-v016 192.168.214.4)**: 이 변경에 상태 전환 로그만 더한
   계측 빌드(srcversion `D8CFC4AB`)로 쟀고, 측정 뒤 원본으로 원복했다. 판정에 쓴 로그
   분석기는 수정 전 코드의 같은 계측 로그(2026-10-16)에서 결함 A 를 검출하는 것을 먼저
-  확인했다. 원자료는 `artifacts/board-20261017-issue111/raw/`(미공개).
+  확인했다. 측정 명령·판정 규칙·양성 대조·집계는 `artifacts/board-20261017-issue111/README.md`,
+  원시 로그는 같은 디렉터리의 `raw/`(미공개)에 있다.
 
   | 항목 | 결과 |
   |---|---|
@@ -49,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | 1-0048 정지 뒤 2-0048 단독 90 프레임 | 5/5 (깨끗한 부팅마다 1회) |
   | gstApp·ord·vcm 정상 종료 / 강제 종료 후 재기동 | 10/10 / 10/10, NO DATA 0 |
   | 부팅 | 10/10 |
+  | 2-0048 정지 상태의 1-0048 단독 | 3/3 (55 프레임, 14.95~14.96 fps) |
+  | 1-0048 정지 중 공유 FSYNC 펄스를 받은 뒤 | 1-0048 디시리얼라이저·ISP·링크 OK, 시작·재시작 4회 각 55 프레임 — 이상 없음 |
   | 한쪽 스트리밍 중 다른 쪽 정지 / 재합류 (양방향 각 3회) | 스트리밍 쪽 CSI 수신 최대 공백 0.14 s / 1.01~1.08 s (dual 워밍업) |
 
   같은 부팅에서 v4l2-ctl 단독 시험을 반복하면 2-0048 의 CSI 수신 IRQ 가 0 이 되는 현상이
