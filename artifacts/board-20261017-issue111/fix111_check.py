@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """#111 수정 AC 판정: fix+T111 오버레이의 journalctl -o short-iso-precise 캡처를 읽는다.
 
-사용: fix111_check.py <follow.log> [<since ISO> <until ISO>] [--gap <v111 out dir>]
+사용: fix111_check.py <follow.log> [<since ISO> <until ISO>] [--gap <v111 out dir> --gap-node <3|4>]
 
 A1  정지한 버스에 대한 RUNNING 전환 (s_stream(0) 반환 뒤 ~ 다음 s_stream(1) 반환 전) = 0
     s_stream(0)/s_stream(1) 반환 스냅샷의 자기 f (state.fsync) = 0, STALE 표시 = 0
 A2  s_stream(1) ret=0 사이클마다 그 버스의 첫 RUNNING 전환이 첫 'CSI output enabled' 보다 먼저
-G   (--gap) 계속 도는 노드의 CSI IRQ 최대 공백: 상대 정지 뒤 4 s, 상대 재시작 뒤 6 s 구간별
+G   (--gap) --gap-node 로 고른 계속 도는 노드의 CSI IRQ 를 상대 정지 뒤 4 s, 상대 재시작 뒤 6 s 구간별로
+    본다. 구간마다 IRQ 증가 1회 이상, 최대 공백이 정지 구간 GAP_STOP_MAX_S·재시작 구간
+    GAP_START_MAX_S 이하여야 한다.
 """
 import re
 import sys
@@ -111,50 +113,65 @@ def check_journal(ev):
     return not bad
 
 
-def check_gap(outdir):
+# 15 fps 에서 CSI IRQ 는 약 33 ms 마다 온다(50 ms 샘플). 2026-10-17 측정: 정지 구간 최대 공백
+# 0.07~0.14 s, 재시작 구간 1.01~1.08 s(dual 분기 워밍업 1 s). 상한은 그 위에 여유를 둔 값이다.
+GAP_STOP_MAX_S = 0.5
+GAP_START_MAX_S = 1.5
+
+
+def check_gap(outdir, node):
     marks = []
     for line in open(f'{outdir}/summary.txt', errors='replace'):
         m = re.match(r'(\S+) G(\d) (?:k\d )?(stop|start) video(\d)', line)
         if m:
             t = datetime.fromisoformat(m.group(1)).replace(tzinfo=timezone.utc).timestamp()
             marks.append((t, int(m.group(2)), m.group(3), int(m.group(4))))
-    windows = 0
-    for node in (4, 3):
-        col = 2 if node == 4 else 1  # irq 파일: epoch csi0 csi1, video3=CSI0, video4=CSI1
-        rows = []
-        try:
-            irq_lines = open(f'{outdir}/irq-g{node}.txt', errors='replace').readlines()
-        except FileNotFoundError:
+    col = 2 if node == 4 else 1  # irq 파일: epoch csi0 csi1, video3=CSI0, video4=CSI1
+    rows = []
+    try:
+        irq_lines = open(f'{outdir}/irq-g{node}.txt', errors='replace').readlines()
+    except FileNotFoundError:
+        irq_lines = []
+    for line in irq_lines:
+        p = line.split()
+        if len(p) == 3:
+            rows.append((float(p[0]), int(p[col])))
+    inc = [rows[i][0] for i in range(1, len(rows)) if rows[i][1] > rows[i - 1][1]]
+    print(f'G{node} (video{node} 계속 스트리밍, CSI{col - 1}) 샘플 {len(rows)}')
+    windows = failed = 0
+    for t0, g, what, other in marks:
+        if g != node:
             continue
-        for line in irq_lines:
-            p = line.split()
-            if len(p) == 3:
-                rows.append((float(p[0]), int(p[col])))
-        inc = [rows[i][0] for i in range(1, len(rows)) if rows[i][1] > rows[i - 1][1]]
-        print(f'G{node} (video{node} 계속 스트리밍, CSI{col - 1}) 샘플 {len(rows)}')
-        for t0, g, what, other in marks:
-            if g != node:
-                continue
-            span = 4.0 if what == 'stop' else 6.0
-            w = [t for t in inc if t0 <= t <= t0 + span]
-            gaps = [b - a for a, b in zip([t0] + w, w + [t0 + span])]
-            print(f'   video{other} {what:5s} 뒤 {span:.0f}s: 증가 {len(w)}회, 최대 공백 {max(gaps):.2f}s')
-            windows += 1
+        span, limit = (4.0, GAP_STOP_MAX_S) if what == 'stop' else (6.0, GAP_START_MAX_S)
+        w = [t for t in inc if t0 <= t <= t0 + span]
+        gap = max(b - a for a, b in zip([t0] + w, w + [t0 + span]))
+        bad = not w or gap > limit
+        failed += bad
+        print(f'   video{other} {what:5s} 뒤 {span:.0f}s: 증가 {len(w)}회, 최대 공백 {gap:.2f}s '
+              f'(상한 {limit:.1f}s){" ! 기준 밖" if bad else ""}')
+        windows += 1
     if windows == 0:
-        print('  ! 공백을 잴 구간(summary 의 G 표식과 irq-g*.txt)이 없음')
-    return windows > 0
+        print(f'  ! G{node} 공백을 잴 구간(summary 의 G{node} 표식과 irq-g{node}.txt)이 없음')
+    return windows > 0 and failed == 0
 
 
 def main(argv):
-    gap = None
+    gap = node = None
     if '--gap' in argv:
         i = argv.index('--gap')
         gap = argv[i + 1]
         argv = argv[:i] + argv[i + 2:]
+    if '--gap-node' in argv:
+        i = argv.index('--gap-node')
+        node = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
+    if (gap is None) != (node is None) or node not in (None, '3', '4'):
+        print('usage: --gap <dir> 와 --gap-node <3|4> 는 함께 준다', file=sys.stderr)
+        return 2
     since = datetime.fromisoformat(argv[2]) if len(argv) > 2 else None
     until = datetime.fromisoformat(argv[3]) if len(argv) > 3 else None
     ok = check_journal(journal(argv[1], since, until))
-    if gap and not check_gap(gap):
+    if gap and not check_gap(gap, int(node)):
         ok = False
     print('JOURNAL_VERDICT', 'PASS' if ok else 'FAIL')
     return 0 if ok else 1

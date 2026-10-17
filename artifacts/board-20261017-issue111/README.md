@@ -21,8 +21,8 @@ STREAMON 이 FSYNC 를 받지 못하는 것이다. 판정에 쓴 줄만 걸러 �
 
 - A1: 버스마다 `s_stream(0)` 반환 뒤 다음 `s_stream(1)` 반환 전의 RUNNING 전환, `STALE` 표시, 정지·시작 반환 스냅샷의 자기 `f`(= `state.fsync`)가 RUNNING 인 경우를 센다. 0 이 아닌 `s_stream(0)`·`s_stream(1)` 반환(정지·시작 실패)도 위반이다.
 - A2: `s_stream(1) ret=0` 사이클마다 그 버스의 첫 `fsync->RUNNING` 이 첫 `CSI output enabled`(0x0313) 보다 먼저인지 본다. 0x0313 기록이 없는 시작 사이클도 위반이다.
-- `--gap`: `v111.sh` 가 50 ms 간격으로 남긴 CSI IRQ 누계에서, 계속 도는 쪽의 증가 간 최대 공백을 상대 정지 뒤 4 s·재시작 뒤 6 s 구간별로 잰다.
-- 판정할 완결 시작 사이클(시작 → RUNNING → 0x0313)이 하나도 없거나, `--gap` 을 줬는데 잴 구간이 없으면 FAIL 이다. 빈 입력·잘못된 경로나 시간 범위가 PASS 로 나오지 않게 한다.
+- `--gap <dir> --gap-node <3|4>`: `v111.sh` 가 50 ms 간격으로 남긴 CSI IRQ 누계에서, 고른 노드(계속 도는 쪽)의 증가 간 최대 공백을 상대 정지 뒤 4 s·재시작 뒤 6 s 구간별로 잰다. 구간마다 IRQ 증가가 1회 이상이고 최대 공백이 정지 구간 0.5 s·재시작 구간 1.5 s 이하여야 한다. 상한은 정상 IRQ 간격(15 fps 에서 약 33 ms)과 이 측정값(정지 0.07~0.14 s, 재시작 1.01~1.08 s — dual 워밍업 1 s)에 여유를 둔 값이다. 노드를 하나만 고르므로, 한 디렉터리에 멈춘 노드 기록이 섞여 있어도 다른 노드 판정에 섞이지 않는다.
+- 판정할 완결 시작 사이클(시작 → RUNNING → 0x0313)이 하나도 없거나, `--gap` 을 줬는데 잴 구간이 없거나 기준 밖 구간이 있으면 FAIL 이다. 빈 입력·잘못된 경로나 시간 범위가 PASS 로 나오지 않게 한다.
 
 양성 대조로 같은 분석기를 2026-10-16 수정 전 코드의 계측 로그 두 개에 먼저 돌렸다.
 
@@ -82,10 +82,11 @@ gstApp 경로 20회와 부팅 10회에서는 나오지 않았으며 재부팅 �
 
 - 보드에서: cam-operate·ord-operate 정지 뒤 `bash v111.sh` (결과는 `/root/t111/v111-<시각>/`).
   `journalctl -b -n all -f -o short-iso-precise` 를 먼저 띄워 둔다.
-- 호스트에서: `python3 fix111_check.py <follow.log> [<since> <until>] [--gap <v111 결과 디렉터리>]`.
-  마지막 줄 `JOURNAL_VERDICT PASS|FAIL`, PASS 면 exit 0.
+- 호스트에서: `python3 fix111_check.py <follow.log> [<since> <until>] [--gap <v111 결과 디렉터리> --gap-node <3|4>]`.
+  마지막 줄 `JOURNAL_VERDICT PASS|FAIL`, PASS 면 exit 0, 인자 오류는 exit 2.
 - 커밋된 로그로 위 표를 다시 계산하는 예 (이 디렉터리에서):
   - `python3 fix111_check.py logs/journal-20261016-56cd3d09-before-fix.log` → FAIL (양성 대조)
   - `python3 fix111_check.py logs/journal-20261017-97a82151.log 2026-10-17T10:40:59 2026-10-17T10:45:01` → A 단계 PASS
-  - `python3 fix111_check.py logs/journal-20261017-97a82151.log 2026-10-17T10:46:29 2026-10-17T10:48:03 --gap logs/v111-104059` → G3 공백
-  - `python3 fix111_check.py logs/journal-20261017-00ee40f4.log 2026-10-17T11:20:13 2026-10-17T11:21:20 --gap logs/v111b-112013` → G4 공백
+  - `python3 fix111_check.py logs/journal-20261017-97a82151.log 2026-10-17T10:46:29 2026-10-17T10:48:03 --gap logs/v111-104059 --gap-node 3` → G3 공백 PASS
+  - `python3 fix111_check.py logs/journal-20261017-00ee40f4.log 2026-10-17T11:20:13 2026-10-17T11:21:20 --gap logs/v111b-112013 --gap-node 4` → G4 공백 PASS
+  - `python3 fix111_check.py logs/journal-20261017-97a82151.log 2026-10-17T10:46:29 2026-10-17T10:48:03 --gap logs/v111-104059 --gap-node 4` → FAIL (같은 부팅에서 CSI1 수신이 멈춘 구간, 증가 0회 — 공백 판정의 양성 대조)
