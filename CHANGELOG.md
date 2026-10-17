@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 수정 — 정지한 스트림의 FSYNC 상태가 RUNNING 으로 되살아나지 않고, 1-0048 이 멈춰도 2-0048 이 FSYNC 를 받는다 (#111, 동작 변경)
+
+- **결함 A**: `max9296_fsync()` 는 펄스를 낸 뒤 `max9296_power_lock` 을 풀고 low 구간
+  (15 fps 에서 65,666 µs)을 잔 다음, 잠금 없이 `state.fsync = RUNNING` 을 썼다. 그 사이
+  STREAMOFF 가 쓴 IDLE 이 덮여 정지한 스트림이 RUNNING 으로 남았고, 다음 STREAMON 의
+  enable 워커는 그 스트림의 첫 FSYNC 펄스보다 먼저 CSI 출력(0x0313)을 켰다.
+  실측(2026-10-16, pim-camera-v016 192.168.214.4, 계측 빌드): 정지 7회 모두에서 정지한
+  인스턴스에 대한 RUNNING 대입 14건.
+- **결함 B**: FSYNC 스레드는 GPIO 소유자(1-0048)의 `restart` 만 보고 펄스를 보류했고,
+  그 값은 소유자 자신의 STREAMON 에서만 풀렸다. 그래서 1-0048 이 멈춘 뒤 2-0048 단독
+  STREAMON 은 FSYNC 를 받지 못해 출력이 켜지지 않았다(같은 날 실측: `v4l2-ctl` 단독
+  20 초 동안 0x0313 미실행). 코드상으로는 2-0048 이 스트리밍 중일 때 1-0048 이 멈춰도
+  2-0048 의 펄스가 끊긴다(미실측).
+- **새 동작**:
+  - RUNNING 은 `max9296_fsync_pulse_current()` 안에서, 펄스를 허가한 스트림에 대해서만
+    power lock 을 쥔 채 기록한다. STREAMOFF·remove 의 IDLE 기록도 같은 잠금 아래이므로
+    정지한 스트림이 RUNNING 으로 돌아오지 않는다.
+  - STREAMOFF 는 자기 `state.fsync` 만 IDLE 로 만든다. 상대가 아직 스트리밍 중이면 그
+    상태와 펄스는 그대로다.
+  - `restart` 보류(필드, 300 ms 폴링, 해제 뒤 1 s 대기)를 없앴다. 펄스는 전과 같이 현재
+    epoch 로 commit 된 스트림에만 나간다.
+- **관찰 가능한 차이** (코드 기준):
+  - 다시 시작한 스트림은 IDLE 에서 출발해 첫 펄스 전 워밍업 1 s 를 거친다(두 쪽이
+    함께 시작하면 dual 분기에서 최대 2 s). 이전에는 결함 A 로 RUNNING 이 남아 워밍업을
+    건너뛰는 일이 잦았고, 1-0048 이 다시 시작할 때는 그 대신 보류(0~0.3 s + 1 s)가
+    걸렸다.
+  - 1-0048 이 멈춰 있어도 2-0048 이 스트리밍하면 공유 FSYNC 넷(GPIO1_IO05)에 펄스가
+    나가므로 1-0048 쪽 카메라도 그 펄스를 받는다.
+  - 한쪽이 스트리밍 중일 때 다른 쪽이 다시 시작하면 dual 분기 워밍업 동안(약 1 s)
+    스트리밍 중인 쪽 펄스가 멈춘다. 부팅 때 두 쪽이 차례로 시작할 때 이미 있던 동작이다.
+
 ### 변경 — `crop_enable=false` 가 줌 레지스터를 기본값으로 되쓴다 (동작 변경)
 
 - **이전 동작**: `crop_enable` 이 false 면 `max9296_apply_cached_crop()` 이 조기

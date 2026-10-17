@@ -1949,6 +1949,28 @@ def check_source(source: str, failures: list[str]) -> None:
     ):
         failures.append("peer-only FSYNC must keep the local GPIO owner separate")
 
+    # #111: RUNNING is published by the final gate itself, inside the locked
+    # pulse and only for the streams that authorized it.  A store after the
+    # unlock and the low-phase sleep overwrote a STREAMOFF's IDLE.
+    running_stores = {
+        match.group(1): match.start()
+        for match in re.finditer(
+            r"\b(\w+)->state\.fsync\s*=\s*MAX9296_STATE_RUNNING\s*;", fsync_pulse
+        )
+    }
+    if set(running_stores) != {"primary", "secondary"} or not all(
+        last_pulse < position < power_unlock for position in running_stores.values()
+    ):
+        failures.append("FSYNC RUNNING must be published inside the final gate's locked pulse")
+    if re.search(r"state\.fsync\s*=(?!=)", fsync) or re.search(
+        r"[;{}]\s*\*\s*fsync_state\s*=(?!=)", fsync
+    ):
+        failures.append("the FSYNC thread must not store state.fsync outside the final gate")
+    if re.search(r"shared\.sensor->state\.fsync\s*=(?!=)", stream):
+        failures.append("STREAMOFF must not clear a still-streaming peer's FSYNC state")
+    if re.search(r"(->|\.)restart\b", code):
+        failures.append("the GPIO-owner-only FSYNC restart hold must not come back")
+
     output_write_pattern = re.compile(
         r"maxim_ops_i2c_write\s*\([^;]*\b0x0313\b\s*,\s*"
         r"(?P<value>0x[0-9a-fA-F]+)\b[^;]*;",
