@@ -155,23 +155,45 @@ def check_gap(outdir, node):
     return windows > 0 and failed == 0
 
 
+USAGE = ('usage: fix111_check.py <follow.log> [<since ISO> [<until ISO>]] '
+         '[--gap <dir> --gap-node <3|4>]')
+
+
+def parse_args(argv):
+    """인자 오류면 None. 옵션은 각각 한 번, 값과 함께만 받는다."""
+    opts, pos, i = {}, [], 1
+    while i < len(argv):
+        a = argv[i]
+        if a in ('--gap', '--gap-node'):
+            if a in opts or i + 1 >= len(argv) or argv[i + 1].startswith('--'):
+                return None
+            opts[a] = argv[i + 1]
+            i += 2
+        elif a.startswith('--'):
+            return None
+        else:
+            pos.append(a)
+            i += 1
+    gap, node = opts.get('--gap'), opts.get('--gap-node')
+    if not 1 <= len(pos) <= 3 or (gap is None) != (node is None) or node not in (None, '3', '4'):
+        return None
+    try:
+        times = [datetime.fromisoformat(p) for p in pos[1:]]
+    except ValueError:
+        return None
+    since = times[0] if times else None
+    until = times[1] if len(times) > 1 else None
+    return pos[0], since, until, gap, (int(node) if node else None)
+
+
 def main(argv):
-    gap = node = None
-    if '--gap' in argv:
-        i = argv.index('--gap')
-        gap = argv[i + 1]
-        argv = argv[:i] + argv[i + 2:]
-    if '--gap-node' in argv:
-        i = argv.index('--gap-node')
-        node = argv[i + 1]
-        argv = argv[:i] + argv[i + 2:]
-    if (gap is None) != (node is None) or node not in (None, '3', '4'):
-        print('usage: --gap <dir> 와 --gap-node <3|4> 는 함께 준다', file=sys.stderr)
+    parsed = parse_args(argv)
+    if parsed is None:
+        print(USAGE, file=sys.stderr)
         return 2
-    since = datetime.fromisoformat(argv[2]) if len(argv) > 2 else None
-    until = datetime.fromisoformat(argv[3]) if len(argv) > 3 else None
-    ok = check_journal(journal(argv[1], since, until))
-    if gap and not check_gap(gap, int(node)):
+    path, since, until, gap, node = parsed
+    ok = check_journal(journal(path, since, until))
+    if gap and not check_gap(gap, node):
         ok = False
     print('JOURNAL_VERDICT', 'PASS' if ok else 'FAIL')
     return 0 if ok else 1
