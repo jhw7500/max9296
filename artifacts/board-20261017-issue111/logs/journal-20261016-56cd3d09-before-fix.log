@@ -1,0 +1,361 @@
+2026-10-16T09:32:37.067775+0000 pim-camera-v016 kernel: T111 #17 enable gate on|run|cur=4 (was 6) hw2 b2[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:37.072171+0000 pim-camera-v016 kernel: T111 #18 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:37.127802+0000 pim-camera-v016 kernel: T111 #19 fsync->RUNNING tgt=b2 via=dual prev=0 hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:37.127940+0000 pim-camera-v016 kernel: T111 #20 fsync->RUNNING tgt=b1 via=dual prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:37.127976+0000 pim-camera-v016 kernel: T111 #21 fsync decide SIDE_PEER (was DUAL) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:37.135124+0000 pim-camera-v016 kernel: T111 #22 enable gate on|run|cur=6 (was 4) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:37.135476+0000 pim-camera-v016 kernel: T111 #23 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:37.171797+0000 pim-camera-v016 kernel: T111 #24 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:37.180414+0000 pim-camera-v016 kernel: T111 #25 enable gate on|run|cur=0 (was 2) hw2 b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:37.187749+0000 pim-camera-v016 kernel: T111 #26 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:37.235844+0000 pim-camera-v016 kernel: T111 #27 fsync->RUNNING tgt=b2 via=side-peer prev=0 STALE hw2 b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:37.235968+0000 pim-camera-v016 kernel: T111 #28 fsync decide RESTART (was SIDE_PEER) rc0 hw2 b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:37.243860+0000 pim-camera-v016 kernel: T111 #29 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:37.287850+0000 pim-camera-v016 kernel: T111 #30 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:54.448100+0000 pim-camera-v016 kernel: T111 #31 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:54.459810+0000 pim-camera-v016 kernel: T111 #32 enable gate on|run|cur=7 (was 2) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:54.791798+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:32:54.792163+0000 pim-camera-v016 kernel: T111 #33 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:32:55.016130+0000 pim-camera-v016 kernel: T111 #34 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:55.028210+0000 pim-camera-v016 kernel: T111 #35 enable gate on|run|cur=5 (was 0) hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:55.241642+0000 pim-camera-v016 kernel: T111 #36 fsync decide RESTART_CNT (was RESTART) rc1 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:56.243816+0000 pim-camera-v016 kernel: T111 #37 fsync decide DUAL (was RESTART_CNT) rc0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:57.307859+0000 pim-camera-v016 kernel: T111 #38 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:57.315770+0000 pim-camera-v016 kernel: T111 #39 enable gate on|run|cur=7 (was 5) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:32:57.639774+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:32:57.639912+0000 pim-camera-v016 kernel: T111 #40 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:03.809960+0000 pim-camera-v016 kernel: T111 #41 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:03.810299+0000 pim-camera-v016 kernel: T111 #42 enable gate on|run|cur=4 (was 6) hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:03.835901+0000 pim-camera-v016 kernel: T111 #43 fsync->RUNNING tgt=b2 via=dual prev=0 STALE hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:03.836124+0000 pim-camera-v016 kernel: T111 #44 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:03.836174+0000 pim-camera-v016 kernel: T111 #45 fsync decide SIDE_SELF (was DUAL) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:03.843810+0000 pim-camera-v016 kernel: T111 #46 enable gate on|run|cur=6 (was 4) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:03.844059+0000 pim-camera-v016 kernel: T111 #47 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:03.908379+0000 pim-camera-v016 kernel: T111 #48 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:03.919882+0000 pim-camera-v016 kernel: T111 #49 enable gate on|run|cur=0 (was 2) hw2 b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:03.920251+0000 pim-camera-v016 kernel: T111 #50 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:03.971872+0000 pim-camera-v016 kernel: T111 #51 fsync->RUNNING tgt=b1 via=side-self prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:03.972009+0000 pim-camera-v016 kernel: T111 #52 fsync decide SIDE_IDLE (was SIDE_SELF) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:03.972053+0000 pim-camera-v016 kernel: T111 #53 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:04.023823+0000 pim-camera-v016 kernel: T111 #54 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:04.027984+0000 pim-camera-v016 kernel: T111 #55 fsync decide RESTART (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:24.764087+0000 pim-camera-v016 kernel: T111 #56 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:24.767774+0000 pim-camera-v016 kernel: T111 #57 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:36:25.332045+0000 pim-camera-v016 kernel: T111 #58 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:25.335751+0000 pim-camera-v016 kernel: T111 #59 enable gate on|run|cur=7 (was 2) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:25.631778+0000 pim-camera-v016 kernel: T111 #60 fsync decide RESTART_CNT (was RESTART) rc1 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:25.671971+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:36:25.672118+0000 pim-camera-v016 kernel: T111 #61 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:26.631788+0000 pim-camera-v016 kernel: T111 #62 fsync decide DUAL (was RESTART_CNT) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:27.699791+0000 pim-camera-v016 kernel: T111 #63 fsync->RUNNING tgt=b2 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:27.703772+0000 pim-camera-v016 kernel: T111 #64 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:36:28.039771+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:36:28.039916+0000 pim-camera-v016 kernel: T111 #65 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:04.400111+0000 pim-camera-v016 kernel: T111 #66 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:04.403807+0000 pim-camera-v016 kernel: T111 #67 enable gate on|run|cur=4 (was 6) hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.415756+0000 pim-camera-v016 kernel: T111 #68 fsync->RUNNING tgt=b2 via=dual prev=0 STALE hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.416053+0000 pim-camera-v016 kernel: T111 #69 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.416136+0000 pim-camera-v016 kernel: T111 #70 fsync decide SIDE_SELF (was DUAL) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.420103+0000 pim-camera-v016 kernel: T111 #71 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:04.423772+0000 pim-camera-v016 kernel: T111 #72 enable gate on|run|cur=6 (was 4) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.503874+0000 pim-camera-v016 kernel: T111 #73 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:04.512727+0000 pim-camera-v016 kernel: T111 #74 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.515749+0000 pim-camera-v016 kernel: T111 #75 enable gate on|run|cur=0 (was 2) hw2 b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.567778+0000 pim-camera-v016 kernel: T111 #76 fsync->RUNNING tgt=b1 via=side-self prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.567937+0000 pim-camera-v016 kernel: T111 #77 fsync decide SIDE_IDLE (was SIDE_SELF) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.579753+0000 pim-camera-v016 kernel: T111 #78 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.623781+0000 pim-camera-v016 kernel: T111 #79 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:04.623939+0000 pim-camera-v016 kernel: T111 #80 fsync decide RESTART (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:23.408345+0000 pim-camera-v016 kernel: T111 #81 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:23.412685+0000 pim-camera-v016 kernel: T111 #82 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:37:23.980061+0000 pim-camera-v016 kernel: T111 #83 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:23.980100+0000 pim-camera-v016 kernel: T111 #84 enable gate on|run|cur=7 (was 2) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:24.127788+0000 pim-camera-v016 kernel: T111 #85 fsync decide RESTART_CNT (was RESTART) rc1 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:24.328087+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:37:24.328234+0000 pim-camera-v016 kernel: T111 #86 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:25.127782+0000 pim-camera-v016 kernel: T111 #87 fsync decide DUAL (was RESTART_CNT) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:26.195794+0000 pim-camera-v016 kernel: T111 #88 fsync->RUNNING tgt=b2 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:26.196002+0000 pim-camera-v016 kernel: T111 #89 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:37:26.544383+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:37:26.544541+0000 pim-camera-v016 kernel: T111 #90 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:38:04.939905+0000 pim-camera-v016 kernel: T111 #91 enable gate on|run|cur=4 (was 6) hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:04.940179+0000 pim-camera-v016 kernel: T111 #92 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:38:04.979947+0000 pim-camera-v016 kernel: T111 #93 fsync->RUNNING tgt=b2 via=dual prev=0 STALE hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:04.980161+0000 pim-camera-v016 kernel: T111 #94 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:04.980290+0000 pim-camera-v016 kernel: T111 #95 fsync decide SIDE_SELF (was DUAL) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:04.980337+0000 pim-camera-v016 kernel: T111 #96 enable gate on|run|cur=6 (was 4) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:04.980379+0000 pim-camera-v016 kernel: T111 #97 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:38:05.039896+0000 pim-camera-v016 kernel: T111 #98 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:38:05.059797+0000 pim-camera-v016 kernel: T111 #99 enable gate on|run|cur=0 (was 2) hw2 b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:05.060118+0000 pim-camera-v016 kernel: T111 #100 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:05.103781+0000 pim-camera-v016 kernel: T111 #101 fsync->RUNNING tgt=b1 via=side-self prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:05.103919+0000 pim-camera-v016 kernel: T111 #102 fsync decide SIDE_IDLE (was SIDE_SELF) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:05.111787+0000 pim-camera-v016 kernel: T111 #103 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:05.159808+0000 pim-camera-v016 kernel: T111 #104 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:05.159939+0000 pim-camera-v016 kernel: T111 #105 fsync decide RESTART (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:24.200173+0000 pim-camera-v016 kernel: T111 #106 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:24.200209+0000 pim-camera-v016 kernel: T111 #107 enable gate on|run|cur=7 (was 2) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:24.364080+0000 pim-camera-v016 kernel: T111 #108 fsync decide RESTART_CNT (was RESTART) rc1 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:24.519781+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:38:24.519892+0000 pim-camera-v016 kernel: T111 #109 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:38:24.880071+0000 pim-camera-v016 kernel: T111 #110 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:38:24.887754+0000 pim-camera-v016 kernel: T111 #111 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:38:25.363780+0000 pim-camera-v016 kernel: T111 #112 fsync decide DUAL (was RESTART_CNT) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:38:26.432084+0000 pim-camera-v016 kernel: T111 #113 fsync->RUNNING tgt=b2 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:38:26.439791+0000 pim-camera-v016 kernel: T111 #114 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:38:26.759796+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:38:26.759942+0000 pim-camera-v016 kernel: T111 #115 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:39:05.515808+0000 pim-camera-v016 kernel: T111 #116 enable gate on|run|cur=4 (was 6) hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.516052+0000 pim-camera-v016 kernel: T111 #117 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:39:05.547776+0000 pim-camera-v016 kernel: T111 #118 fsync->RUNNING tgt=b2 via=dual prev=0 STALE hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.547927+0000 pim-camera-v016 kernel: T111 #119 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.547974+0000 pim-camera-v016 kernel: T111 #120 fsync decide SIDE_SELF (was DUAL) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.559981+0000 pim-camera-v016 kernel: T111 #121 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:39:05.560099+0000 pim-camera-v016 kernel: T111 #122 enable gate on|run|cur=6 (was 4) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.620159+0000 pim-camera-v016 kernel: T111 #123 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:39:05.632163+0000 pim-camera-v016 kernel: T111 #124 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.635753+0000 pim-camera-v016 kernel: T111 #125 enable gate on|run|cur=0 (was 2) hw2 b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.683769+0000 pim-camera-v016 kernel: T111 #126 fsync->RUNNING tgt=b1 via=side-self prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.683912+0000 pim-camera-v016 kernel: T111 #127 fsync decide SIDE_IDLE (was SIDE_SELF) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.687763+0000 pim-camera-v016 kernel: T111 #128 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.736093+0000 pim-camera-v016 kernel: T111 #129 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:05.739757+0000 pim-camera-v016 kernel: T111 #130 fsync decide RESTART (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:25.124206+0000 pim-camera-v016 kernel: T111 #131 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:25.127784+0000 pim-camera-v016 kernel: T111 #132 enable gate on|run|cur=7 (was 2) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:25.243814+0000 pim-camera-v016 kernel: T111 #133 fsync decide RESTART_CNT (was RESTART) rc1 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:25.447794+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:39:25.447963+0000 pim-camera-v016 kernel: T111 #134 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:39:25.807891+0000 pim-camera-v016 kernel: T111 #135 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:39:25.811795+0000 pim-camera-v016 kernel: T111 #136 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:39:26.244081+0000 pim-camera-v016 kernel: T111 #137 fsync decide DUAL (was RESTART_CNT) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:39:27.311894+0000 pim-camera-v016 kernel: T111 #138 fsync->RUNNING tgt=b2 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:39:27.315798+0000 pim-camera-v016 kernel: T111 #139 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:39:27.660080+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:39:27.660200+0000 pim-camera-v016 kernel: T111 #140 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:06.053291+0000 pim-camera-v016 kernel: T111 #141 enable gate on|run|cur=4 (was 6) hw2 b2[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:06.055945+0000 pim-camera-v016 kernel: T111 #142 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:06.103818+0000 pim-camera-v016 kernel: T111 #143 fsync->RUNNING tgt=b2 via=dual prev=0 hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:06.103962+0000 pim-camera-v016 kernel: T111 #144 fsync->RUNNING tgt=b1 via=dual prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:06.104007+0000 pim-camera-v016 kernel: T111 #145 fsync decide SIDE_PEER (was DUAL) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:06.111864+0000 pim-camera-v016 kernel: T111 #146 enable gate on|run|cur=6 (was 4) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:06.112046+0000 pim-camera-v016 kernel: T111 #147 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:06.155903+0000 pim-camera-v016 kernel: T111 #148 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:06.164254+0000 pim-camera-v016 kernel: T111 #149 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:06.164301+0000 pim-camera-v016 kernel: T111 #150 enable gate on|run|cur=0 (was 2) hw2 b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:06.219929+0000 pim-camera-v016 kernel: T111 #151 fsync->RUNNING tgt=b2 via=side-peer prev=0 STALE hw2 b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:06.220100+0000 pim-camera-v016 kernel: T111 #152 fsync decide RESTART (was SIDE_PEER) rc0 hw2 b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:06.231818+0000 pim-camera-v016 kernel: T111 #153 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:06.271814+0000 pim-camera-v016 kernel: T111 #154 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:24.016090+0000 pim-camera-v016 kernel: T111 #155 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:24.023819+0000 pim-camera-v016 kernel: T111 #156 enable gate on|run|cur=7 (was 2) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:24.359794+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:40:24.360265+0000 pim-camera-v016 kernel: T111 #157 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:40:24.584171+0000 pim-camera-v016 kernel: T111 #158 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:24.584209+0000 pim-camera-v016 kernel: T111 #159 enable gate on|run|cur=5 (was 0) hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:24.827825+0000 pim-camera-v016 kernel: T111 #160 fsync decide RESTART_CNT (was RESTART) rc1 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:25.827799+0000 pim-camera-v016 kernel: T111 #161 fsync decide DUAL (was RESTART_CNT) rc0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:26.895770+0000 pim-camera-v016 kernel: T111 #162 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:26.900101+0000 pim-camera-v016 kernel: T111 #163 enable gate on|run|cur=7 (was 5) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:27.239776+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:40:27.239899+0000 pim-camera-v016 kernel: T111 #164 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:40:42.936876+0000 pim-camera-v016 gstApp[60963]: [GST][encoderBin.cpp:665] ch0 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:40:42.936904+0000 pim-camera-v016 gstApp[60963]: [GST][encoderBin.cpp:665] ch1 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:40:42.936915+0000 pim-camera-v016 gstApp[60963]: [GST][encoderBin.cpp:665] ch2 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:40:42.936926+0000 pim-camera-v016 gstApp[60963]: [GST][encoderBin.cpp:665] ch3 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:41:02.936442+0000 pim-camera-v016 gstApp[60963]: [GST][encoderBin.cpp:665] ch0 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:41:02.936475+0000 pim-camera-v016 gstApp[60963]: [GST][encoderBin.cpp:665] ch1 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:41:02.936491+0000 pim-camera-v016 gstApp[60963]: [GST][encoderBin.cpp:665] ch2 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:41:02.936503+0000 pim-camera-v016 gstApp[60963]: [GST][encoderBin.cpp:665] ch3 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:41:06.587532+0000 pim-camera-v016 kernel: T111 #165 enable gate on|run|cur=4 (was 6) hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.587861+0000 pim-camera-v016 kernel: T111 #166 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:41:06.627767+0000 pim-camera-v016 kernel: T111 #167 fsync->RUNNING tgt=b2 via=dual prev=0 STALE hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.628095+0000 pim-camera-v016 kernel: T111 #168 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.628150+0000 pim-camera-v016 kernel: T111 #169 fsync decide SIDE_SELF (was DUAL) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.628189+0000 pim-camera-v016 kernel: T111 #170 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:41:06.639804+0000 pim-camera-v016 kernel: T111 #171 enable gate on|run|cur=6 (was 4) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.691825+0000 pim-camera-v016 kernel: T111 #172 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:41:06.700252+0000 pim-camera-v016 kernel: T111 #173 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.707766+0000 pim-camera-v016 kernel: T111 #174 enable gate on|run|cur=0 (was 2) hw2 b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.755846+0000 pim-camera-v016 kernel: T111 #175 fsync->RUNNING tgt=b1 via=side-self prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.755999+0000 pim-camera-v016 kernel: T111 #176 fsync decide SIDE_IDLE (was SIDE_SELF) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.767798+0000 pim-camera-v016 kernel: T111 #177 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.808079+0000 pim-camera-v016 kernel: T111 #178 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:06.811767+0000 pim-camera-v016 kernel: T111 #179 fsync decide RESTART (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:24.708137+0000 pim-camera-v016 kernel: T111 #180 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:24.715789+0000 pim-camera-v016 kernel: T111 #181 enable gate on|run|cur=7 (was 2) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:24.816094+0000 pim-camera-v016 kernel: T111 #182 fsync decide RESTART_CNT (was RESTART) rc1 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:25.052561+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:41:25.063809+0000 pim-camera-v016 kernel: T111 #183 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:41:25.388001+0000 pim-camera-v016 kernel: T111 #184 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:41:25.391767+0000 pim-camera-v016 kernel: T111 #185 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:41:25.816090+0000 pim-camera-v016 kernel: T111 #186 fsync decide DUAL (was RESTART_CNT) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:41:26.884086+0000 pim-camera-v016 kernel: T111 #187 fsync->RUNNING tgt=b2 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:41:26.887768+0000 pim-camera-v016 kernel: T111 #188 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:41:27.208071+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:41:27.208196+0000 pim-camera-v016 kernel: T111 #189 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:41:43.936694+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch0 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:41:43.936724+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch1 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:41:43.936736+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch2 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:41:43.936746+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch3 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:42:03.936665+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch0 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:42:03.936702+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch1 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:42:03.936715+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch2 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:42:03.936727+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch3 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:42:33.936748+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch0 NO DATA for 60s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:42:33.936780+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch1 NO DATA for 60s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:42:33.936798+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch2 NO DATA for 60s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:42:33.936813+0000 pim-camera-v016 gstApp[67714]: [GST][encoderBin.cpp:665] ch3 NO DATA for 60s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:43:02.139850+0000 pim-camera-v016 kernel: T111 #190 enable gate on|run|cur=4 (was 6) hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.140052+0000 pim-camera-v016 kernel: T111 #191 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:02.171933+0000 pim-camera-v016 kernel: T111 #192 fsync->RUNNING tgt=b2 via=dual prev=0 STALE hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.172135+0000 pim-camera-v016 kernel: T111 #193 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.172259+0000 pim-camera-v016 kernel: T111 #194 fsync decide SIDE_SELF (was DUAL) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.172297+0000 pim-camera-v016 kernel: T111 #195 enable gate on|run|cur=6 (was 4) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.172335+0000 pim-camera-v016 kernel: T111 #196 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:02.237777+0000 pim-camera-v016 kernel: T111 #197 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:02.251752+0000 pim-camera-v016 kernel: T111 #198 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.251805+0000 pim-camera-v016 kernel: T111 #199 enable gate on|run|cur=0 (was 2) hw2 b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.303774+0000 pim-camera-v016 kernel: T111 #200 fsync->RUNNING tgt=b1 via=side-self prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.303903+0000 pim-camera-v016 kernel: T111 #201 fsync decide SIDE_IDLE (was SIDE_SELF) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.308043+0000 pim-camera-v016 kernel: T111 #202 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.356077+0000 pim-camera-v016 kernel: T111 #203 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:02.359770+0000 pim-camera-v016 kernel: T111 #204 fsync decide RESTART (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:06.904089+0000 pim-camera-v016 kernel: T111 #205 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:06.912051+0000 pim-camera-v016 kernel: T111 #206 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:43:07.476113+0000 pim-camera-v016 kernel: T111 #207 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:07.483767+0000 pim-camera-v016 kernel: T111 #208 enable gate on|run|cur=7 (was 2) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:07.763868+0000 pim-camera-v016 kernel: T111 #209 fsync decide RESTART_CNT (was RESTART) rc1 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:07.819776+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:43:07.819896+0000 pim-camera-v016 kernel: T111 #210 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:08.764077+0000 pim-camera-v016 kernel: T111 #211 fsync decide DUAL (was RESTART_CNT) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:09.827835+0000 pim-camera-v016 kernel: T111 #212 fsync->RUNNING tgt=b2 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:09.830421+0000 pim-camera-v016 kernel: T111 #213 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:10.156061+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:43:10.156202+0000 pim-camera-v016 kernel: T111 #214 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:43:25.936903+0000 pim-camera-v016 gstApp[78814]: [GST][encoderBin.cpp:665] ch0 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:43:25.936934+0000 pim-camera-v016 gstApp[78814]: [GST][encoderBin.cpp:665] ch1 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:43:25.936945+0000 pim-camera-v016 gstApp[78814]: [GST][encoderBin.cpp:665] ch2 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:43:25.936958+0000 pim-camera-v016 gstApp[78814]: [GST][encoderBin.cpp:665] ch3 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:43:45.936746+0000 pim-camera-v016 gstApp[78814]: [GST][encoderBin.cpp:665] ch0 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:43:45.936779+0000 pim-camera-v016 gstApp[78814]: [GST][encoderBin.cpp:665] ch1 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:43:45.936797+0000 pim-camera-v016 gstApp[78814]: [GST][encoderBin.cpp:665] ch2 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:43:45.936812+0000 pim-camera-v016 gstApp[78814]: [GST][encoderBin.cpp:665] ch3 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:44:04.984320+0000 pim-camera-v016 kernel: T111 #215 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:04.995776+0000 pim-camera-v016 kernel: T111 #216 enable gate on|run|cur=4 (was 6) hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.048074+0000 pim-camera-v016 kernel: T111 #217 fsync->RUNNING tgt=b2 via=dual prev=0 STALE hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.048290+0000 pim-camera-v016 kernel: T111 #218 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.048366+0000 pim-camera-v016 kernel: T111 #219 fsync decide SIDE_SELF (was DUAL) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.050642+0000 pim-camera-v016 kernel: T111 #220 enable gate on|run|cur=6 (was 4) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.050986+0000 pim-camera-v016 kernel: T111 #221 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:05.095794+0000 pim-camera-v016 kernel: T111 #222 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:05.104181+0000 pim-camera-v016 kernel: T111 #223 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.104233+0000 pim-camera-v016 kernel: T111 #224 enable gate on|run|cur=0 (was 2) hw2 b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.159768+0000 pim-camera-v016 kernel: T111 #225 fsync->RUNNING tgt=b1 via=side-self prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.159889+0000 pim-camera-v016 kernel: T111 #226 fsync decide SIDE_IDLE (was SIDE_SELF) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.172055+0000 pim-camera-v016 kernel: T111 #227 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.211805+0000 pim-camera-v016 kernel: T111 #228 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:05.215759+0000 pim-camera-v016 kernel: T111 #229 fsync decide RESTART (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:09.776090+0000 pim-camera-v016 kernel: T111 #230 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:09.776123+0000 pim-camera-v016 kernel: T111 #231 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:44:10.356106+0000 pim-camera-v016 kernel: T111 #232 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:10.356140+0000 pim-camera-v016 kernel: T111 #233 enable gate on|run|cur=7 (was 2) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:10.620230+0000 pim-camera-v016 kernel: T111 #234 fsync decide RESTART_CNT (was RESTART) rc1 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:10.695770+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:44:10.695885+0000 pim-camera-v016 kernel: T111 #235 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:11.619863+0000 pim-camera-v016 kernel: T111 #236 fsync decide DUAL (was RESTART_CNT) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:12.688079+0000 pim-camera-v016 kernel: T111 #237 fsync->RUNNING tgt=b2 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:12.688213+0000 pim-camera-v016 kernel: T111 #238 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:13.031800+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:44:13.031954+0000 pim-camera-v016 kernel: T111 #239 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:44:28.936815+0000 pim-camera-v016 gstApp[85761]: [GST][encoderBin.cpp:665] ch0 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:44:28.936853+0000 pim-camera-v016 gstApp[85761]: [GST][encoderBin.cpp:665] ch1 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:44:28.936865+0000 pim-camera-v016 gstApp[85761]: [GST][encoderBin.cpp:665] ch2 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:44:28.936875+0000 pim-camera-v016 gstApp[85761]: [GST][encoderBin.cpp:665] ch3 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:44:48.936661+0000 pim-camera-v016 gstApp[85761]: [GST][encoderBin.cpp:665] ch0 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:44:48.936696+0000 pim-camera-v016 gstApp[85761]: [GST][encoderBin.cpp:665] ch1 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:44:48.936715+0000 pim-camera-v016 gstApp[85761]: [GST][encoderBin.cpp:665] ch2 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:44:48.936733+0000 pim-camera-v016 gstApp[85761]: [GST][encoderBin.cpp:665] ch3 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:45:08.608556+0000 pim-camera-v016 kernel: T111 #240 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:08.615818+0000 pim-camera-v016 kernel: T111 #241 enable gate on|run|cur=4 (was 6) hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.639808+0000 pim-camera-v016 kernel: T111 #242 fsync->RUNNING tgt=b2 via=dual prev=0 STALE hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.640001+0000 pim-camera-v016 kernel: T111 #243 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.640045+0000 pim-camera-v016 kernel: T111 #244 fsync decide SIDE_SELF (was DUAL) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.643656+0000 pim-camera-v016 kernel: T111 #245 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:08.648098+0000 pim-camera-v016 kernel: T111 #246 enable gate on|run|cur=6 (was 4) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.716060+0000 pim-camera-v016 kernel: T111 #247 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:08.724252+0000 pim-camera-v016 kernel: T111 #248 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.727750+0000 pim-camera-v016 kernel: T111 #249 enable gate on|run|cur=0 (was 2) hw2 b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.779754+0000 pim-camera-v016 kernel: T111 #250 fsync->RUNNING tgt=b1 via=side-self prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.779888+0000 pim-camera-v016 kernel: T111 #251 fsync decide SIDE_IDLE (was SIDE_SELF) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.788042+0000 pim-camera-v016 kernel: T111 #252 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.831780+0000 pim-camera-v016 kernel: T111 #253 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:08.831914+0000 pim-camera-v016 kernel: T111 #254 fsync decide RESTART (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:11.835908+0000 pim-camera-v016 kernel: T111 #255 fsync decide RESTART (was NONE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:12.468127+0000 pim-camera-v016 kernel: T111 #1 fsync decide SINGLE_IDLE (was NONE) rc0 hw1 b1[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0]
+2026-10-16T09:45:12.468182+0000 pim-camera-v016 kernel: T111 #2 enable gate on|run|cur=0 (was ffffffff) hw1 b1[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0]
+2026-10-16T09:45:12.468977+0000 pim-camera-v016 kernel: T111 #3 enable gate on|run|cur=0 (was ffffffff) hw1 b2[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0] b1[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0]
+2026-10-16T09:45:12.479785+0000 pim-camera-v016 kernel: T111 #4 fsync decide SIDE_IDLE (was SINGLE_IDLE) rc0 hw1 b1[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0] b2[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0]
+2026-10-16T09:45:27.924133+0000 pim-camera-v016 kernel: T111 #5 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:27.927770+0000 pim-camera-v016 kernel: T111 #6 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:45:27.927878+0000 pim-camera-v016 kernel: T111 #7 fsync decide SIDE_PEER (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:28.504082+0000 pim-camera-v016 kernel: T111 #8 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:28.507753+0000 pim-camera-v016 kernel: T111 #9 enable gate on|run|cur=5 (was 0) hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:28.995799+0000 pim-camera-v016 kernel: T111 #10 fsync->RUNNING tgt=b2 via=side-peer prev=0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:28.995921+0000 pim-camera-v016 kernel: T111 #11 fsync decide DUAL (was SIDE_PEER) rc0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:28.999776+0000 pim-camera-v016 kernel: T111 #12 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:29.319772+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:45:29.319902+0000 pim-camera-v016 kernel: T111 #13 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:30.064066+0000 pim-camera-v016 kernel: T111 #14 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:30.064244+0000 pim-camera-v016 kernel: T111 #15 enable gate on|run|cur=7 (was 5) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:30.411761+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:45:30.411839+0000 pim-camera-v016 kernel: T111 #16 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:45:46.936415+0000 pim-camera-v016 gstApp[93121]: [GST][encoderBin.cpp:665] ch0 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:45:46.936448+0000 pim-camera-v016 gstApp[93121]: [GST][encoderBin.cpp:665] ch1 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:45:46.936476+0000 pim-camera-v016 gstApp[93121]: [GST][encoderBin.cpp:665] ch2 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:45:46.936495+0000 pim-camera-v016 gstApp[93121]: [GST][encoderBin.cpp:665] ch3 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:46:06.936704+0000 pim-camera-v016 gstApp[93121]: [GST][encoderBin.cpp:665] ch0 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:46:06.936736+0000 pim-camera-v016 gstApp[93121]: [GST][encoderBin.cpp:665] ch1 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:46:06.936748+0000 pim-camera-v016 gstApp[93121]: [GST][encoderBin.cpp:665] ch2 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:46:06.936759+0000 pim-camera-v016 gstApp[93121]: [GST][encoderBin.cpp:665] ch3 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:46:17.419750+0000 pim-camera-v016 kernel: T111 #17 enable gate on|run|cur=0 (was 6) hw2 b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:17.424461+0000 pim-camera-v016 kernel: T111 #18 enable gate on|run|cur=4 (was 6) hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.472148+0000 pim-camera-v016 kernel: T111 #19 fsync->RUNNING tgt=b2 via=dual prev=0 STALE hw2 b1[st1 on0 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.472365+0000 pim-camera-v016 kernel: T111 #20 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.472436+0000 pim-camera-v016 kernel: T111 #21 fsync decide SIDE_SELF (was DUAL) rc0 hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.472544+0000 pim-camera-v016 kernel: T111 #22 enable gate on|run|cur=2 (was 0) hw2 b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:17.476045+0000 pim-camera-v016 kernel: T111 #23 enable gate on|run|cur=6 (was 4) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.524099+0000 pim-camera-v016 kernel: T111 #24 s_stream(0) ret=0 hw2 b2[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:17.535757+0000 pim-camera-v016 kernel: T111 #25 enable gate on|run|cur=0 (was 2) hw2 b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.544037+0000 pim-camera-v016 kernel: T111 #26 enable gate on|run|cur=0 (was 6) hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.587827+0000 pim-camera-v016 kernel: T111 #27 fsync->RUNNING tgt=b1 via=side-self prev=0 STALE hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.587979+0000 pim-camera-v016 kernel: T111 #28 fsync decide SIDE_IDLE (was SIDE_SELF) rc0 hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.595778+0000 pim-camera-v016 kernel: T111 #29 enable gate on|run|cur=2 (was 0) hw2 b1[st0 on0 rs0 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.640060+0000 pim-camera-v016 kernel: T111 #30 s_stream(0) ret=0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:17.643740+0000 pim-camera-v016 kernel: T111 #31 fsync decide RESTART (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0] b2[st0 on0 rs1 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:20.647931+0000 pim-camera-v016 kernel: T111 #32 fsync decide RESTART (was NONE) rc0 hw2 b1[st0 on0 rs1 i2 e2 f1 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:21.283889+0000 pim-camera-v016 kernel: T111 #1 fsync decide SINGLE_IDLE (was NONE) rc0 hw1 b1[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0]
+2026-10-16T09:46:21.283935+0000 pim-camera-v016 kernel: T111 #2 enable gate on|run|cur=0 (was ffffffff) hw1 b1[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0]
+2026-10-16T09:46:21.284817+0000 pim-camera-v016 kernel: T111 #3 enable gate on|run|cur=0 (was ffffffff) hw1 b2[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0]
+2026-10-16T09:46:21.295759+0000 pim-camera-v016 kernel: T111 #4 fsync decide SIDE_IDLE (was SINGLE_IDLE) rc0 hw1 b1[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0] b2[st0 on0 rs0 i0 e0 f0 hv0 ie0 ce0 cur0]
+2026-10-16T09:46:36.700105+0000 pim-camera-v016 kernel: T111 #5 s_stream(1) ret=0 hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:36.712099+0000 pim-camera-v016 kernel: T111 #6 enable gate on|run|cur=5 (was 0) hw2 b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0]
+2026-10-16T09:46:36.712203+0000 pim-camera-v016 kernel: T111 #7 fsync decide SIDE_PEER (was SIDE_IDLE) rc0 hw2 b1[st0 on0 rs0 i2 e2 f0 hv1 ie2 ce0 cur0] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:37.272186+0000 pim-camera-v016 kernel: T111 #8 s_stream(1) ret=0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:37.272236+0000 pim-camera-v016 kernel: T111 #9 enable gate on|run|cur=5 (was 0) hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:37.780055+0000 pim-camera-v016 kernel: T111 #10 fsync->RUNNING tgt=b2 via=side-peer prev=0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:37.780168+0000 pim-camera-v016 kernel: T111 #11 fsync decide DUAL (was SIDE_PEER) rc0 hw2 b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1] b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:37.788104+0000 pim-camera-v016 kernel: T111 #12 enable gate on|run|cur=7 (was 5) hw2 b2[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:38.123770+0000 pim-camera-v016 kernel: [I2C:2][max9296.c:6536] CSI output enabled
+2026-10-16T09:46:38.123939+0000 pim-camera-v016 kernel: T111 #13 enable gate on|run|cur=6 (was 7) hw2 b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b1[st1 on1 rs0 i2 e2 f0 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:38.844058+0000 pim-camera-v016 kernel: T111 #14 fsync->RUNNING tgt=b1 via=dual prev=0 hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:38.851755+0000 pim-camera-v016 kernel: T111 #15 enable gate on|run|cur=7 (was 5) hw2 b1[st1 on1 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:39.175752+0000 pim-camera-v016 kernel: [I2C:1][max9296.c:6536] CSI output enabled
+2026-10-16T09:46:39.175856+0000 pim-camera-v016 kernel: T111 #16 enable gate on|run|cur=6 (was 7) hw2 b1[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1] b2[st1 on0 rs0 i2 e2 f1 hv1 ie2 ce2 cur1]
+2026-10-16T09:46:55.936919+0000 pim-camera-v016 gstApp[100820]: [GST][encoderBin.cpp:665] ch0 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:46:55.936954+0000 pim-camera-v016 gstApp[100820]: [GST][encoderBin.cpp:665] ch1 NO DATA for 10s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:46:55.936973+0000 pim-camera-v016 gstApp[100820]: [GST][encoderBin.cpp:665] ch2 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:46:55.936990+0000 pim-camera-v016 gstApp[100820]: [GST][encoderBin.cpp:665] ch3 NO DATA for 10s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:47:15.936584+0000 pim-camera-v016 gstApp[100820]: [GST][encoderBin.cpp:665] ch0 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:47:15.936614+0000 pim-camera-v016 gstApp[100820]: [GST][encoderBin.cpp:665] ch1 NO DATA for 30s - zero frames reached enc-queue (csi0 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:47:15.936626+0000 pim-camera-v016 gstApp[100820]: [GST][encoderBin.cpp:665] ch2 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.
+2026-10-16T09:47:15.936638+0000 pim-camera-v016 gstApp[100820]: [GST][encoderBin.cpp:665] ch3 NO DATA for 30s - zero frames reached enc-queue (csi1 source not delivering). This channel's sink cannot preroll, which stalls the whole pipeline in PAUSED and produces no files.

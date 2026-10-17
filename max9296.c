@@ -648,7 +648,6 @@ struct max9296_dev {
   unsigned int fps;
   unsigned int rotate;
   unsigned int enable;
-  unsigned int restart;
 
   // for fsync
   struct {
@@ -5816,7 +5815,13 @@ static bool max9296_stream_epoch_current(const struct max9296_dev *sensor) {
 /* Final FSYNC authority.  max9296_power_lock is also the epoch mutation lock,
  * so no power transition/removal invalidation can land between the predicate
  * and either edge of a pulse.  Callers pass the stream(s) whose current epoch
- * authorizes this one shared-board pulse. */
+ * authorizes this one shared-board pulse.
+ *
+ * state.fsync = RUNNING is published here, under the same lock, and only for
+ * the streams that authorized the pulse.  Publishing it after the unlock and the
+ * low-phase sleep let a STREAMOFF land in between: its IDLE was overwritten, the
+ * stopped stream stayed RUNNING, and the enable worker of its next STREAMON
+ * wrote 0x0313 before any pulse of that stream had gone out (#111). */
 static bool max9296_fsync_pulse_current(
     struct max9296_dev *gpio_owner, struct max9296_dev *primary,
     struct max9296_dev *secondary, unsigned int high, unsigned int low) {
@@ -5833,6 +5838,9 @@ static bool max9296_fsync_pulse_current(
     gpiod_set_value_cansleep(gpio_owner->fsync_gpio, 1);
     usleep_range(high, high);
     gpiod_set_value_cansleep(gpio_owner->fsync_gpio, 0);
+    primary->state.fsync = MAX9296_STATE_RUNNING;
+    if (secondary)
+      secondary->state.fsync = MAX9296_STATE_RUNNING;
   }
   mutex_unlock(&max9296_power_lock);
 
@@ -5872,7 +5880,6 @@ static void max9296_stream_commit_locked(struct max9296_dev *sensor) {
 
   sensor->stream_commit_epoch = READ_ONCE(max9296_hw_epoch);
   sensor->stream_on = 1;
-  sensor->restart = 0;
 }
 
 static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
@@ -6043,9 +6050,10 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     sensor->streaming = false;
     sensor->stream_on = 0;
     sensor->stream_commit_epoch = 0;
+    /* Only this stream's own state.  The peer may still be streaming on the
+     * shared FSYNC net, and clearing its RUNNING would hold back its pulses for
+     * the warm-up second in max9296_fsync() (#111). */
     sensor->state.fsync = MAX9296_STATE_IDLE;
-    if (sensor->shared.sensor != NULL)
-      sensor->shared.sensor->state.fsync = MAX9296_STATE_IDLE;
     ret = max9296_disable_stream_mipi(sensor);
     mutex_unlock(&max9296_power_lock);
 
@@ -6092,8 +6100,6 @@ static int max9296_s_stream(struct v4l2_subdev *sd, int enable) {
     if (was_streaming && !ret) {
       max9296_drop_fsync_contract_locked(sensor);
     }
-
-    sensor->restart = 1;
   }
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s end", KEYWORD,
@@ -6155,13 +6161,6 @@ static int max9296_fsync(void *data) {
    * freezing it meant runtime fps changes could never take effect.
    */
   unsigned int high = 1000, low = 0, low_fps = 0;
-  /*
-   * Per-thread, not static: it carries across loop iterations of THIS thread
-   * only. As a function-scope static it would be shared by every FSYNC thread
-   * in the system - harmless while max9296_0 owns the sole fsync-gpios, but a
-   * silent cross-instance coupling the moment a second one is given one.
-   */
-  unsigned int restart_cnt = 0;
   if (debug)
     printk(KERN_INFO "[%s:%d][%s:%d] %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, __FUNCTION__);
@@ -6171,17 +6170,13 @@ static int max9296_fsync(void *data) {
     if (kthread_should_stop())
       break;
 
-    if (sensor->restart == 1) {
-      restart_cnt = 1;
-      usleep_range(300000, 300000);
-      continue;
-    }
-
-    if (restart_cnt > 0) {
-      --restart_cnt;
-      usleep_range(1000000, 1000000);
-      continue;
-    }
+    /*
+     * There is no separate restart hold.  Every branch below pulses only for
+     * streams whose current epoch is committed, and a stream stopped by
+     * STREAMOFF starts again from IDLE, so it gets the warm-up second before
+     * its first pulse.  The hold keyed on the GPIO owner's stop alone also kept
+     * the peer from getting any pulse while the owner was stopped (#111).
+     */
 
     // single mode
     if (sensor->shared.sensor == NULL) {
@@ -6199,9 +6194,7 @@ static int max9296_fsync(void *data) {
                  __FUNCTION__, low_fps, low, high);
         }
 
-        if (!max9296_fsync_pulse_current(sensor, sensor, NULL, high, low))
-          continue;
-        sensor->state.fsync = MAX9296_STATE_RUNNING;
+        max9296_fsync_pulse_current(sensor, sensor, NULL, high, low);
       } else {
         usleep_range(10000, 11000);
       }
@@ -6229,11 +6222,8 @@ static int max9296_fsync(void *data) {
                    __FUNCTION__, low_fps, low, high);
           }
 
-          if (!max9296_fsync_pulse_current(
-                  sensor, sensor, sensor->shared.sensor, high, low))
-            continue;
-          sensor->shared.sensor->state.fsync = sensor->state.fsync =
-              MAX9296_STATE_RUNNING;
+          max9296_fsync_pulse_current(sensor, sensor, sensor->shared.sensor,
+                                      high, low);
         } else {
           usleep_range(10000, 11000);
         }
@@ -6292,14 +6282,10 @@ static int max9296_fsync(void *data) {
           }
 
           if (fsync_state == &sensor->state.fsync)
-            start = max9296_fsync_pulse_current(
-                sensor, sensor, NULL, high, low);
+            max9296_fsync_pulse_current(sensor, sensor, NULL, high, low);
           else
-            start = max9296_fsync_pulse_current(
-                sensor, sensor->shared.sensor, NULL, high, low);
-          if (!start)
-            continue;
-          *fsync_state = MAX9296_STATE_RUNNING;
+            max9296_fsync_pulse_current(sensor, sensor->shared.sensor, NULL,
+                                        high, low);
         }
       }
     }
@@ -7908,8 +7894,8 @@ static int max9296_remove(struct i2c_client *client) {
     }
     /* thread_en has no raw-peer access: keep it live instead of creating an
      * unnecessary stop/restart failure window. */
-    /* Non-worker peer paths (power/reset and STREAMOFF) dereference the same
-     * raw link under max9296_power_lock. Wait for any admitted path, then
+    /* Non-worker peer paths (power/reset) dereference the same raw link
+     * under max9296_power_lock. Wait for any admitted path, then
      * withdraw under the established power -> shared order. */
     mutex_lock(&max9296_power_lock);
     mutex_lock(&max9296_shared_lock);
