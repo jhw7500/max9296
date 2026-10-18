@@ -138,6 +138,21 @@ static int max9296_apply_cached_controls(struct max9296_dev *s) {
 static void max9296_mark_prepare_stale_locked(struct max9296_dev *s) {
   s->prepare_state = 4;
 }
+/* #110: the extracted function resets the AP1302 boot record when a cold
+ * attempt starts and runs the post_config check.  Counting both lets the checks
+ * below tell a cold attempt from a refused one, which must keep the record. */
+#define MAX9296_ISP_BOOT_POST_CONFIG 2
+static unsigned boot_begins, boot_checks, boot_error;
+static u64 boot_begin_epoch;
+static void max9296_isp_boot_begin_locked(struct max9296_dev *s,
+    const struct max9296_hw_fingerprint *fp, u64 epoch) {
+  (void)s; (void)fp; boot_begins++; boot_begin_epoch = epoch;
+}
+static int max9296_isp_boot_check_locked(struct max9296_dev *s, int stage) {
+  (void)s;
+  if (stage == MAX9296_ISP_BOOT_POST_CONFIG) boot_checks++;
+  return -(int)boot_error;
+}
 ''' + tables + '\n' + hardware + r'''
 static bool max9296_fingerprint_equal(const struct max9296_hw_fingerprint *a,
                                      const struct max9296_hw_fingerprint *b) {
@@ -194,8 +209,9 @@ static unsigned checks, failures;
 static void reset_bus(void) {
   addresses[0] = addresses[1] = 0x40;
   visible = 3;
-  writes = fw_loads = fail_write = 0;
+  writes = fw_loads = fail_write = boot_begins = boot_checks = 0;
   preflight_error = fw_error = post_error = crop_error = control_error = 0;
+  boot_error = 0;
 }
 static struct max9296_dev fixture(unsigned enable) {
   static struct i2c_client client;
@@ -228,6 +244,9 @@ int main(void) {
       CHECK(s.hardware_valid && s.initialized_epoch == max9296_hw_epoch);
       unsigned before = writes;
       CHECK(fw_loads == 1);
+      /* #110: one record reset and one post_config check per cold attempt. */
+      CHECK(boot_begins == 1 && boot_checks == 1);
+      CHECK(boot_begin_epoch == max9296_hw_epoch);
       /* Same session retains a channel override without cold initialization. */
       s.ctrl_cache.exposure_override_mask = 2;
       s.ctrl_cache.ch1 = 5000;
@@ -247,11 +266,15 @@ int main(void) {
       changed.mode = &modes[(mode + 1) % ARRAY_SIZE(modes)];
       CHECK(max9296_prepare_hardware_locked(&s, &changed) == -ESTALE);
       CHECK(writes == before && fw_loads == 1);
+      /* #110: warm reuse and every -ESTALE refusal above kept the record of
+       * the attempt that ran. */
+      CHECK(boot_begins == 1 && boot_checks == 1);
       max9296_hw_epoch++;
       reset_bus();
       CHECK(max9296_prepare_request(&s, &fp, 103) == 0);
       CHECK(s.hardware_valid && !s.ctrl_cache.exposure_reinit_required);
       CHECK(s.initialized_epoch == max9296_hw_epoch && fw_loads == 1);
+      CHECK(boot_begins == 1 && boot_begin_epoch == max9296_hw_epoch);
     }
   }
   /* With no override to discard, a new process still reuses current hardware. */
@@ -263,21 +286,26 @@ int main(void) {
   CHECK(max9296_prepare_request(&s, &fp, 201) == 0);
   CHECK(s.hardware_valid && writes == before && fw_loads == 1);
 
-  /* An initial table/firmware/post/crop/control failure may have changed HW. */
-  for (unsigned stage = 0; stage < 5; stage++) {
+  /* An initial table/firmware/post/crop/control failure may have changed HW.
+   * Stage 5 is #110's post_config boot check rejecting an ISP. */
+  for (unsigned stage = 0; stage < 6; stage++) {
     s = fixture(3);
     if (stage == 0) fail_write = 25; /* After the serializer address remap. */
     if (stage == 1) fw_error = EIO;
     if (stage == 2) post_error = EIO;
     if (stage == 3) crop_error = EIO;
     if (stage == 4) control_error = EIO;
+    if (stage == 5) boot_error = EIO;
     CHECK(max9296_prepare_hardware_locked(&s, &fp) == -EIO);
     CHECK(!s.hardware_valid && !s.ctrl_cache.firmware_ready);
+    if (stage == 5) CHECK(s.state.enable == MAX9296_STATE_FAILED);
     before = writes;
     unsigned loads = fw_loads;
+    unsigned begins = boot_begins;
     fail_write = fw_error = post_error = crop_error = control_error = 0;
+    boot_error = 0;
     CHECK(max9296_prepare_hardware_locked(&s, &fp) == -ESTALE);
-    CHECK(writes == before && fw_loads == loads);
+    CHECK(writes == before && fw_loads == loads && boot_begins == begins);
     max9296_hw_epoch++;
     reset_bus();
     CHECK(max9296_prepare_hardware_locked(&s, &fp) == 0);
@@ -286,7 +314,7 @@ int main(void) {
   s = fixture(3);
   preflight_error = EINVAL;
   CHECK(max9296_prepare_hardware_locked(&s, &fp) == -EINVAL);
-  CHECK(writes == 0 && fw_loads == 0);
+  CHECK(writes == 0 && fw_loads == 0 && boot_begins == 0);
   preflight_error = 0;
   CHECK(max9296_prepare_hardware_locked(&s, &fp) == 0);
 
@@ -298,7 +326,7 @@ int main(void) {
   s.pwdn_released = false;
   max9296_hw_epoch++;
   CHECK(max9296_prepare_hardware_locked(&s, &fp) == -ENODEV);
-  CHECK(writes == 0 && fw_loads == 0);
+  CHECK(writes == 0 && fw_loads == 0 && boot_begins == 0);
 
   s = fixture(3);
   max9296_hw_epoch++;

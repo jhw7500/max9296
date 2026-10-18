@@ -225,6 +225,62 @@ dual-wide는 한 CSI 입력의 공유 frame domain이다. 한쪽 link가 끊기�
 멈추면 두 채널 모두 `stream_domain_active_mask`에서 빠진다. 반대편 link의 raw
 physical bit와 block evidence는 계속 보존한다.
 
+### `isp_boot` — AP1302 기동 확인 결과 (schema 1에 가산, #110)
+
+최상위 마지막에 `"isp_boot":{"status":...,"epoch_current":...,"stage":...,"channels":[...]}`가
+있다. `pair`와 같은 가산 필드라 schema 번호는 1 그대로다.
+
+**이 필드는 샘플러가 읽은 값이 아니다.** 마지막 콜드 초기화가 prepare 경로에서 기록한
+결과를 `sensor->lock` 아래에서 복사해 낼 뿐이고, 이 필드 때문에 ISP를 읽지 않는다.
+위 안전 계약은 그대로다.
+
+펌웨어는 브로드캐스트 주소 하나로 두 ISP에 함께 내려가므로, 쓰기가 모두 ACK되어도 한 ISP가
+기동하지 않을 수 있다. 그래서 콜드 초기화는 ISP마다 R0x2000(`PREVIEW_WIDTH`)을 세 지점에서
+한 번씩 읽는다.
+
+| stage | 위치 | 실패로 보는 값 |
+| --- | --- | --- |
+| `pre_download` | 펌웨어 다운로드 시작 직전 | 읽기 오류, `0` |
+| `post_download` | 다운로드 끝(`0x6002` 쓰기와 100 ms 대기) 뒤 | 읽기 오류, `0`, ROM 값 `640`(0x0280) |
+| `post_config` | 프리뷰 설정 뒤 | 읽기 오류, 써 넣은 ISP당 폭과 다른 값 |
+
+`post_download`·`post_config`는 실패로 판정될 읽기만 10 ms 간격으로 최대 10번 다시 읽는다.
+정상 ISP는 지점마다 한 번만 읽힌다. 한 단계는 검사 대상 ISP를 모두 판정한 뒤 실패한다.
+
+| status | 뜻 |
+| --- | --- |
+| `OK` | 세 단계를 모두 통과 |
+| `FAILED` | `stage`에서 ISP 하나 이상이 거부됨. 그 prepare/STREAMON은 0이 아닌 errno로 끝났다 |
+| `INCOMPLETE` | 다른 오류로 `post_config` 전에 시도가 끝남. `stage`는 마지막으로 통과한 단계, 없으면 `none` |
+| `NOT_RUN` | 이 인스턴스에서 콜드 초기화가 아직 돌지 않았다. `stage`는 `none` |
+
+`epoch_current`는 결과가 현재 보드 전원 epoch의 것인지를 말한다. 결과는 콜드 시도가
+시작될 때만 지워지므로, 같은 epoch의 `ESTALE` 거부나 재사용 prepare 뒤에도 실제로 돈
+시도의 결과가 남는다. 하드 리셋 뒤 다음 콜드 초기화 전에는 이전 결과가
+`epoch_current:false`로 보인다 — 현재 실패로 읽지 않는다.
+
+`channels[]` 항목은 `{"channel":N,"checked":bool,"errno":E,"value":V}`다. `channel`
+번호는 위 `channels[]`와 같다. `checked:false`는 그 채널 ISP를 읽지 않았다는
+뜻이다 — single mode의 비활성 채널이거나, 시도가 `pre_download` 검사에 닿기 전에 끝난 경우다. `value`는 마지막으로 읽은 R0x2000(10진)이고, 읽지
+못했으면 `null`이다.
+
+한계:
+
+- `post_config`는 ISP당 폭이 1920(펌웨어 기본값과 같다 — 이슈 #110 인용, 미검증)이나
+  640(ROM 값)인 모드에서는 설정 미반영을 가리지 못한다. 기동 실패는 앞 단계가 잡는다.
+- `firmware=` 모듈 파라미터로 기본 폭이 640인 펌웨어를 쓰면 `post_download`가 매번 실패한다.
+- single mode(주소 0x3c)는 192.168.214.4 의 1920x1080 설정에서 10 부팅 모두 통과했다
+  (`artifacts/board-20261018-issue110/`). 다운로드 전·후 단계값 자체는 기록하지 않았고, dual-wide
+  (0x11/0x12)는 실기로 돌리지 않았다.
+
+커널 로그: 거부된 ISP마다 `AP1302 boot check failed: channel N stage S addr 0xAA R0x2000
+0xVVVV errno E` 한 줄(err), 통과하면 `post_config` 뒤 검사한 ISP마다
+`AP1302 boot check passed: ...` 한 줄(notice)이 나간다. 콜드 초기화 로그에 통과 줄이
+없으면 검사가 돌지 않은 것이다.
+
+**exporter는 이 필드를 전파하지 않는다.** 현재 이 결과를 보는 경로는 `health_raw` 직접
+읽기와 커널 로그 두 가지다.
+
 ## 사용법
 
 한 번 확인:

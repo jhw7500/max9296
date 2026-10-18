@@ -1,0 +1,4 @@
+09:36:36 begin N=10 new=546181C5BA2B42CBC2B4094 sha=cfa7752e4d79
+09:36:37 pre: 7F99CB433CAC065390A1E71 e6decd0e0f93 healthy 
+09:37:29 orig#1 boot=9bfb3463 src=7F99CB433CAC065390A1E71 cam_state=healthy== 1-0048 pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:37:29 orig#1 중단: cam_state != healthy
