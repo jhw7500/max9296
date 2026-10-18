@@ -27,7 +27,8 @@ DEFINES = (
 )
 FUNCTIONS = (
     "max9296_isp_output_width", "max9296_isp_boot_stage_name",
-    "max9296_isp_boot_status_name", "max9296_isp_boot_value_ok",
+    "max9296_isp_boot_status_name", "max9296_isp_boot_reported_stage",
+    "max9296_isp_boot_value_ok",
     "max9296_isp_boot_begin_locked", "max9296_isp_boot_check_locked",
 )
 
@@ -147,10 +148,14 @@ int main(void) {
   CHECK(s.isp_boot.expected_width == 1280 && s.isp_boot.stage == -1);
   CHECK(s.isp_boot.err[0] == 0 && !s.isp_boot.failed);
   CHECK(!strcmp(max9296_isp_boot_status_name(&s.isp_boot), "INCOMPLETE"));
+  CHECK(!strcmp(max9296_isp_boot_reported_stage(&s.isp_boot), "none"));
   s = begin(&single_720, 2);
   CHECK(!s.isp_boot.dual && s.isp_boot.mask == 2 && s.isp_boot.expected_width == 1280);
+  /* A record probe zeroed and no cold attempt touched: stage 0 is
+   * pre_download, but health_raw must not report a check that never ran. */
   struct max9296_isp_boot never = {0};
   CHECK(!strcmp(max9296_isp_boot_status_name(&never), "NOT_RUN"));
+  CHECK(!strcmp(max9296_isp_boot_reported_stage(&never), "none"));
 
   /* Healthy dual boot: one read per ISP per stage, no sleep, and pass lines
    * only after post_config. */
@@ -168,6 +173,7 @@ int main(void) {
   CHECK(reads[0] == 3 && reads[1] == 3 && reads[2] == 0 && sleeps == 0);
   CHECK(err_lines == 0 && notice_lines == 2);
   CHECK(!strcmp(max9296_isp_boot_status_name(&s.isp_boot), "OK"));
+  CHECK(!strcmp(max9296_isp_boot_reported_stage(&s.isp_boot), "post_config"));
   CHECK(s.isp_boot.value[0] == 1280 && s.isp_boot.value_valid[1]);
 
   /* Type B: an ISP that does not answer before the download fails at once,
@@ -277,6 +283,9 @@ def source_checks(source: str) -> list:
          "health_raw copies the record and never re-reads an ISP for it"),
         (ordered(show, "mutex_unlock(&sensor->lock);", "\\\"isp_boot\\\":"),
          "health_raw prints the record after dropping the lock"),
+        ("max9296_isp_boot_reported_stage(&sample.isp_boot)" in show
+         and "max9296_isp_boot_stage_name(" not in show,
+         "health_raw reports stage through the never-run-aware helper"),
     ]
 
 

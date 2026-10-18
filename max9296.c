@@ -4723,6 +4723,13 @@ max9296_isp_boot_status_name(const struct max9296_isp_boot *boot) {
   return "INCOMPLETE";
 }
 
+/* The stage health_raw reports.  A record no cold attempt has touched is
+ * zeroed by probe, and its stage 0 would otherwise read as pre_download. */
+static const char *
+max9296_isp_boot_reported_stage(const struct max9296_isp_boot *boot) {
+  return boot->epoch ? max9296_isp_boot_stage_name(boot->stage) : "none";
+}
+
 /* Only values a failed boot is known to leave are refused, so a firmware whose
  * default width differs still passes post_download.  A firmware that defaults
  * to 640 would not: that is the one value the ROM and a running image share,
@@ -7614,7 +7621,7 @@ static ssize_t sysfs_health_raw_show(struct device *dev,
                    "\"stage\":\"%s\",\"channels\":[",
                    max9296_isp_boot_status_name(&sample.isp_boot),
                    sample.isp_boot_current ? "true" : "false",
-                   max9296_isp_boot_stage_name(sample.isp_boot.stage));
+                   max9296_isp_boot_reported_stage(&sample.isp_boot));
   for (i = 0; i < ARRAY_SIZE(sample.isp_boot.err); i++) {
     char value[16];
 

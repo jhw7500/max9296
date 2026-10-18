@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **관찰 가능한 차이** (코드 기준):
   - 기동하지 않은 ISP 가 있으면 prepare(와 legacy STREAMON 의 콜드 초기화)가 실패한다.
     이전에는 성공하고 출력만 0 이었다.
-  - 정상 콜드 초기화에 ISP당 I2C 읽기 3회가 더해진다. 소요 증가는 아직 재지 않았다.
+  - 정상 콜드 초기화에 ISP당 I2C 읽기 3회가 더해진다. 소요 증가는 아래 실기 검증에서 약 2–3 ms 로
+    추정했다.
   - `firmware=` 로 기본 폭이 640 인 펌웨어를 쓰면 매번 다운로드 뒤 단계에서 실패한다.
 - **검증**: 호스트 테스트 `tests/max9296_isp_boot_test.py`(단계별 판정, 재읽기 예산, 두 ISP
   모두 판정, 단일 모드 주소, 다운로드 전후 배치와 `health_raw` 무읽기 계약)와

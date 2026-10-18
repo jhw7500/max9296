@@ -252,7 +252,7 @@ physical bit와 block evidence는 계속 보존한다.
 | `OK` | 세 단계를 모두 통과 |
 | `FAILED` | `stage`에서 ISP 하나 이상이 거부됨. 그 prepare/STREAMON은 0이 아닌 errno로 끝났다 |
 | `INCOMPLETE` | 다른 오류로 `post_config` 전에 시도가 끝남. `stage`는 마지막으로 통과한 단계, 없으면 `none` |
-| `NOT_RUN` | 이 인스턴스에서 콜드 초기화가 아직 돌지 않았다 |
+| `NOT_RUN` | 이 인스턴스에서 콜드 초기화가 아직 돌지 않았다. `stage`는 `none` |
 
 `epoch_current`는 결과가 현재 보드 전원 epoch의 것인지를 말한다. 결과는 콜드 시도가
 시작될 때만 지워지므로, 같은 epoch의 `ESTALE` 거부나 재사용 prepare 뒤에도 실제로 돈
