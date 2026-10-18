@@ -1,0 +1,27 @@
+1b3ad5d9-3cde-46b9-9b1e-eac75c3f5582
+7F99CB433CAC065390A1E71
+76.96 175.20
+healthy
+
+boot_wall 2026-10-18T16:48:47
+== 1-0048
+state=FAILED generation=48283849090080 epoch=5 mode=dual-wide table=dual width=2560 height=720 fps=15 code=0x2006 enable=3 crop_enable=0 errno=-6 worker_errno=0 lease=0 match=0
+{"schema":1,"adapter":1,"sequence":1,"observed_monotonic_ms":76991,"busy":false,"mode":"dual-wide","streaming":false,"configured_local_mask":3,"configured_global_mask":12,"deserializer":{"status":"FAIL","errno":-6,"device_id":null,"ctrl3_errno":-6,"ctrl3":null,"rx3_errno":-6,"rx3":null,"link_a_up":false,"link_b_up":false},"pair":{"status":"NOT_APPLICABLE","sample_gap_ms":0},"channels":[{"channel":2,"enabled":true,"phy":"NONE","link":{"status":"BLOCKED_BY_DES","up":false},"control_tunnel":"BLOCKED","serializer":{"status":"BLOCKED","errno":-61,"device_id":null},"isp":{"status":"BLOCKED","errno":-61,"hinf_count":null,"hinf_progress":"NOT_AVAILABLE"},"sensor":{"status":"BLOCKED","probe":"DEEP_NOT_RUN"}},{"channel":3,"enabled":true,"phy":"NONE","link":{"status":"BLOCKED_BY_DES","up":false},"control_tunnel":"BLOCKED","serializer":{"status":"BLOCKED","errno":-61,"device_id":null},"isp":{"status":"BLOCKED","errno":-61,"hinf_count":null,"hinf_progress":"NOT_AVAILABLE"},"sensor":{"status":"BLOCKED","probe":"DEEP_NOT_RUN"}}]}
+== 2-0048
+state=IDLE generation=48283849090080 epoch=5 mode=dual-wide table=dual width=2560 height=720 fps=15 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=0 match=0
+{"schema":1,"adapter":2,"sequence":1,"observed_monotonic_ms":76998,"busy":false,"mode":"dual-wide","streaming":false,"configured_local_mask":3,"configured_global_mask":3,"deserializer":{"status":"FAIL","errno":-6,"device_id":null,"ctrl3_errno":-6,"ctrl3":null,"rx3_errno":-6,"rx3":null,"link_a_up":false,"link_b_up":false},"pair":{"status":"NOT_APPLICABLE","sample_gap_ms":0},"channels":[{"channel":0,"enabled":true,"phy":"NONE","link":{"status":"BLOCKED_BY_DES","up":false},"control_tunnel":"BLOCKED","serializer":{"status":"BLOCKED","errno":-61,"device_id":null},"isp":{"status":"BLOCKED","errno":-61,"hinf_count":null,"hinf_progress":"NOT_AVAILABLE"},"sensor":{"status":"BLOCKED","probe":"DEEP_NOT_RUN"}},{"channel":1,"enabled":true,"phy":"NONE","link":{"status":"BLOCKED_BY_DES","up":false},"control_tunnel":"BLOCKED","serializer":{"status":"BLOCKED","errno":-61,"device_id":null},"isp":{"status":"BLOCKED","errno":-61,"hinf_count":null,"hinf_progress":"NOT_AVAILABLE"},"sensor":{"status":"BLOCKED","probe":"DEEP_NOT_RUN"}}]}
+== r0x2000
+bus1 0x11 Error: Sending messages failed: No such device or address 
+bus1 0x12 Error: Sending messages failed: No such device or address 
+bus2 0x11 Error: Sending messages failed: No such device or address 
+bus2 0x12 Error: Sending messages failed: No such device or address 
+== irq0
+ 56:          0          0          0          0     GICv3  48 Level     32e00000.isi
+ 57:          0          0          0          0     GICv3  74 Level     32e02000.isi
+ 60:          0          0          0          0     GICv3  49 Level     32e40000.csi
+ 61:          0          0          0          0     GICv3 112 Level     32e50000.csi
+== irq1
+ 56:          0          0          0          0     GICv3  48 Level     32e00000.isi
+ 57:          0          0          0          0     GICv3  74 Level     32e02000.isi
+ 60:          0          0          0          0     GICv3  49 Level     32e40000.csi
+ 61:          0          0          0          0     GICv3 112 Level     32e50000.csi

@@ -1,0 +1,17 @@
+[    5.135555] max9296 2-0048: warning fsync gpio...
+[   24.163599] [I2C:2][max9296.c:4634] start_fw_load
+[   24.173241] [I2C:1][max9296.c:4634] start_fw_load
+[   27.882834] [I2C:2][max9296.c:4658] end_fw_load
+[   27.902800] [I2C:1][max9296.c:4658] end_fw_load
+[   27.989650] [I2C:2][max9296.c:4951] loaded v4l-ap1302-ar0234.fw firmware (81616 bytes)
+[   28.216899] max9296 1-0048: AP1302 boot check failed: channel 2 stage post_download addr 0x11 R0x2000 0x0280 errno -5
+[   28.513313] max9296 2-0048: AP1302 boot check passed: channel 0 R0x2000 0x0500 (expected 0x0500)
+[   28.513323] max9296 2-0048: AP1302 boot check passed: channel 1 R0x2000 0x0500 (expected 0x0500)
+[   58.941839] [I2C:2][max9296.c:4634] start_fw_load
+[   58.945714] [I2C:1][max9296.c:4634] start_fw_load
+[   62.649548] [I2C:2][max9296.c:4658] end_fw_load
+[   62.657739] [I2C:1][max9296.c:4658] end_fw_load
+[   62.757702] [I2C:2][max9296.c:4951] loaded v4l-ap1302-ar0234.fw firmware (81616 bytes)
+[   62.984864] max9296 1-0048: AP1302 boot check failed: channel 2 stage post_download addr 0x11 R0x2000 0x0280 errno -5
+[   63.297639] max9296 2-0048: AP1302 boot check passed: channel 0 R0x2000 0x0500 (expected 0x0500)
+[   63.297653] max9296 2-0048: AP1302 boot check passed: channel 1 R0x2000 0x0500 (expected 0x0500)
