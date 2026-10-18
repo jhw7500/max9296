@@ -4730,6 +4730,16 @@ max9296_isp_boot_reported_stage(const struct max9296_isp_boot *boot) {
   return boot->epoch ? max9296_isp_boot_stage_name(boot->stage) : "none";
 }
 
+/* Whether health_raw may call a channel's ISP checked.  begin fills the plan
+ * before max9296_set_mode() and request_firmware(), either of which can end
+ * the attempt with nothing read; once a stage has started, its check has read
+ * every planned ISP, and sensor->lock keeps the sampler out until it returns. */
+static bool max9296_isp_boot_checked(const struct max9296_isp_boot *boot,
+                                     unsigned int ch) {
+  return boot->epoch && boot->stage >= MAX9296_ISP_BOOT_PRE_DOWNLOAD &&
+         (boot->mask & BIT(ch));
+}
+
 /* Only values a failed boot is known to leave are refused, so a firmware whose
  * default width differs still passes post_download.  A firmware that defaults
  * to 640 would not: that is the one value the ROM and a running image share,
@@ -7633,7 +7643,8 @@ static ssize_t sysfs_health_raw_show(struct device *dev,
                      "%s{\"channel\":%u,\"checked\":%s,\"errno\":%d,"
                      "\"value\":%s}",
                      i ? "," : "", sample.channel[i].channel,
-                     (sample.isp_boot.mask & BIT(i)) ? "true" : "false",
+                     max9296_isp_boot_checked(&sample.isp_boot, i) ? "true"
+                                                                   : "false",
                      sample.isp_boot.err[i], value);
   }
   len += scnprintf(buf + len, PAGE_SIZE - len, "]}}\n");

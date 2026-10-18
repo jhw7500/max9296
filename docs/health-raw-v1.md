@@ -260,8 +260,8 @@ physical bit와 block evidence는 계속 보존한다.
 `epoch_current:false`로 보인다 — 현재 실패로 읽지 않는다.
 
 `channels[]` 항목은 `{"channel":N,"checked":bool,"errno":E,"value":V}`다. `channel`
-번호는 위 `channels[]`와 같다. `checked:false`는 그 채널 ISP를 검사하지 않았다는
-뜻이다(single mode의 비활성 채널). `value`는 마지막으로 읽은 R0x2000(10진)이고, 읽지
+번호는 위 `channels[]`와 같다. `checked:false`는 그 채널 ISP를 읽지 않았다는
+뜻이다 — single mode의 비활성 채널이거나, 시도가 `pre_download` 검사에 닿기 전에 끝난 경우다. `value`는 마지막으로 읽은 R0x2000(10진)이고, 읽지
 못했으면 `null`이다.
 
 한계:

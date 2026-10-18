@@ -28,7 +28,7 @@ DEFINES = (
 FUNCTIONS = (
     "max9296_isp_output_width", "max9296_isp_boot_stage_name",
     "max9296_isp_boot_status_name", "max9296_isp_boot_reported_stage",
-    "max9296_isp_boot_value_ok",
+    "max9296_isp_boot_checked", "max9296_isp_boot_value_ok",
     "max9296_isp_boot_begin_locked", "max9296_isp_boot_check_locked",
 )
 
@@ -149,6 +149,8 @@ int main(void) {
   CHECK(s.isp_boot.err[0] == 0 && !s.isp_boot.failed);
   CHECK(!strcmp(max9296_isp_boot_status_name(&s.isp_boot), "INCOMPLETE"));
   CHECK(!strcmp(max9296_isp_boot_reported_stage(&s.isp_boot), "none"));
+  /* begin plans both ISPs, but an attempt that ends here read neither. */
+  CHECK(!max9296_isp_boot_checked(&s.isp_boot, 0) && !max9296_isp_boot_checked(&s.isp_boot, 1));
   s = begin(&single_720, 2);
   CHECK(!s.isp_boot.dual && s.isp_boot.mask == 2 && s.isp_boot.expected_width == 1280);
   /* A record probe zeroed and no cold attempt touched: stage 0 is
@@ -156,6 +158,7 @@ int main(void) {
   struct max9296_isp_boot never = {0};
   CHECK(!strcmp(max9296_isp_boot_status_name(&never), "NOT_RUN"));
   CHECK(!strcmp(max9296_isp_boot_reported_stage(&never), "none"));
+  CHECK(!max9296_isp_boot_checked(&never, 0) && !max9296_isp_boot_checked(&never, 1));
 
   /* Healthy dual boot: one read per ISP per stage, no sleep, and pass lines
    * only after post_config. */
@@ -163,6 +166,7 @@ int main(void) {
   script(AP1302_CH0_I2C_ADDR, 1, &rom);
   script(AP1302_CH1_I2C_ADDR, 1, &rom);
   CHECK(max9296_isp_boot_check_locked(&s, MAX9296_ISP_BOOT_PRE_DOWNLOAD) == 0);
+  CHECK(max9296_isp_boot_checked(&s.isp_boot, 0) && max9296_isp_boot_checked(&s.isp_boot, 1));
   script(AP1302_CH0_I2C_ADDR, 1, &fw);
   script(AP1302_CH1_I2C_ADDR, 1, &fw);
   CHECK(max9296_isp_boot_check_locked(&s, MAX9296_ISP_BOOT_POST_DOWNLOAD) == 0);
@@ -225,6 +229,7 @@ int main(void) {
   CHECK(max9296_isp_boot_check_locked(&s, MAX9296_ISP_BOOT_POST_CONFIG) == 0);
   CHECK(reads[0] == 0 && reads[1] == 0 && reads[2] == 1 && notice_lines == 1);
   CHECK(!s.isp_boot.value_valid[0] && s.isp_boot.value[1] == 1280);
+  CHECK(!max9296_isp_boot_checked(&s.isp_boot, 0) && max9296_isp_boot_checked(&s.isp_boot, 1));
 
   printf("max9296 isp boot checks: %u checks, %u failures\n", checks, failures);
   return failures ? 1 : 0;
@@ -279,13 +284,17 @@ def source_checks(source: str) -> list:
         (source.count("max9296_isp_boot_check_locked(") == 4,
          "the check runs from exactly three call sites (plus its definition)"),
         ("sample->isp_boot = sensor->isp_boot;" in collect
-         and "isp_boot_check" not in collect and "isp_boot_check" not in show,
+         and "max9296_isp_boot_check_locked" not in collect
+         and "max9296_isp_boot_check_locked" not in show,
          "health_raw copies the record and never re-reads an ISP for it"),
         (ordered(show, "mutex_unlock(&sensor->lock);", "\\\"isp_boot\\\":"),
          "health_raw prints the record after dropping the lock"),
         ("max9296_isp_boot_reported_stage(&sample.isp_boot)" in show
          and "max9296_isp_boot_stage_name(" not in show,
          "health_raw reports stage through the never-run-aware helper"),
+        ("max9296_isp_boot_checked(&sample.isp_boot, i)" in show
+         and "sample.isp_boot.mask" not in show,
+         "health_raw reports checked only for ISPs a stage actually read"),
     ]
 
 
