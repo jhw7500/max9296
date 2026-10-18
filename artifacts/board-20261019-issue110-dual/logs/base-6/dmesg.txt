@@ -1,0 +1,7 @@
+[    5.051727] max9296 2-0048: warning fsync gpio...
+[   23.898045] [I2C:2][max9296.c:4603] start_fw_load
+[   23.905107] [I2C:1][max9296.c:4603] start_fw_load
+[   27.642854] [I2C:1][max9296.c:4627] end_fw_load
+[   27.648061] [I2C:2][max9296.c:4627] end_fw_load
+[   27.752546] [I2C:1][max9296.c:4750] loaded v4l-ap1302-ar0234.fw firmware (81616 bytes)
+[   27.753057] [I2C:2][max9296.c:4750] loaded v4l-ap1302-ar0234.fw firmware (81616 bytes)

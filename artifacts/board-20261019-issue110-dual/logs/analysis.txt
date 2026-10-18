@@ -1,0 +1,42 @@
+== base: 15 boots, link_down(정답 없음) 2, 정답 있는 부팅 13
+  base-1  1b3ad5d9 1-0048 truth=n/a dm=- pl=FF[-6, -6] hr=None | 2-0048 truth=n/a dm=- pl=PP hr=None ok
+  base-2  2656470e 1-0048 truth=0280,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None SILENT:[('1', [0], '0280,0500')]
+  base-3  e8f50340 1-0048 truth=0500,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0000 dm=- pl=P hr=None SILENT:[('2', [1], '0500,0000')]
+  base-4  a0cfebfc 1-0048 truth=n/a dm=- pl=FF[-6, -6] hr=None | 2-0048 truth=n/a dm=- pl=PP hr=None ok
+  base-5  57709018 1-0048 truth=0280,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0000 dm=- pl=P hr=None SILENT:[('1', [0], '0280,0500'), ('2', [1], '0500,0000')]
+  base-6  09d4ba2c 1-0048 truth=0500,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None ok
+  base-7  9dddc81d 1-0048 truth=0280,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None SILENT:[('1', [0], '0280,0500')]
+  base-8  6e1709c5 1-0048 truth=0280,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None SILENT:[('1', [0], '0280,0500')]
+  base-9  0b647792 1-0048 truth=0280,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None SILENT:[('1', [0], '0280,0500')]
+  base-10 137b6064 1-0048 truth=0280,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None SILENT:[('1', [0], '0280,0500')]
+  base-11 554ad086 1-0048 truth=0280,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None SILENT:[('1', [0], '0280,0500')]
+  base-12 653094ac 1-0048 truth=0280,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None SILENT:[('1', [0], '0280,0500')]
+  base-13 32d0c74a 1-0048 truth=0500,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None ok
+  base-14 ca8cf6b9 1-0048 truth=0280,0500 dm=- pl=FP[-6] hr=None | 2-0048 truth=0500,0500 dm=- pl=PP hr=None SILENT:[('1', [0], '0280,0500')]
+  base-15 17756ff6 1-0048 truth=0280,0500 dm=- pl=P hr=None | 2-0048 truth=0500,0500 dm=- pl=P hr=None SILENT:[('1', [0], '0280,0500')]
+  base silent failure boots 11/13 (정답 있는 부팅 중)
+== new: 15 boots, link_down(정답 없음) 4, 정답 있는 부팅 11
+  new-1   841bb39c 1-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur ok
+  new-2   85914716 1-0048 truth=n/a dm=FF pl=FF[-5, -5] hr=FAILED/post_download/old | 2-0048 truth=n/a dm=PP pl=PP hr=OK/post_config/old ok
+  new-3   882561ed 1-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur ok
+  new-4   21451d9e 1-0048 truth=0500,0500 dm=FP pl=FP[-5] hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=PP pl=PP hr=OK/post_config/cur ok
+  new-5   c99b4478 1-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur ok
+  new-6   d24e78b1 1-0048 truth=n/a dm=PP pl=PP hr=OK/post_config/old | 2-0048 truth=n/a dm=FF pl=FF[-5, -5] hr=FAILED/pre_download/old ok
+  new-7   d800a05f 1-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur ok
+  new-8   1f081637 1-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur ok
+  new-9   cebd5b80 1-0048 truth=0500,0500 dm=PP pl=PP hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=FP pl=FP[-5] hr=OK/post_config/cur ok
+  new-10  c0bf13bc 1-0048 truth=n/a dm=FF pl=FF[-5, -5] hr=FAILED/post_download/old | 2-0048 truth=n/a dm=PP pl=PP hr=OK/post_config/old ok
+  new-11  02002239 1-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur ok
+  new-12  f4af0732 1-0048 truth=n/a dm=FF pl=FF[-5, -5] hr=FAILED/post_download/old | 2-0048 truth=n/a dm=PP pl=PP hr=OK/post_config/old ok
+  new-13  88e245e1 1-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur ok
+  new-14  7bdfca51 1-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur ok
+  new-15  03469184 1-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur | 2-0048 truth=0500,0500 dm=P pl=P hr=OK/post_config/cur ok
+  new: 실패 시도가 있는 부팅 6/15, 첫 시도 실패 부팅 6/15, 실패 줄 10
+    1-0048 post_download addr 0x11 R0x2000 0x280 errno -5: 7
+    2-0048 pre_download addr 0x12 R0x2000 0x0 errno -5: 3
+  new: 정답 있는 부팅의 missed/false_failure = 0
+elapsed_ms cold OK base 1-0048: n=13 median=12235 min=12189 max=12275
+elapsed_ms cold OK base 2-0048: n=18 median=12231.5 min=12185 max=12275
+elapsed_ms cold OK new 1-0048: n=14 median=12243.5 min=12172 max=12299
+elapsed_ms cold OK new 2-0048: n=18 median=12232.0 min=12192 max=12267
+AC1_VERDICT PASS (boots with issues 0, new boots 15, new boots with failed attempts 6)

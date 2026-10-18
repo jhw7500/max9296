@@ -1,0 +1,27 @@
+841bb39c-a35c-49fa-9896-fc493454a6e2
+0938DCF9B88888E03FAF05B
+76.36 191.74
+healthy
+OK
+boot_wall 2026-10-18T17:18:04
+== 1-0048
+state=CONSUMED generation=4908934235144 epoch=2 mode=dual-wide table=dual width=2560 height=720 fps=15 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=0 match=1
+{"schema":1,"adapter":1,"sequence":1,"observed_monotonic_ms":76388,"busy":false,"mode":"dual-wide","streaming":true,"configured_local_mask":3,"configured_global_mask":12,"deserializer":{"status":"OK","errno":0,"device_id":150,"ctrl3_errno":0,"ctrl3":250,"rx3_errno":0,"rx3":102,"link_a_up":true,"link_b_up":true},"pair":{"status":"NOT_APPLICABLE","sample_gap_ms":0},"channels":[{"channel":2,"enabled":true,"phy":"B","link":{"status":"OK","up":true},"control_tunnel":"OK","serializer":{"status":"OK","errno":0,"device_id":145},"isp":{"status":"STARTING","errno":0,"hinf_count":127,"hinf_progress":"STARTING"},"sensor":{"status":"UNKNOWN","probe":"DEEP_NOT_RUN"}},{"channel":3,"enabled":true,"phy":"A","link":{"status":"OK","up":true},"control_tunnel":"OK","serializer":{"status":"OK","errno":0,"device_id":145},"isp":{"status":"STARTING","errno":0,"hinf_count":127,"hinf_progress":"STARTING"},"sensor":{"status":"UNKNOWN","probe":"DEEP_NOT_RUN"}}],"isp_boot":{"status":"OK","epoch_current":true,"stage":"post_config","channels":[{"channel":2,"checked":true,"errno":0,"value":1280},{"channel":3,"checked":true,"errno":0,"value":1280}]}}
+== 2-0048
+state=CONSUMED generation=4908934235144 epoch=2 mode=dual-wide table=dual width=2560 height=720 fps=15 code=0x2006 enable=3 crop_enable=0 errno=0 worker_errno=0 lease=0 match=1
+{"schema":1,"adapter":2,"sequence":1,"observed_monotonic_ms":76399,"busy":false,"mode":"dual-wide","streaming":true,"configured_local_mask":3,"configured_global_mask":3,"deserializer":{"status":"OK","errno":0,"device_id":150,"ctrl3_errno":0,"ctrl3":250,"rx3_errno":0,"rx3":102,"link_a_up":true,"link_b_up":true},"pair":{"status":"NOT_APPLICABLE","sample_gap_ms":0},"channels":[{"channel":0,"enabled":true,"phy":"B","link":{"status":"OK","up":true},"control_tunnel":"OK","serializer":{"status":"OK","errno":0,"device_id":145},"isp":{"status":"STARTING","errno":0,"hinf_count":127,"hinf_progress":"STARTING"},"sensor":{"status":"UNKNOWN","probe":"DEEP_NOT_RUN"}},{"channel":1,"enabled":true,"phy":"A","link":{"status":"OK","up":true},"control_tunnel":"OK","serializer":{"status":"OK","errno":0,"device_id":145},"isp":{"status":"STARTING","errno":0,"hinf_count":127,"hinf_progress":"STARTING"},"sensor":{"status":"UNKNOWN","probe":"DEEP_NOT_RUN"}}],"isp_boot":{"status":"OK","epoch_current":true,"stage":"post_config","channels":[{"channel":0,"checked":true,"errno":0,"value":1280},{"channel":1,"checked":true,"errno":0,"value":1280}]}}
+== r0x2000
+bus1 0x11 0x05 0x00 
+bus1 0x12 0x05 0x00 
+bus2 0x11 0x05 0x00 
+bus2 0x12 0x05 0x00 
+== irq0
+ 56:        651          0          0          0     GICv3  48 Level     32e00000.isi
+ 57:        656          0          0          0     GICv3  74 Level     32e02000.isi
+ 60:       1280          0          0          0     GICv3  49 Level     32e40000.csi
+ 61:       1280          0          0          0     GICv3 112 Level     32e50000.csi
+== irq1
+ 56:        682          0          0          0     GICv3  48 Level     32e00000.isi
+ 57:        686          0          0          0     GICv3  74 Level     32e02000.isi
+ 60:       1340          0          0          0     GICv3  49 Level     32e40000.csi
+ 61:       1340          0          0          0     GICv3 112 Level     32e50000.csi
