@@ -22,18 +22,18 @@ rsh() { "${B[@]}" "$@" 2>/dev/null; }
 # 재부팅하고 새 boot id 가 보인 뒤 cam_state 가 healthy 가 되기를 최대 180 s 기다린다.
 # stdout: 새 boot id. 실패면 1.
 reboot_wait() {
-  local old new st t
+  local old new st
   old=$(rsh 'cat /proc/sys/kernel/random/boot_id')
   rsh 'sync; systemctl reboot' >/dev/null
   new=
-  for t in $(seq 1 60); do
+  for _ in $(seq 1 60); do
     sleep 5
     new=$(rsh 'cat /proc/sys/kernel/random/boot_id')
     [ -n "$new" ] && [ "$new" != "$old" ] && break
     new=
   done
   [ -n "$new" ] || return 1
-  for t in $(seq 1 36); do
+  for _ in $(seq 1 36); do
     st=$(rsh 'cat /tmp/cam_state/state')
     [ "$st" = healthy ] && break
     sleep 5
