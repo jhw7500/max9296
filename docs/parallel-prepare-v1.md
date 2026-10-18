@@ -213,6 +213,18 @@ check which path you are invoking.
 The driver does not forcibly cycle the peer's shared power in this error path.
 An unchanged, valid configuration remains reusable without cold initialization.
 
+Cold initialization also checks that every AP1302 actually started (#110). The
+firmware reaches both ISPs through one broadcast address, so every write can
+ACK while one ISP never leaves its boot ROM. The driver reads each ISP's
+R0x2000 before the download, after it, and after preview programming, and fails
+the attempt when any ISP is refused: with the read's own errno when the ISP did
+not answer, or `EIO` when it answered with a boot-ROM or unconfigured value. The
+status line's `errno=` reports that failure. The attempt is remembered like any
+other, so a retry in the same epoch returns `ESTALE`, and from then on the
+original errno survives only in `health_raw`'s `isp_boot` field and the kernel
+log, which also name the channel and stage (`docs/health-raw-v1.md`). A refused
+ISP needs the same physical reset.
+
 Cancel an unused lease with:
 
 ```sh

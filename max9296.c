@@ -86,6 +86,10 @@ static int debug;
 #define AP1302_ATOMIC_BEGIN 0x0001
 #define AP1302_ATOMIC_FINISH 0x0013
 #define AP1302_REG_PREVIEW_WIDTH 0x2000
+/* PREVIEW_WIDTH while the ISP still runs its boot ROM (640).  Firmware
+ * replaces it with its own default once it starts; issue #110 uses that
+ * change as the per-ISP evidence that the broadcast download took. */
+#define AP1302_PREVIEW_WIDTH_ROM 0x0280
 #define AP1302_REG_PREVIEW_HEIGHT 0x2002
 #define AP1302_REG_PREVIEW_ROI_X0 0x2004
 #define AP1302_REG_PREVIEW_ROI_Y0 0x2006
@@ -393,6 +397,30 @@ struct max9296_hw_fingerprint {
   bool crop_enable;
 };
 
+/* Issue #110: the broadcast firmware download writes both ISPs at once, so a
+ * write that one ISP never took is hidden behind the other's ACK.  Each cold
+ * initialization therefore reads every ISP once at these points, in order. */
+enum max9296_isp_boot_stage {
+  MAX9296_ISP_BOOT_PRE_DOWNLOAD = 0,
+  MAX9296_ISP_BOOT_POST_DOWNLOAD,
+  MAX9296_ISP_BOOT_POST_CONFIG,
+  MAX9296_ISP_BOOT_STAGES,
+};
+
+/* Outcome of the latest cold initialization's boot checks, per local channel.
+ * epoch 0 means no cold attempt has run on this instance yet. */
+struct max9296_isp_boot {
+  u64 epoch;
+  bool dual;
+  unsigned int mask;
+  u32 expected_width;
+  int stage; /* last stage judged, -1 before the first */
+  bool failed;
+  int err[2];
+  unsigned int value[2];
+  bool value_valid[2];
+};
+
 struct max9296_ctrls {
   struct v4l2_ctrl_handler handler;
   struct v4l2_ctrl *pixel_rate;
@@ -644,6 +672,10 @@ struct max9296_dev {
   /* A failed initialization may already have remapped a serializer. Keep this
    * attempt epoch even when hardware readiness is invalidated. */
   u64 cold_init_epoch;
+  /* Issue #110: boot checks of the attempt cold_init_epoch records.  Reset
+   * only when a cold attempt starts, so the -ESTALE refusal and warm reuse
+   * that follow keep reporting the attempt that actually ran. */
+  struct max9296_isp_boot isp_boot;
 
   unsigned int fps;
   unsigned int rotate;
@@ -4660,6 +4692,144 @@ static const char *get_fw_name(struct i2c_client *client) {
   else
     return MAX9296_FIRMWARE;
 }
+
+/* The per-ISP preview width max9296_post_firmware_program_locked() writes. */
+static u32 max9296_isp_output_width(const struct max9296_mode_info *mode) {
+  return max9296_mode_is_dual(mode) ? mode->width / 2 : mode->width;
+}
+
+static const char *max9296_isp_boot_stage_name(int stage) {
+  switch (stage) {
+  case MAX9296_ISP_BOOT_PRE_DOWNLOAD:
+    return "pre_download";
+  case MAX9296_ISP_BOOT_POST_DOWNLOAD:
+    return "post_download";
+  case MAX9296_ISP_BOOT_POST_CONFIG:
+    return "post_config";
+  default:
+    return "none";
+  }
+}
+
+/* INCOMPLETE: the attempt ended on another error before post_config ran. */
+static const char *
+max9296_isp_boot_status_name(const struct max9296_isp_boot *boot) {
+  if (!boot->epoch)
+    return "NOT_RUN";
+  if (boot->failed)
+    return "FAILED";
+  if (boot->stage == MAX9296_ISP_BOOT_POST_CONFIG)
+    return "OK";
+  return "INCOMPLETE";
+}
+
+/* Only values a failed boot is known to leave are refused, so a firmware whose
+ * default width differs still passes post_download.  A firmware that defaults
+ * to 640 would not: that is the one value the ROM and a running image share,
+ * and the check cannot tell them apart. */
+static bool max9296_isp_boot_value_ok(int stage, unsigned int value,
+                                      u32 expected_width) {
+  switch (stage) {
+  case MAX9296_ISP_BOOT_PRE_DOWNLOAD:
+    return value != 0;
+  case MAX9296_ISP_BOOT_POST_DOWNLOAD:
+    return value != 0 && value != AP1302_PREVIEW_WIDTH_ROM;
+  case MAX9296_ISP_BOOT_POST_CONFIG:
+    return value == expected_width;
+  default:
+    return false;
+  }
+}
+
+static void max9296_isp_boot_begin_locked(
+    struct max9296_dev *sensor,
+    const struct max9296_hw_fingerprint *fingerprint, u64 epoch) {
+  struct max9296_isp_boot *boot = &sensor->isp_boot;
+
+  lockdep_assert_held(&sensor->lock);
+  memset(boot, 0, sizeof(*boot));
+  boot->epoch = epoch;
+  boot->dual = max9296_mode_is_dual(fingerprint->mode);
+  boot->mask = boot->dual ? 0x03 : fingerprint->enable & 0x03;
+  boot->expected_width = max9296_isp_output_width(fingerprint->mode);
+  boot->stage = -1;
+}
+
+/* A stage that follows a state change may catch a healthy ISP mid-transition.
+ * Only a read that would fail the stage is repeated, so a healthy ISP sees the
+ * single read the boot-trace probe made at the same point, and the download
+ * timing stays as measured.  The budget lengthens only the failure path: each
+ * refused ISP adds up to 100 ms of sleep, as long again as end_fw_load()'s own
+ * settle, plus its reads.  pre_download follows no change and is never
+ * repeated. */
+#define MAX9296_ISP_BOOT_REREADS 10
+#define MAX9296_ISP_BOOT_REREAD_MS 10
+
+/* Read R0x2000 from every checked ISP and judge them all before failing, so a
+ * pair that loses one ISP reports which one.  Called with sensor->lock held.
+ * No path that goes on to download prints first: a failure line ends the
+ * attempt, and the pass lines come after post_config. */
+static int max9296_isp_boot_check_locked(struct max9296_dev *sensor,
+                                         int stage) {
+  struct max9296_isp_boot *boot = &sensor->isp_boot;
+  unsigned int ch;
+  int first_err = 0;
+
+  lockdep_assert_held(&sensor->lock);
+  boot->stage = stage;
+  for (ch = 0; ch < ARRAY_SIZE(boot->err); ch++) {
+    unsigned int addr = boot->dual ? (ch ? AP1302_CH1_I2C_ADDR
+                                         : AP1302_CH0_I2C_ADDR)
+                                   : AP1302_I2C_ADDR;
+    unsigned int value = 0;
+    unsigned int reread;
+    int read_err = 0;
+    int err = 0;
+
+    if (!(boot->mask & BIT(ch)))
+      continue;
+    for (reread = 0;; reread++) {
+      read_err = max9296_health_i2c_read_once(
+          sensor, addr, AP1302_REG_PREVIEW_WIDTH, 2, 2, &value);
+      err = read_err;
+      if (!err && !max9296_isp_boot_value_ok(stage, value,
+                                             boot->expected_width))
+        err = -EIO;
+      if (!err || stage == MAX9296_ISP_BOOT_PRE_DOWNLOAD ||
+          reread == MAX9296_ISP_BOOT_REREADS)
+        break;
+      msleep(MAX9296_ISP_BOOT_REREAD_MS);
+    }
+    boot->value[ch] = value;
+    boot->value_valid[ch] = !read_err;
+    boot->err[ch] = err;
+    if (!err)
+      continue;
+    boot->failed = true;
+    if (!first_err)
+      first_err = err;
+    dev_err(&sensor->i2c_client->dev,
+            "AP1302 boot check failed: channel %u stage %s addr 0x%02x "
+            "R0x2000 0x%04x%s errno %d\n",
+            sensor->link_status.ch_shift + ch,
+            max9296_isp_boot_stage_name(stage), addr, value,
+            read_err ? " (no read)" : "", err);
+  }
+  if (first_err || stage != MAX9296_ISP_BOOT_POST_CONFIG)
+    return first_err;
+
+  /* One line per checked ISP on every cold initialization, so a log without
+   * them shows the checks did not run rather than that they passed. */
+  for (ch = 0; ch < ARRAY_SIZE(boot->err); ch++)
+    if (boot->mask & BIT(ch))
+      dev_notice(&sensor->i2c_client->dev,
+                 "AP1302 boot check passed: channel %u R0x2000 0x%04x "
+                 "(expected 0x%04x)\n",
+                 sensor->link_status.ch_shift + ch, boot->value[ch],
+                 boot->expected_width);
+  return 0;
+}
+
 static int max9296_loadfw(struct i2c_client *client) {
   struct v4l2_subdev *sd = i2c_get_clientdata(client);
   struct max9296_dev *sensor = to_max9296_dev(sd);
@@ -4678,6 +4848,12 @@ static int max9296_loadfw(struct i2c_client *client) {
     // v4l_err(client, "unable to open firmware %s\n", fwname);
     printk(KERN_CRIT "[%s:%d][%s:%d] unable to open firmware %s", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__, fwname);
+    return retval;
+  }
+
+  retval = max9296_isp_boot_check_locked(sensor, MAX9296_ISP_BOOT_PRE_DOWNLOAD);
+  if (retval) {
+    release_firmware(fw);
     return retval;
   }
 
@@ -4732,6 +4908,15 @@ static int max9296_loadfw(struct i2c_client *client) {
   if (retval < 0) {
     printk(KERN_CRIT "[%s:%d][%s:%d] end firmware load i2c failure", KEYWORD,
            sensor->i2c_client->adapter->nr, _FILE_, __LINE__);
+    release_firmware(fw);
+    return retval;
+  }
+
+  /* The broadcast writes above all ACKed; only a per-ISP read shows whether
+   * each ISP actually left its boot ROM. */
+  retval =
+      max9296_isp_boot_check_locked(sensor, MAX9296_ISP_BOOT_POST_DOWNLOAD);
+  if (retval) {
     release_firmware(fw);
     return retval;
   }
@@ -5170,8 +5355,7 @@ static int max9296_post_firmware_program_locked(
     struct max9296_dev *sensor,
     const struct max9296_hw_fingerprint *fingerprint) {
   const struct max9296_mode_info *mode = fingerprint->mode;
-  u32 output_width = max9296_mode_is_dual(mode) ? mode->width / 2
-                                                : mode->width;
+  u32 output_width = max9296_isp_output_width(mode);
   u32 output_height = mode->height;
   const u32 dual_addrs[] = {AP1302_CH0_I2C_ADDR, AP1302_CH1_I2C_ADDR};
   unsigned int sensor_mode =
@@ -5282,6 +5466,7 @@ static int max9296_prepare_hardware_locked(
   sensor->state.enable = MAX9296_STATE_IDLE;
 
   sensor->cold_init_epoch = epoch;
+  max9296_isp_boot_begin_locked(sensor, fingerprint, epoch);
   ret = max9296_set_mode(sensor, fingerprint);
   if (ret)
     goto failed;
@@ -5297,6 +5482,12 @@ static int max9296_prepare_hardware_locked(
   ret = max9296_post_firmware_program_locked(sensor, fingerprint);
   if (ret)
     goto failed;
+
+  ret = max9296_isp_boot_check_locked(sensor, MAX9296_ISP_BOOT_POST_CONFIG);
+  if (ret) {
+    sensor->state.enable = MAX9296_STATE_FAILED;
+    goto failed;
+  }
 
   ret = max9296_apply_cached_crop(sensor);
   if (ret)
@@ -6931,6 +7122,11 @@ struct max9296_health_sample {
   bool pair_baseline_valid[2];
   unsigned int pair_suppressed;
   struct max9296_health_channel_sample channel[2];
+  /* Issue #110: the last cold attempt's boot checks, copied, never re-read -
+   * this sampler must not touch an ISP for them.  isp_boot_current says
+   * whether they belong to the present board-power epoch. */
+  struct max9296_isp_boot isp_boot;
+  bool isp_boot_current;
 };
 
 static void max9296_health_set_unavailable(
@@ -7085,6 +7281,10 @@ static void max9296_collect_health_locked(struct max9296_dev *sensor,
   sample->configured_local_mask = sensor->enable & 0x03;
   sample->configured_global_mask =
       sample->configured_local_mask << sensor->link_status.ch_shift;
+  sample->isp_boot = sensor->isp_boot;
+  sample->isp_boot_current =
+      sensor->isp_boot.epoch &&
+      sensor->isp_boot.epoch == READ_ONCE(max9296_hw_epoch);
 
   sample->deserializer_errno = max9296_health_i2c_read_once(
       sensor, 0, MAX9296_REG_CHIP_ID, 2, 1, &des_id);
@@ -7408,7 +7608,28 @@ static ssize_t sysfs_health_raw_show(struct device *dev,
         channel->isp_errno, hinf_count, channel->hinf_progress,
         channel->sensor_status);
   }
-  len += scnprintf(buf + len, PAGE_SIZE - len, "]}\n");
+
+  len += scnprintf(buf + len, PAGE_SIZE - len,
+                   "],\"isp_boot\":{\"status\":\"%s\",\"epoch_current\":%s,"
+                   "\"stage\":\"%s\",\"channels\":[",
+                   max9296_isp_boot_status_name(&sample.isp_boot),
+                   sample.isp_boot_current ? "true" : "false",
+                   max9296_isp_boot_stage_name(sample.isp_boot.stage));
+  for (i = 0; i < ARRAY_SIZE(sample.isp_boot.err); i++) {
+    char value[16];
+
+    if (sample.isp_boot.value_valid[i])
+      scnprintf(value, sizeof(value), "%u", sample.isp_boot.value[i]);
+    else
+      strscpy(value, "null", sizeof(value));
+    len += scnprintf(buf + len, PAGE_SIZE - len,
+                     "%s{\"channel\":%u,\"checked\":%s,\"errno\":%d,"
+                     "\"value\":%s}",
+                     i ? "," : "", sample.channel[i].channel,
+                     (sample.isp_boot.mask & BIT(i)) ? "true" : "false",
+                     sample.isp_boot.err[i], value);
+  }
+  len += scnprintf(buf + len, PAGE_SIZE - len, "]}}\n");
   return len;
 }
 static DEVICE_ATTR(health_raw, 0444, sysfs_health_raw_show, NULL);
