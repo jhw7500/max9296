@@ -269,7 +269,9 @@ physical bit와 block evidence는 계속 보존한다.
 - `post_config`는 ISP당 폭이 1920(펌웨어 기본값과 같다 — 이슈 #110 인용, 미검증)이나
   640(ROM 값)인 모드에서는 설정 미반영을 가리지 못한다. 기동 실패는 앞 단계가 잡는다.
 - `firmware=` 모듈 파라미터로 기본 폭이 640인 펌웨어를 쓰면 `post_download`가 매번 실패한다.
-- single mode(주소 0x3c)의 단계값은 실측이 없다.
+- single mode(주소 0x3c)는 192.168.214.4 의 1920x1080 설정에서 10 부팅 모두 통과했다
+  (`artifacts/board-20261018-issue110/`). 다운로드 전·후 단계값 자체는 기록하지 않았고, dual-wide
+  (0x11/0x12)는 실기로 돌리지 않았다.
 
 커널 로그: 거부된 ISP마다 `AP1302 boot check failed: channel N stage S addr 0xAA R0x2000
 0xVVVV errno E` 한 줄(err), 통과하면 `post_config` 뒤 검사한 ISP마다

@@ -31,9 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `firmware=` 로 기본 폭이 640 인 펌웨어를 쓰면 매번 다운로드 뒤 단계에서 실패한다.
 - **검증**: 호스트 테스트 `tests/max9296_isp_boot_test.py`(단계별 판정, 재읽기 예산, 두 ISP
   모두 판정, 단일 모드 주소, 다운로드 전후 배치와 `health_raw` 무읽기 계약)와
-  `tests/max9296_cold_init_epoch_test.py`(기록을 지우는 시점, 설정 후 실패 전파). **실기 검증
-  전이다** — 문제 카메라 보드에서의 검출과 검출 빌드의 재현, 정상 보드 전원 주기 10회의 거짓
-  실패 여부, prepare 소요 측정이 남았다.
+  `tests/max9296_cold_init_epoch_test.py`(기록을 지우는 시점, 설정 후 실패 전파).
+- **실기 검증 (2026-10-18, pim-camera-v016 192.168.214.4, single mode 1920x1080@15)**: 새 모듈로
+  S/W 재부팅 10회에서 거짓 실패 0, 매 부팅 두 인스턴스 모두 통과 줄과 `isp_boot` `OK` 가 있었다.
+  `end_fw_load` → `loaded` 구간 중앙값은 원본 106.8 ms, 새 모듈 107.6 ms(각 n=20)로, 콜드 초기화당
+  읽기 세 번의 증가는 약 2–3 ms 로 추정한다. 측정 방법·판정·양성 대조·부팅별 로그는
+  `artifacts/board-20261018-issue110/README.md`. **문제 카메라 보드(192.168.214.6)에서의 검출과 검출
+  빌드의 재현은 아직 재지 않았고**, dual-wide 경로(0x11/0x12)도 실기로 돌리지 않았다.
 
 ### 수정 — 정지한 스트림의 FSYNC 상태가 RUNNING 으로 되살아나지 않고, 1-0048 이 멈춰도 2-0048 이 FSYNC 를 받는다 (#111, 동작 변경)
 

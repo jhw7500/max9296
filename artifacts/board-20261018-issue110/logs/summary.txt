@@ -1,0 +1,28 @@
+09:38:17 begin N=10 new=546181C5BA2B42CBC2B4094 sha=cfa7752e4d79
+09:38:18 pre: 7F99CB433CAC065390A1E71 e6decd0e0f93 healthy 
+09:39:03 orig#1 boot=33fe9ab5 src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:39:49 orig#2 boot=84138c0c src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:40:35 orig#3 boot=786073c9 src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:41:20 orig#4 boot=b65c1c15 src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:42:06 orig#5 boot=31c3857d src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:42:51 orig#6 boot=b8f5759b src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:43:37 orig#7 boot=d333ea0c src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:44:22 orig#8 boot=ab31fabd src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:45:08 orig#9 boot=283941ec src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+09:45:59 orig#10 boot=05230376 src=7F99CB433CAC065390A1E71 cam_state=healthy pass_lines=0 fail_lines=0 isp_boot_ok=0
+e6decd0e0f93
+09:46:00 swap: 546181C5BA2B42CBC2B4094
+09:46:46 new#1 boot=3b998c44 src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:47:31 new#2 boot=d4fb838e src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:48:17 new#3 boot=7b69fd46 src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:49:03 new#4 boot=4db7228b src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:49:48 new#5 boot=d2d2fa8a src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:50:34 new#6 boot=c757ddc9 src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:51:20 new#7 boot=c912f1c8 src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:52:05 new#8 boot=5b5a1935 src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:52:51 new#9 boot=0aa7687d src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:53:37 new#10 boot=d2f92444 src=546181C5BA2B42CBC2B4094 cam_state=healthy pass_lines=2 fail_lines=0 isp_boot_ok=2
+09:53:37 done: orig 10, new 10
+09:53:37 restore: 원본 모듈 복구 시작
+e6decd0e0f93
+09:54:23 restore: boot=98402879 srcversion=7F99CB433CAC065390A1E71 cam_state=healthy
